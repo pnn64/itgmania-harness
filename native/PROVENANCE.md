@@ -187,6 +187,20 @@ models 13 names. These diagnostic traces are local investigation data, not
 published headless baselines or full-chart framebuffer evidence. The game
 installation and reference source tree remain unchanged.
 
+Hibernation in the semantic host now calls the linked `Actor::Update` through
+`_ITG_HIBERNATE_STEP`. Its adapter records whether `UpdateInternal` runs,
+the remaining native float sleep, and the adjusted delta on the wake-up
+frame. The host stops the actor, wrappers, children, effect timer, tween
+queue, and update callback while that native phase is blocked. It preserves
+`Actor::GetVisible`, applies the same sleep to ordinary and explicit draws,
+and includes sleep plus child queues in `ActorFrame::GetTweenTimeLeft`.
+The previous absolute draw-only deadline is removed. The hibernation
+fixture checks a wake-up between canonical frames, paused child alpha,
+paused aux/getter reads, the callback's leftover delta, queue time, and
+unchanged own visibility. Captures before harness 0.1.6 that execute a
+positive hibernate require regeneration; passing against their unpaused
+tweens is not evidence of native actor-update parity.
+
 ITGmania itself is a separate work with its own license in `vendor/itgmania`.
 Simply Love is pinned separately in
 `vendor/simply-love` and retains its own license. See the source pins and update

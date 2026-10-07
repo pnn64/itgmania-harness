@@ -1259,6 +1259,20 @@ RageVector4 lua_vector(lua_State* L, int index) {
   return vector;
 }
 
+// Actor::Update owns float hibernation subtraction and the wake-up remainder.
+// Expose that phase to the semantic host without duplicating its clock math.
+class HibernateStep final : public Actor {
+ public:
+  bool updated = false;
+  float delta = 0;
+
+ protected:
+  void UpdateInternal(float elapsed) override {
+    updated = true;
+    delta = elapsed;
+  }
+};
+
 class EffectMath final : public Actor {
  public:
   TweenState sample_state(float units) {
@@ -1380,6 +1394,16 @@ void install_actor_math(lua_State* state) {
     return 1;
   }));
   lua_setglobal(state, "_ITG_FLOAT");
+  lua_pushcfunction(state, ([](lua_State* L) -> int {
+    HibernateStep actor;
+    actor.SetHibernate(static_cast<float>(luaL_checknumber(L, 1)));
+    actor.Update(static_cast<float>(luaL_checknumber(L, 2)));
+    lua_pushnumber(L, actor.GetTweenTimeLeft());
+    if (actor.updated) lua_pushnumber(L, actor.delta);
+    else lua_pushnil(L);
+    return 2;
+  }));
+  lua_setglobal(state, "_ITG_HIBERNATE_STEP");
   lua_pushcfunction(state, ([](lua_State* L) -> int {
     const float from = static_cast<float>(luaL_checknumber(L, 1));
     const float to = static_cast<float>(luaL_checknumber(L, 2));

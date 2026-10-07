@@ -634,8 +634,14 @@ local function add_tween_value(actor, key, value)
 end
 
 local function tween_time_left(actor)
-	local total = 0
-	for _, tween in ipairs(actor.tweens or {}) do total = total + tween.time_left end
+	local hibernation = tonumber(rawget(actor, "hibernate_seconds")) or 0
+	local total = hibernation
+	for _, tween in ipairs(actor.tweens or {}) do total = _ITG_FLOAT(total + tween.time_left) end
+	if actor.class == "ActorFrame" or actor.class == "ActorFrameTexture" then
+		for _, child in ipairs(actor.children or {}) do
+			total = math.max(total, _ITG_FLOAT(hibernation + tween_time_left(child)))
+		end
+	end
 	return total
 end
 
@@ -972,7 +978,7 @@ local function actor_call(actor, name, ...)
 		begin_tween(actor, (...), "linear")
 		begin_tween(actor, 0, "linear")
 	elseif name == "hibernate" then
-		actor.hibernate_until = current_seconds + math.max(tonumber((...)) or 0, 0)
+		actor.hibernate_seconds = _ITG_FLOAT(tonumber((...)) or 0)
 	elseif name == "linear" or name == "accelerate" or name == "decelerate" or name == "smooth" or name == "spring" then
 		begin_tween(actor, (...), name)
 	elseif name == "bouncebegin" or name == "bounceend" then
@@ -1601,7 +1607,7 @@ for _, name in ipairs({ "PlayerP1", "PlayerP2", "Overlay", "Underlay", "SongBack
 -- [ScreenGameplay] On commands hibernate them forever and draw its own HUD
 -- under Underlay. Hibernation does not change the Actor visible flag.
 for _, name in ipairs({ "LifeP1", "LifeP2", "ScoreP1", "ScoreP2", "StepsDisplayP1", "StepsDisplayP2" }) do
-    actor_child(top_screen, name).hibernate_until = math.huge
+    actor_child(top_screen, name).hibernate_seconds = math.huge
 end
 tracked_players = { actor_child(top_screen, "PlayerP1"), actor_child(top_screen, "PlayerP2") }
 local fallback_player_x = {
@@ -1963,6 +1969,10 @@ local function run_callback(actor, kind, fn, delta)
 end
 
 local function advance_actor(actor, delta)
+	if (rawget(actor, "hibernate_seconds") or 0) > 0 then
+		actor.hibernate_seconds, delta = _ITG_HIBERNATE_STEP(actor.hibernate_seconds, delta)
+		if delta == nil then return end
+	end
 	for _, wrapper in ipairs(actor.wrappers or {}) do advance_actor(wrapper, delta) end
 	-- Actor::UpdateInternal advances the effect clock, accumulates spin into
 	-- current rotation, then interpolates the complete queued tween state.
@@ -2148,7 +2158,7 @@ end
 
 local function actor_draw_visible(actor)
     if actor.state.visible == false then return false end
-    if (rawget(actor, "hibernate_until") or 0) > current_seconds then return false end
+    if (rawget(actor, "hibernate_seconds") or 0) > 0 then return false end
     for _, wrapper in ipairs(rawget(actor, "wrappers") or {}) do
         if not actor_draw_visible(wrapper) then return false end
     end
