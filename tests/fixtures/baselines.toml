@@ -1,0 +1,15 @@
+version = 1
+
+[[case]]
+name = "raw-values-challenge"
+simfile = "raw-values.ssc"
+steps_type = "dance-single"
+difficulty_code = 4
+description = "Exact selector"
+
+[[case]]
+name = "sm-hard"
+simfile = "basic.sm"
+steps_type = "dance-single"
+difficulty_code = 3
+

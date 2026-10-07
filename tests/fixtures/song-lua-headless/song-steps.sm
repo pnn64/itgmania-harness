@@ -1,0 +1,26 @@
+#TITLE:Song Steps;
+#BPMS:0=60;
+#NOTES:dance-single:first:Easy:3:0,0,0,0,0:
+1000
+0100
+0010
+0001
+;
+#NOTES:dance-double:second:Hard:5:0,0,0,0,0:
+10000000
+01000000
+00100000
+00010000
+;
+#NOTES:dance-single:selected:Challenge:7:0,0,0,0,0:
+1000
+0100
+0010
+0001
+;
+#NOTES:dance-single:fourth:Edit:9:0,0,0,0,0:
+1000
+0100
+0010
+0001
+;

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "name": "zoomto-tween",
+  "screen": {"width": 854, "height": 480},
+  "samples": [0, 0.5, 1.5, 2.5],
+  "root": {
+    "kind": "frame", "name": "Root",
+    "children": [
+      {
+        "kind": "sprite", "name": "Resized", "size": [1, 1],
+        "state": {"position": [427, 240, 0], "zoom": [80, 40, 1]},
+        "tweens": [
+          {"duration": 1, "curve": "sleep"},
+          {"duration": 1, "curve": "linear", "state": {"zoom": [160, 80, 1]}}
+        ]
+      }
+    ]
+  }
+}

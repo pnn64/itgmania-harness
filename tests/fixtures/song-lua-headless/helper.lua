@@ -1,0 +1,1 @@
+HEADLESS_HELPER_VALUE = "loaded"

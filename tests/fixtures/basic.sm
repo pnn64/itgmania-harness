@@ -1,0 +1,31 @@
+#TITLE:SM Loader Fixture;
+#SUBTITLE:Native Path;
+#ARTIST:itgmania-harness-rs;
+#TITLETRANSLIT:;
+#SUBTITLETRANSLIT:;
+#ARTISTTRANSLIT:;
+#MUSIC:fixture.ogg;
+#OFFSET:-0.03125;
+#SAMPLESTART:0.000000;
+#SAMPLELENGTH:10.000000;
+#SELECTABLE:YES;
+#BPMS:0.000000=150.125000;
+#STOPS:2.000000=0.062500;
+#BGCHANGES:;
+
+#NOTES:
+     dance-single:
+     SM exact selector:
+     Hard:
+     7:
+     0,0,0,0,0:
+1000
+0000
+0100
+0000
+,
+0010
+0000
+0001
+0000
+;
