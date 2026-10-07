@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "itgmania-harness-rs"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "cc",
  "md5",
@@ -441,11 +441,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "rssp"
-version = "0.4.270"
-
-[[patch.unused]]
-name = "rssp-core"
-version = "0.4.270"
