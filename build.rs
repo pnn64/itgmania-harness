@@ -139,8 +139,10 @@ fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let root = env::var_os("ITGMANIA_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| manifest.join("../itgmania"));
+        .unwrap_or_else(|| manifest.join("vendor/itgmania"));
+    let root = manifest.join(root);
     require_tree(&root);
+    watch_git_metadata(&root);
     println!("cargo:rustc-env=ITGMANIA_BUILD_ROOT={}", root.display());
     println!(
         "cargo:rustc-env=ITGMANIA_GIT_REVISION={}",
@@ -368,9 +370,48 @@ fn git_output(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn require_tree(root: &Path) {
-    for relative in ["src/Song.h", "src/NotesLoaderSM.h", "src/NotesLoaderSSC.h"] {
+    for relative in [
+        "src/Song.h",
+        "src/NotesLoaderSM.h",
+        "src/NotesLoaderSSC.h",
+        "extern/lua-5.1/src/lua.h",
+        "extern/jsoncpp/json/json.h",
+        "extern/pcre/pcre.h.generic",
+        "extern/miniz/miniz.h",
+        "CMake/SMDefs.cmake",
+    ] {
         let path = root.join(relative);
-        assert!(path.is_file(), "missing ITGmania source {}", path.display());
+        assert!(
+            path.is_file(),
+            "missing ITGmania source {}; initialize the pinned sources with \
+             `git submodule update --init` from the harness repository, or set \
+             ITGMANIA_ROOT to a complete ITGmania source checkout",
+            path.display()
+        );
+    }
+}
+
+fn watch_git_metadata(root: &Path) {
+    // A revision can change without changing a compiled source file. Watch Git's
+    // actual metadata paths, including submodules whose .git is a pointer file.
+    if root.join(".git").is_file() {
+        println!("cargo:rerun-if-changed={}", root.join(".git").display());
+    }
+    let mut paths = vec![
+        "HEAD".to_owned(),
+        "index".to_owned(),
+        "packed-refs".to_owned(),
+    ];
+    if let Some(reference) = git_output(root, &["symbolic-ref", "-q", "HEAD"]) {
+        paths.push(reference);
+    }
+    for relative in paths {
+        if let Some(path) = git_output(root, &["rev-parse", "--git-path", &relative]) {
+            let path = root.join(path);
+            if path.is_file() {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
     }
 }
 

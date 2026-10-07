@@ -310,6 +310,8 @@ fn native_load(path: &Path, text: &str, mapped_only: bool) -> Result<Vec<u8>, Er
             text: *const u8,
             text_len: usize,
             mapped_only: u8,
+            source_root: *const u8,
+            source_root_len: usize,
         ) -> NativeBuffer;
         fn itg_oracle_free(data: *mut u8);
     }
@@ -324,7 +326,8 @@ fn native_load(path: &Path, text: &str, mapped_only: bool) -> Result<Vec<u8>, Er
     #[cfg(windows)]
     let path = encoded.as_bytes();
     let text = text.as_bytes();
-    // SAFETY: both byte slices remain alive for the call and carry explicit lengths.
+    let source_root = env!("ITGMANIA_BUILD_ROOT").as_bytes();
+    // SAFETY: all byte slices remain alive for the call and carry explicit lengths.
     let native = unsafe {
         itg_oracle_load_font(
             path.as_ptr(),
@@ -332,6 +335,8 @@ fn native_load(path: &Path, text: &str, mapped_only: bool) -> Result<Vec<u8>, Er
             text.as_ptr(),
             text.len(),
             u8::from(mapped_only),
+            source_root.as_ptr(),
+            source_root.len(),
         )
     };
     if native.data.is_null() {

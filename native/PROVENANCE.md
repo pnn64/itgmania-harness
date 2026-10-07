@@ -187,4 +187,7 @@ models 13 names. These diagnostic traces are local investigation data, not
 published headless baselines or full-chart framebuffer evidence. The game
 installation and reference source tree remain unchanged.
 
-ITGmania itself is a separate work with its own license in `../itgmania`.
+ITGmania itself is a separate work with its own license in `vendor/itgmania`.
+Simply Love is pinned separately in
+`vendor/simply-love` and retains its own license. See the source pins and update
+workflow in the project README.

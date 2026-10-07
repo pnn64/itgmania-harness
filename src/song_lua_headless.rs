@@ -2623,8 +2623,8 @@ mod tests {
     #[test]
     fn native_noteskin_templates_and_metrics_are_captured() {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let root = workspace
-            .join("../deadsync/assets/noteskins")
+        let root = Path::new(env!("ITGMANIA_BUILD_ROOT"))
+            .join("NoteSkins")
             .canonicalize()
             .expect("bundled skins");
         let noteskin =

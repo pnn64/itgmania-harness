@@ -16,7 +16,8 @@ ItgOracleBuffer itg_oracle_load_charts(const uint8_t* path, size_t path_len,
     const uint8_t* theme, size_t theme_len, const uint8_t* host, size_t host_len);
 ItgOracleBuffer itg_oracle_load_font(const uint8_t* path, size_t path_len,
                                      const uint8_t* text, size_t text_len,
-                                     uint8_t mapped_only);
+                                     uint8_t mapped_only,
+                                     const uint8_t* source_root, size_t source_root_len);
 ItgOracleBuffer itg_oracle_load_noteskin(
     const uint8_t* root, size_t root_len, const uint8_t* game,
     size_t game_len, const uint8_t* skin, size_t skin_len,

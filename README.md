@@ -34,6 +34,56 @@ For example, the old harness forces some timing values through
 `fixed`/`setprecision(6)`. Raw native captures retain their full precision;
 the optional RSSP report export preserves the old CLI's serialization contract.
 
+## Source checkout and pins
+
+Initialize the two source submodules before building:
+
+```bash
+git clone https://github.com/pnn64/itgmania-harness.git
+cd itgmania-harness
+git submodule update --init
+cargo build
+cargo run -- doctor
+```
+
+For an existing clone, run `git submodule update --init` after pulling a change
+that updates either source pin. The harness records exact commits in Git:
+
+- `vendor/itgmania`: upstream ITGmania v1.2.0,
+  `5c737928d93778c2c9f68e276052b220b43a468f`.
+- `vendor/simply-love`: upstream Simply Love 5.9.0,
+  `dd06138b15492f4136796dfe4b6708ced0f7b9eb`.
+
+These trees match the engine and theme resources from the previous workspace
+after normalizing line endings. The engine source pin is deliberately retained
+at the baseline version. Simply Love is separate because ITGmania v1.2.0's
+nested theme pin is 5.8.0, while the existing harness baselines use 5.9.0.
+
+The harness uses the engine's checked-in Lua, JSONCPP, PCRE, miniz, noteskins,
+and fallback resources. It does not need ITGmania's nested submodules, so
+`--recursive` is unnecessary. Linux/WSL still needs the system packages listed
+below. `ITGMANIA_ROOT` remains available for another engine source checkout;
+set it before invoking Cargo to compile that revision. `doctor --itgmania-root`
+inspects a tree without changing the source compiled into the binary.
+
+To update a pin deliberately:
+
+```bash
+git -C vendor/itgmania fetch origin tag NEW_TAG
+git -C vendor/itgmania checkout --detach NEW_TAG
+cargo test
+git add vendor/itgmania
+```
+
+Review regenerated baselines before committing a source update. Update
+`vendor/simply-love` the same way when changing the theme reference; do not use
+`git submodule update --remote` as part of normal builds.
+
+The default tests use the pinned sources and checked-in fixtures. Tests that
+need the external Lua-song or DeadSync font corpus are explicitly ignored;
+run those by name with `-- --ignored` when their documented sibling directories
+are available.
+
 ## Current status
 
 The first native slice is working on Windows and Linux/WSL. The Rust CLI
@@ -71,22 +121,22 @@ source and song corpus directly. See [PLAN.md](docs/PLAN.md).
 
 ```text
 cargo run -- doctor
-cargo run -- doctor --itgmania-root ../itgmania
+cargo run -- doctor --itgmania-root path/to/itgmania
 cargo run -- actor-conformance fixtures/actors/effects-vibration.json \
   --out effects-vibration.itgmania.json
 cargo run -- charts path/to/song.ssc
-cargo run -- charts path/to/song.sm.zst --theme ../itgmania/Themes/Simply-Love-SM5
+cargo run -- charts path/to/song.sm.zst --theme vendor/simply-love
 cargo run -- chart path/to/song.ssc --index 2
 cargo run -- chart path/to/song.ssc \
   --steps-type dance-single --difficulty-code 4 \
   --description "Exact edit description"
 cargo run -- font \
-  "../itgmania/Themes/Simply-Love-SM5/Fonts/Miso/_miso light.ini" \
+  "vendor/simply-love/Fonts/Miso/_miso light.ini" \
   --text "Hello, 123!"
 cargo run -- font-baseline ../deadsync/assets/fonts \
   --out ../deadsync/tests/fixtures/itgmania-fonts
-cargo run -- noteskin ../itgmania/NoteSkins dance default
-cargo run -- noteskin-baseline ../itgmania/NoteSkins \
+cargo run -- noteskin vendor/itgmania/NoteSkins dance default
+cargo run -- noteskin-baseline vendor/itgmania/NoteSkins \
   --out ../deadsync/tests/fixtures/itgmania-noteskins
 cargo run -- song-lua "../lua-songs/Delightful Day/Delightful Day.ssc"
 cargo run -- song-lua-baseline ../lua-songs \
@@ -104,7 +154,7 @@ cargo run -- diff path/to/expected.json path/to/actual.json
 ```
 
 `ITGMANIA_ROOT` can also select the source tree. If neither the option nor the
-environment variable is present, the CLI uses `../itgmania` relative to this
+environment variable is present, the CLI uses `vendor/itgmania` relative to this
 project. `ITGMANIA_ROOT` is also read at build time by the native build.
 
 ## Linux/WSL prerequisites
@@ -179,13 +229,14 @@ omitted, the command probes ASCII letters and digits.
 
 ```powershell
 .\target\debug\itgmania-harness-rs.exe font `
-  "..\itgmania\Themes\Simply-Love-SM5\Fonts\Miso\_miso light.ini" `
+  "vendor\simply-love\Fonts\Miso\_miso light.ini" `
   --text "Ag 1"
 ```
 
 The font path may be an `.ini` or `.redir` beneath an ITGmania theme's
 `Fonts` directory. The harness infers that theme's font root and uses the
-adjacent `_fallback/Fonts` tree for native font imports.
+adjacent `_fallback/Fonts` tree for native font imports when present; otherwise
+it uses `Themes/_fallback/Fonts` from the source tree compiled into the harness.
 
 Output includes the resolved font and fallback roots, font-wide height and
 line spacing, line measurements, default stroke color, and an entry for every
@@ -233,7 +284,7 @@ string/integer/float/boolean conversions, filename prefix matching, and
 
 ```powershell
 .\target\debug\itgmania-harness-rs.exe noteskin `
-  ..\itgmania\NoteSkins dance default
+  vendor\itgmania\NoteSkins dance default
 ```
 
 `noteskin-baseline` probes all 28 selectable skins bundled with ITGmania
@@ -242,7 +293,7 @@ provenance manifest:
 
 ```powershell
 .\target\debug\itgmania-harness-rs.exe noteskin-baseline `
-  ..\itgmania\NoteSkins `
+  vendor\itgmania\NoteSkins `
   --out ..\deadsync\tests\fixtures\itgmania-noteskins
 ```
 
@@ -520,7 +571,7 @@ Generate a separate corpus with isolated child processes and a durable journal:
 ```powershell
 python scripts/corpus_baselines.py C:/path/to/packs `
   --harness target/release/itgmania-harness-rs.exe `
-  --theme ../itgmania/Themes/Simply-Love-SM5 `
+  --theme vendor/simply-love `
   --out C:/path/to/candidates --jobs 3
 ```
 
@@ -701,7 +752,7 @@ index or an exact native-identity selector:
 
 ```toml
 version = 2
-theme = "../itgmania/Themes/Simply-Love-SM5" # omit for engine-only capture
+theme = "vendor/simply-love" # omit for engine-only capture
 
 [[case]]
 name = "challenge-chart"

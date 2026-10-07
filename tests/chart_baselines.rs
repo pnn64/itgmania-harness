@@ -8,6 +8,8 @@ use std::{fs, io::ErrorKind};
 
 const BIN: &str = env!("CARGO_BIN_EXE_itgmania-harness-rs");
 
+mod support;
+
 struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Self {
@@ -45,7 +47,7 @@ fn document(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 fn theme() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../itgmania/Themes/Simply-Love-SM5")
+    support::theme_root()
 }
 fn sm(description: &str, difficulty: &str, notes: &str) -> String {
     format!(

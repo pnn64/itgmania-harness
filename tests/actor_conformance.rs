@@ -39,16 +39,14 @@ fn captures_native_tween_queue_and_projected_geometry() {
 }
 
 #[test]
-fn manual_player_poses_match_the_local_native_golden() {
+fn manual_player_poses_match_the_checked_in_native_golden() {
     let output = run_fixture("manual-player-draws.json");
     let golden: serde_json::Value = serde_json::from_str(include_str!(
-        "../../deadsync/tests/fixtures/itgmania-song-lua-micro/manual-player-native.json"
+        "fixtures/manual-player-native.json"
     ))
-    .expect("local native manual-draw baseline");
-    assert_eq!(
-        output["provenance"]["git_revision"],
-        golden["provenance"]["git_revision"]
-    );
+    .expect("checked-in native manual-draw baseline");
+    // The original provenance identifies the old workspace commit. Compare the
+    // captured geometry directly; upstream source revisions are pinned by Git.
     let sprites = golden["sprites"].as_object().expect("native sprite map");
     let actors = output["samples"][0]["actors"]
         .as_array()

@@ -7,6 +7,36 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BIN: &str = env!("CARGO_BIN_EXE_itgmania-harness-rs");
 
+mod support;
+
+fn itgmania_root() -> PathBuf {
+    PathBuf::from(env!("ITGMANIA_BUILD_ROOT"))
+}
+
+#[test]
+fn doctor_uses_vendored_sources_from_another_working_directory() {
+    let output = Command::new(BIN)
+        .arg("doctor")
+        .env_remove("ITGMANIA_ROOT")
+        .current_dir(std::env::temp_dir())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("vendor\\itgmania") || text.contains("vendor/itgmania"));
+    assert!(text.contains("status: ITGmania source tree is usable"));
+}
+
+#[test]
+fn doctor_explains_how_to_initialize_missing_sources() {
+    let directory = temp_dir("missing-sources");
+    std::fs::create_dir_all(&directory).unwrap();
+    let output = run(&["doctor", "--itgmania-root", directory.to_str().unwrap()]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("git submodule update --init"));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn exports_raw_itgmania_values() {
     let fixture = fixture();
@@ -104,8 +134,7 @@ fn loads_sm_through_itgmania() {
 
 #[test]
 fn exports_itgmania_font_geometry() {
-    let font = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../itgmania/Themes/Simply-Love-SM5/Fonts/Miso/_miso light.ini");
+    let font = support::theme_root().join("Fonts/Miso/_miso light.ini");
     let output = run(&["font", font.to_str().unwrap(), "--text", "Ag 1"]);
     assert!(output.status.success(), "{}", stderr(&output));
 
@@ -122,9 +151,17 @@ fn exports_itgmania_font_geometry() {
     assert_eq!(document["glyphs"][0]["advance"], 9);
     assert_eq!(document["glyphs"][1]["pen_x"], 9);
     assert_eq!(document["diagnostics"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        PathBuf::from(document["fallback_fonts"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        itgmania_root()
+            .join("Themes/_fallback/Fonts")
+            .canonicalize()
+            .unwrap()
+    );
 
-    let redirect = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../itgmania/Themes/Simply-Love-SM5/Fonts/Common Normal.redir");
+    let redirect = support::theme_root().join("Fonts/Common Normal.redir");
     let redirected = run(&["font", redirect.to_str().unwrap(), "--text", "A"]);
     assert!(redirected.status.success(), "{}", stderr(&redirected));
     let redirected: Value = serde_json::from_slice(&redirected.stdout).unwrap();
@@ -136,7 +173,7 @@ fn exports_itgmania_font_geometry() {
 
 #[test]
 fn exports_itgmania_noteskin_semantics() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../itgmania/NoteSkins");
+    let root = itgmania_root().join("NoteSkins");
     let output = run(&["noteskin", root.to_str().unwrap(), "dance", "default"]);
     assert!(output.status.success(), "{}", stderr(&output));
 
@@ -236,7 +273,7 @@ fn analyzes_song_lua_trace_offline() {
 
 #[test]
 fn writes_portable_noteskin_baselines() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../itgmania/NoteSkins");
+    let root = itgmania_root().join("NoteSkins");
     let output_dir = temp_dir("noteskin-baselines");
     let output = run(&[
         "noteskin-baseline",
@@ -266,6 +303,7 @@ fn writes_portable_noteskin_baselines() {
 }
 
 #[test]
+#[ignore = "requires the external Delightful Day song corpus"]
 fn exports_itgmania_song_lua_layers() {
     let simfile = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../lua-songs/Delightful Day/Delightful Day.ssc");
@@ -374,6 +412,7 @@ fn semantic_capture_keeps_last_second_hint() {
 }
 
 #[test]
+#[ignore = "requires the external lua-songs corpus"]
 fn writes_portable_song_lua_baselines() {
     let songs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lua-songs");
     let output_dir = temp_dir("song-lua-baselines");
@@ -436,6 +475,7 @@ fn writes_portable_song_lua_baselines() {
 }
 
 #[test]
+#[ignore = "requires the external DeadSync font corpus"]
 fn writes_portable_font_baselines() {
     let font_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deadsync/assets/fonts");
     let output_dir = temp_dir("font-baselines");
@@ -495,6 +535,17 @@ fn writes_manifest_baselines_with_provenance() {
     assert_eq!(sm["simfile"], "basic.sm");
     assert_eq!(provenance["oracle_schema_version"], 5);
     assert_eq!(provenance["cases"].as_array().unwrap().len(), 2);
+    let revision = Command::new("git")
+        .arg("-C")
+        .arg(itgmania_root())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(revision.status.success());
+    assert_eq!(
+        provenance["itgmania"]["git_revision"].as_str().unwrap(),
+        String::from_utf8_lossy(&revision.stdout).trim()
+    );
 
     let verify = run(&[
         "verify",

@@ -1,0 +1,8 @@
+[submodule "vendor/itgmania"]
+	path = vendor/itgmania
+	url = https://github.com/itgmania/itgmania.git
+	shallow = true
+[submodule "vendor/simply-love"]
+	path = vendor/simply-love
+	url = https://github.com/Simply-Love/Simply-Love-SM5.git
+	shallow = true

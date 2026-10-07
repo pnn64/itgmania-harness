@@ -1111,7 +1111,8 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
 
 extern "C" ItgOracleBuffer itg_oracle_load_font(
     const uint8_t* path, size_t path_len, const uint8_t* text,
-    size_t text_len, uint8_t mapped_only) {
+    size_t text_len, uint8_t mapped_only,
+    const uint8_t* source_root, size_t source_root_len) {
   try {
     const std::lock_guard<std::mutex> guard(harness_native_mutex());
     if (path == nullptr || (mapped_only == 0 && text == nullptr)) {
@@ -1127,7 +1128,14 @@ extern "C" ItgOracleBuffer itg_oracle_load_font(
     }
     const std::filesystem::path theme_fonts = find_fonts_root(font_path);
     const std::filesystem::path themes_dir = theme_fonts.parent_path().parent_path();
-    const std::filesystem::path fallback_fonts = themes_dir / "_fallback" / "Fonts";
+    std::filesystem::path fallback_fonts = themes_dir / "_fallback" / "Fonts";
+    // A separately pinned theme can use the engine checkout's fallback fonts.
+    // An adjacent fallback remains authoritative for complete theme installs.
+    if (!std::filesystem::is_directory(fallback_fonts) && source_root != nullptr) {
+      fallback_fonts = std::filesystem::path(std::string(
+          reinterpret_cast<const char*>(source_root), source_root_len)) /
+          "Themes" / "_fallback" / "Fonts";
+    }
     harness_configure_font_paths(theme_fonts.generic_string(),
                                  fallback_fonts.generic_string());
     harness_clear_diagnostics();

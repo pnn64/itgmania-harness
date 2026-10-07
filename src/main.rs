@@ -1135,8 +1135,8 @@ fn doctor(cli_root: Option<PathBuf>) -> Result<(), CliError> {
 
     match find_theme_scripts(&root) {
         Some((parser, helpers)) => {
-            println!("  ok  optional theme parser: {parser}");
-            println!("  ok  optional theme helpers: {helpers}");
+            println!("  ok  optional theme parser: {}", parser.display());
+            println!("  ok  optional theme helpers: {}", helpers.display());
         }
         None => println!("  note  optional Simply Love chart parser was not found"),
     }
@@ -1160,17 +1160,24 @@ fn doctor(cli_root: Option<PathBuf>) -> Result<(), CliError> {
 fn resolve_root(cli_root: Option<PathBuf>) -> Result<PathBuf, CliError> {
     let root = cli_root
         .or_else(|| env::var_os("ITGMANIA_ROOT").map(PathBuf::from))
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../itgmania"));
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/itgmania"));
 
     root.canonicalize()
         .map_err(|source| CliError::RootIo { root, source })
 }
 
-fn find_theme_scripts(root: &Path) -> Option<(&'static str, &'static str)> {
+fn find_theme_scripts(root: &Path) -> Option<(PathBuf, PathBuf)> {
     THEME_SCRIPT_PAIRS
         .iter()
-        .copied()
-        .find(|(parser, helpers)| root.join(parser).is_file() && root.join(helpers).is_file())
+        .map(|(parser, helpers)| (root.join(parser), root.join(helpers)))
+        .chain(std::iter::once({
+            let theme = Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/simply-love/Scripts");
+            (
+                theme.join("SL-ChartParser.lua"),
+                theme.join("SL-ChartParserHelpers.lua"),
+            )
+        }))
+        .find(|(parser, helpers)| parser.is_file() && helpers.is_file())
 }
 
 fn print_help() {
@@ -1206,7 +1213,7 @@ fn print_help() {
            itgmania-harness-rs diff EXPECTED ACTUAL\n\
            itgmania-harness-rs --version\n\n\
          Environment:\n\
-           ITGMANIA_ROOT  ITGmania source tree (default: ../itgmania)\n\n\
+           ITGMANIA_ROOT  ITGmania source tree (default: vendor/itgmania)\n\n\
          Native chart, font, noteskin, and song-Lua semantic builds on Windows and Linux/WSL."
     );
 }
@@ -1259,13 +1266,16 @@ impl fmt::Display for CliError {
             Self::RootIo { root, source } => {
                 write!(
                     formatter,
-                    "cannot open ITGmania root {}: {source}",
+                    "cannot open ITGmania root {}: {source}; initialize the pinned sources \
+                     with `git submodule update --init`, or set ITGMANIA_ROOT to a source checkout",
                     root.display()
                 )
             }
             Self::InvalidTree { root, missing } => write!(
                 formatter,
-                "{} is not a usable ITGmania source tree; missing {missing}",
+                "{} is not a usable ITGmania source tree; missing {missing}; \
+                 initialize the pinned sources with `git submodule update --init`, \
+                 or set ITGMANIA_ROOT to a complete source checkout",
                 root.display()
             ),
             Self::Oracle(error) => error.fmt(formatter),
@@ -1350,7 +1360,7 @@ mod tests {
 
     #[test]
     fn finds_checked_in_theme_variant() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../itgmania");
+        let root = Path::new(env!("ITGMANIA_BUILD_ROOT"));
         assert!(find_theme_scripts(&root).is_some());
     }
 
