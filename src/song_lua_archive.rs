@@ -9,6 +9,10 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 pub const ARCHIVE_SCHEMA_VERSION: u32 = 1;
+// ActorUtil::InitFileTypeLists classifies these as movie-backed Sprites.
+const MOVIE_EXTENSIONS: &[&str] = &[
+    "avi", "f4v", "flv", "mkv", "mp4", "mpeg", "mpg", "mov", "ogv", "webm", "wmv",
+];
 
 #[derive(Debug)]
 pub struct Report {
@@ -596,8 +600,7 @@ fn texture_metadata(
     song_dir: &Path,
 ) -> Result<TextureMetadata, Error> {
     let path = resolve_song_asset(song_dir, reference);
-    let disk_dimensions = path.as_deref().and_then(image_dimensions);
-    let dimensions = dimensions.or(disk_dimensions);
+    let dimensions = dimensions.or_else(|| path.as_deref().and_then(image_dimensions));
     let local_path = path
         .as_deref()
         .map(|path| portable_relative(song_dir, path))
@@ -751,6 +754,7 @@ fn resolve_asset_relative(
                     .starts_with(&name.to_ascii_lowercase())))
             && EXTENSIONS
                 .iter()
+                .chain(MOVIE_EXTENSIONS)
                 .any(|known| extension.eq_ignore_ascii_case(known))
         {
             Some(candidate)
@@ -788,6 +792,7 @@ fn is_asset_path(path: &Path) -> bool {
                     | "ini"
             )
         })
+        || matches_extension(&path.to_string_lossy(), MOVIE_EXTENSIONS)
 }
 
 fn collect_string_values(value: &Value, visit: &mut impl FnMut(&str)) {
@@ -946,19 +951,11 @@ fn is_lua_reference(value: &str) -> bool {
 }
 
 fn is_texture_reference(value: &str) -> bool {
-    value.starts_with("song:/")
-        && matches_extension(value, &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+    value.starts_with("song:/") && asset_kind(value) == "texture"
 }
 
 fn is_asset_reference(value: &str) -> bool {
-    value.starts_with("song:/")
-        && matches_extension(
-            value,
-            &[
-                "png", "jpg", "jpeg", "gif", "webp", "bmp", "ogg", "wav", "mp3", "frag", "vert",
-                "ini",
-            ],
-        )
+    value.starts_with("song:/") && is_asset_path(Path::new(value))
 }
 
 fn matches_extension(value: &str, extensions: &[&str]) -> bool {
@@ -973,7 +970,9 @@ fn matches_extension(value: &str, extensions: &[&str]) -> bool {
 }
 
 fn asset_kind(reference: &str) -> &'static str {
-    if matches_extension(reference, &["png", "jpg", "jpeg", "gif", "webp", "bmp"]) {
+    if matches_extension(reference, &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+        || matches_extension(reference, MOVIE_EXTENSIONS)
+    {
         "texture"
     } else if matches_extension(reference, &["ogg", "wav", "mp3"]) {
         "audio"
@@ -1101,6 +1100,35 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movie_actor_assets_are_required_textures() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/movie-actor-assets");
+        fs::create_dir_all(&root).expect("fixture directory");
+        for extension in MOVIE_EXTENSIONS {
+            fs::write(root.join(format!("movie-{extension}.{extension}")), [])
+                .expect("movie placeholder");
+        }
+        let root = root.canonicalize().expect("fixture root");
+        for extension in MOVIE_EXTENSIONS {
+            let name = format!("movie-{extension}.{extension}");
+            let reference = format!("song:/{name}");
+            assert!(is_asset_reference(&reference));
+            assert!(is_texture_reference(&reference));
+            assert_eq!(asset_kind(&reference), "texture");
+            assert_eq!(resolve_song_asset(&root, &reference), Some(root.join(&name)));
+            assert_eq!(
+                resolve_song_asset(&root, &format!("song:/movie-{extension}")),
+                Some(root.join(&name)),
+            );
+            let refs = asset_references(&Value::String(reference), &root, &BTreeSet::new())
+                .expect("movie dependency");
+            assert_eq!(refs.len(), 1);
+            assert!(refs[0].exists);
+            assert_eq!(refs[0].local_path.as_deref(), Some(name.as_str()));
+            assert_eq!(refs[0].kind, "texture");
+        }
+    }
 
     #[test]
     fn hinted_actor_assets_are_archived_without_ambiguous_prefixes() {
