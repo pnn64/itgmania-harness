@@ -2,6 +2,9 @@
 -- The chunk is parsed and executed by ITGmania's bundled Lua 5.1 runtime.
 
 local harness = assert(_HARNESS, "missing native harness context")
+-- A song may replace global iterators/library tables for its own environment.
+-- Keep the host's traversal and serialization independent of those changes.
+setfenv(1, setmetatable({ pairs=pairs, ipairs=ipairs, type=type, next=next, unpack=unpack, table=table, string=string, math=math }, {__index=_G, __newindex=_G}))
 -- Whole-chart traces retain many tables. Keep frame garbage below the default
 -- two-times-live-heap threshold, and release it before the final JSON copy.
 collectgarbage("setpause", 110)
@@ -11,6 +14,11 @@ math.random = assert(MersenneTwister and MersenneTwister.Random)
 math.randomseed = MersenneTwister.Seed
 local random_seed = assert(_ITG_SONG_RANDOM_SEED)
 math.randomseed(random_seed)
+_ITG_RANDOM_RESEEDS = {}
+math.randomseed = function(seed)
+    _ITG_RANDOM_RESEEDS[#_ITG_RANDOM_RESEEDS + 1] = seed
+    return MersenneTwister.Seed(seed)
+end
 -- GameManager.cpp: dance-double uses one player and eight 64-pixel columns.
 local is_double = harness.steps_type == "dance-double"
 local style_name = is_double and "double" or "single"
@@ -60,10 +68,11 @@ end
 -- Keep dependencies loaded through computed paths (for example xero.require)
 -- even when their actor mutations are attributed to the caller's command.
 local loaded_lua_files = {}
+local file_observations = { reads = {}, directories = {}, writes = {}, generated = {} }
 local native_loadfile = loadfile
 function loadfile(path, ...)
 	local chunk, message = native_loadfile(path, ...)
-	if chunk and type(path) == "string" then loaded_lua_files[source_path(path)] = true end
+	if chunk and type(path) == "string" and not file_observations.generated[source_path(path)] then loaded_lua_files[source_path(path)] = true end
 	return chunk, message
 end
 
@@ -215,9 +224,10 @@ local function safe_value(value, depth, seen)
 	return out
 end
 
+_ITG_JSON_NULL = {}
 local function safe_args(...)
 	local out = {}
-	for index = 1, select("#", ...) do out[index] = safe_value(select(index, ...), 0, {}) end
+	for index = 1, select("#", ...) do out[index] = safe_value(select(index, ...), 0, {}) or (select(index, ...) == nil and _ITG_JSON_NULL or false) end
 	return out
 end
 
@@ -228,7 +238,7 @@ local function emit(kind, actor, operation, args, detail)
 		-- values. Their sequence must not use the setter sampling cadence.
 		and not (detail and detail.boolean_option)
 		and (active_context.command == "UpdateCommand" or active_context.callback == "SetUpdateFunction"
-			or active_context.callback == "SetDrawFunction") then
+			or active_context.callback == "SetDrawFunction" or active_context.recurring) then
 		return
 	end
 	if emitted_events >= harness.max_events then
@@ -320,6 +330,7 @@ local function json_encode(value)
 	end
 	local seen = {}
 	local function encode(item)
+        if item == _ITG_JSON_NULL then emit("null"); return end
 		local kind = type(item)
 		if kind == "nil" then emit("null"); return end
 		if kind == "boolean" then emit(item and "true" or "false"); return end
@@ -397,7 +408,7 @@ local function resolve_actor_path(path, base)
 	return exact
 end
 
-local function execute_file(path, params)
+local function execute_file(path, ...)
 	local prior = current_dir
 	current_dir = dirname(path)
 	local chunk, load_error = loadfile(path)
@@ -405,15 +416,15 @@ local function execute_file(path, params)
 		current_dir = prior
 		error(load_error, 0)
 	end
-	local result = { pcall(chunk, params) }
+	local result = { pcall(chunk, ...) }
 	current_dir = prior
 	if not result[1] then error(result[2], 0) end
 	return result[2]
 end
 
-function LoadActor(path, params)
+function LoadActor(path, ...)
 	local resolved = resolve_actor_path(path)
-	if resolved:lower():match("%.lua$") and is_file(resolved) then return execute_file(resolved, params) end
+	if resolved:lower():match("%.lua$") and is_file(resolved) then return execute_file(resolved, ...) end
 	if sound_path(resolved) then return Def.Sound { File = source_path(resolved) } end
 	return Def.Sprite { Texture = source_path(resolved) }
 end
@@ -443,24 +454,10 @@ function color(value)
 	return out
 end
 
-Color = setmetatable({ White = {1, 1, 1, 1}, Black = {0, 0, 0, 1}, Red = {1, 0, 0, 1}, Green = {0, 1, 0, 1}, Blue = {0, 0, 1, 1} }, {
-	__call = function(_, value) return color(value) end,
-	__index = function() return {1, 1, 1, 1} end,
-})
-
-function HSV(h, s, v)
-	local c, x = v * s, v * s * (1 - math.abs((h / 60) % 2 - 1))
-	local r, g, b = 0, 0, 0
-	if h < 60 then r, g = c, x elseif h < 120 then r, g = x, c elseif h < 180 then g, b = c, x elseif h < 240 then g, b = x, c elseif h < 300 then r, b = x, c else r, b = c, x end
-	local m = v - c
-	return { r + m, g + m, b + m, 1 }
-end
-
 function lerp(percent, left, right) return left + (right - left) * percent end
 function scale(value, low, high, out_low, out_high) return out_low + (value - low) * (out_high - out_low) / (high - low) end
 function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 function round(value) return math.floor(value + 0.5) end
-function wrap(value, low, high) return ((value - low) % (high - low)) + low end
 function split(separator, value)
 	local out = {}
 	for part in tostring(value):gmatch("([^" .. separator .. "]+)") do out[#out + 1] = part end
@@ -470,19 +467,6 @@ function join(separator, ...)
 	local values = {...}
 	if #values == 1 and type(values[1]) == "table" then values = values[1] end
 	return table.concat(values, separator)
-end
-function DeepCopy(value)
-	if type(value) ~= "table" then return value end
-	local out = {}
-	for key, item in pairs(value) do out[DeepCopy(key)] = DeepCopy(item) end
-	return setmetatable(out, getmetatable(value))
-end
-function ivalues(values)
-	local index = 0
-	return function()
-		index = index + 1
-		return values[index]
-	end
 end
 function ipairs_o(values) return ivalues(values) end
 function ToEnumShortString(value) return tostring(value):match("[^_]+$") or tostring(value) end
@@ -501,6 +485,7 @@ function IsMinimumProductVersion(...)
 	end
 	return true
 end
+function GetScreenAspectRatio() return harness.screen_width / harness.screen_height end
 function WideScale(narrow, wide) return scale(harness.screen_width, 640, 854, narrow, wide) end
 function ProductFamily() return "StepMania" end
 function ProductID() return "ITGmania" end
@@ -513,27 +498,6 @@ bg_fit_functions = {
 	BackgroundFitMode_FitInsideAvoidPillar = function(actor, width, height) actor:zoom(width / actor:GetWidth()) end,
 }
 function Trace() end
--- _fallback/Scripts/02 Utilities.lua, also used by theme-aware song scripts.
-function rec_print_children(parent, indent)
-    indent = indent or ""
-    if #parent > 0 and type(parent) == "table" then
-        for i, child in ipairs(parent) do rec_print_children(child, indent .. i .. "->") end
-    elseif parent.GetChildren then
-        local name = (parent.GetName and parent:GetName()) or ""
-        Trace(indent .. name .. " children:")
-        for key, child in pairs(parent:GetChildren()) do
-            if #child > 0 then
-                Trace(indent .. name .. "->" .. key .. " shared name:")
-                rec_print_children(child, indent .. name .. "->")
-                Trace(indent .. name .. "->" .. key .. " shared name over.")
-            else rec_print_children(child, indent .. name .. "->") end
-        end
-        Trace(indent .. name .. " children over.")
-    else
-        local name = (parent.GetName and parent:GetName()) or ""
-        Trace(indent .. name .. "(" .. tostring(parent) .. ")")
-    end
-end
 function Warn() end
 -- Simply Love (06 SL-Utilities.lua) defines SM(); songs written for that theme
 -- call it. Table arguments go through its TableToString, which is not modelled.
@@ -549,14 +513,19 @@ lua = {
         MESSAGEMAN:Broadcast("ScriptError", {message = tostring(message)})
         lua.reporting = false
     end,
-	ReadFile = function(path)
-		local file = io.open(normalize(path), "rb")
-		if not file then return "" end
-		local content = file:read("*a") or ""
-		file:close()
-		return content
-	end,
-	WriteFile = function() return true end,
+    ReadFile = function(path)
+        local file = RageFileUtil.CreateRageFile()
+        local value = file:Open(normalize(path), 1) and file:Read() or ""
+        file:Close(); file:destroy()
+        return value
+    end,
+    WriteFile = function(path, text)
+        local file = RageFileUtil.CreateRageFile()
+        local opened = file:Open(path, 2)
+        if opened then file:Write(text); file:Close() end
+        file:destroy()
+        return opened
+    end,
 }
 
 math.mod = math.mod or math.fmod
@@ -808,7 +777,19 @@ local function actor_call(actor, name, ...)
 		if name == "scale_or_crop_background" then actor_call(actor, "Center") end
 		return actor
 	end
-	if name == "GetParent" then return actor.parent end
+    if name == "getrotation" then return state_value(dest_state(actor), "rotationx"), state_value(dest_state(actor), "rotationy"), state_value(dest_state(actor), "rotationz") end
+    if name == "GetParent" then return actor.parent end
+    if name == "GetChildAt" then return actor.children[math.floor(tonumber((...)) or 0) + 1] end
+    if name == "get" and actor.class == "Sound" then return typed_child(actor, "Sound", "RageSound") end
+    if name == "GetPlayerInfo" and actor.class == "Screen" then
+        local player = tonumber((...)) or ((...) == "PlayerNumber_P2" and 1 or 0)
+        if is_double and player == 1 then return nil end
+        return { GetLifeMeter = function() return actor_call(actor, "GetLifeMeter", player) end }
+    end
+    if name == "GetLifeMeter" and actor.class == "Screen" then
+        return typed_child(actor, "LifeMeterP" .. ((tonumber((...)) or 0) + 1), "LifeMeterBar")
+    end
+    if name == "GetLife" and actor.class == "LifeMeterBar" then return 0.5 end
 	if name == "GetChild" then
         local child_name = (...)
         if rawget(actor, "child_lookup_exact") and not actor.children_by_name[child_name] then return nil end
@@ -854,7 +835,7 @@ local function actor_call(actor, name, ...)
 		end
 		return rawget(actor, "allocated_texture")
 	end
-	if name == "GetPath" and actor.class == "RageTexture" then return actor.state.path or "" end
+	if name == "GetPath" and actor.class == "RageTexture" then return source_path(actor.state.path or "") end
 	if name == "GetPlayerStageStats" then return external_actor(actor.path .. "/PlayerStageStats", "PlayerStageStats") end
 	if name == "GetPercentDancePoints" then return 0 end
 	if name == "GetSpline" or name == "get_spline" or name:match("Handler$") or name:match("^get_.*_handler$") then
@@ -961,8 +942,13 @@ local function actor_call(actor, name, ...)
 		end
 	elseif name == "playcommand" or name == "PlayCommand" or name == "propagatecommand" then
 		run_command_tree(actor, tostring((...)), select(2, ...))
-	elseif name == "queuecommand" or name == "QueueCommand" then
-        begin_tween(actor, 0, "linear", tostring((...)))
+    elseif name == "queuecommand" or name == "QueueCommand" then
+        local command = tostring((...))
+        if active_context and active_context.command == command .. "Command" then
+            actor.recurring_commands = rawget(actor, "recurring_commands") or {}
+            actor.recurring_commands[command] = true
+        end
+        begin_tween(actor, 0, "linear", command)
     elseif name == "queuemessage" or name == "QueueMessage" then
         -- Actor::QueueMessage uses the same native queue item as QueueCommand,
         -- with a ! marker consumed by UpdateTweening at dispatch.
@@ -1171,6 +1157,7 @@ local function actor_call(actor, name, ...)
 end
 
 actor_mt.__index = function(actor, name)
+    if name == "Name" then return nil end
 	return function(self, ...) return actor_call(self, name, ...) end
 end
 actor_mt.__tostring = function(actor) return actor.class .. ": " .. actor.path end
@@ -1190,7 +1177,7 @@ run_command = function(actor, name, params)
 	end
 	local source, line = command_info(fn)
 	local prior = active_context
-	active_context = { definition_id = actor.definition_id, command = name .. "Command", source = source, line = line }
+	active_context = { definition_id = actor.definition_id, command = name .. "Command", source = source, line = line, recurring = (rawget(actor, "recurring_commands") or {})[name] }
 	emit("command", actor, "command.begin", {}, { name = name .. "Command" })
 	local ok, message = pcall(fn, actor, params)
 	if ok then
@@ -1328,7 +1315,6 @@ local function update_native_options(options, name, ...)
 	if not ok then option_query_error = message end
 end
 local player_options_mt = {}
-local native_option_methods = { Incoming = true, Space = true, Hallway = true, Distant = true, Overhead = true, Tilt = true, Skew = true, DrawSize = true, DrawSizeBack = true, ModTimerSetting = true, ModTimerMult = true, ModTimerOffset = true, BumpyX = true, BumpyXOffset = true, BumpyXPeriod = true, TanBumpy = true, TanBumpyOffset = true, TanBumpyPeriod = true, TanBumpyX = true, TanBumpyXOffset = true, TanBumpyXPeriod = true, DrunkZ = true, DrunkZOffset = true, DrunkZSpeed = true, DrunkZPeriod = true, TanDrunk = true, TanDrunkOffset = true, TanDrunkSpeed = true, TanDrunkPeriod = true, TanDrunkZ = true, TanDrunkZOffset = true, TanDrunkZSpeed = true, TanDrunkZPeriod = true, Cosecant = true, DizzyHolds = true, StealthType = true, ZBuffer = true }
 local function option_returns(...) return { n = select("#", ...), ... } end
 local function indexed_option_noops(options, text)
 	local out = {}
@@ -1369,7 +1355,7 @@ player_options_mt.__index = function(options, name)
 		return value
 	end end
 	return function(self, ...)
-		if self.kind == "PlayerOptions" and (native_option_methods[name] or _ITG_PLAYER_OPTION_BOOLS[name]) then
+		if self.kind == "PlayerOptions" and (_ITG_PLAYER_OPTION_METHODS[name] and name ~= "FromString") then
 			local count = select("#", ...)
 			local bool_option = _ITG_PLAYER_OPTION_BOOLS[name] and name ~= "Overhead"
 			local bool_write = bool_option and count > 0 and type(select(1, ...)) == "boolean"
@@ -1377,7 +1363,7 @@ player_options_mt.__index = function(options, name)
 			local event
 			-- A nil enum argument only queries; it may request chaining as well.
 			-- BOOL_INTERFACE only writes when its first argument is a boolean.
-			if count > 0 and (not bool_option or type(select(1, ...)) == "boolean")
+			if count > 0 and select(1, ...) ~= nil and (not bool_option or type(select(1, ...)) == "boolean")
 				and (name ~= "ModTimerSetting" or select(1, ...) ~= nil) then
 				event = emit("modifier", self, self.kind .. "." .. name, safe_args(...),
 					bool_write and { boolean_option = {} } or nil)
@@ -1425,8 +1411,10 @@ end
 local player_options = { PLAYER_1 = make_options("player-state:PLAYER_1/options:ModsLevel_Song", "PlayerOptions"), PLAYER_2 = make_options("player-state:PLAYER_2/options:ModsLevel_Song", "PlayerOptions") }
 local song_options = make_options("song-options:ModsLevel_Song", "SongOptions", true)
 
+local song_position
 local player_state_mt = {}
 player_state_mt.__index = function(state, name)
+    if name == "GetSongPosition" then return function() return song_position end end
 	if name == "GetPlayerOptions" then return function(self) return player_options[self.player] end end
 	if name == "GetPlayerOptionsString" then return function(self)
 		return _ITG_OPTIONS_UPDATE(player_options[self.player].native_index, "GetString")
@@ -1445,7 +1433,7 @@ local player_states = {
 	PLAYER_2 = setmetatable({ id = "player-state:PLAYER_2", path = "player-state:PLAYER_2", player = "PLAYER_2" }, player_state_mt),
 }
 
-local song_position = {
+song_position = {
 	GetSongBeat = function() return _ITG_FLOAT(current_beat) end,
 	GetSongBeatVisible = function() return _ITG_FLOAT(current_beat) end,
 	GetMusicSeconds = function() return current_seconds end,
@@ -1470,7 +1458,21 @@ local song = {
 	GetMainTitle = function() return harness.title end,
 	GetDisplayBpms = function() return { harness.bpm, harness.bpm } end,
 	GetTimingData = function() return timing_data end,
-	GetSongBPS = function() return harness.bpm / 60 end,
+    GetSongBPS = function() return harness.bpm / 60 end,
+    GetFirstSecond = function() return harness.first_second or 0 end,
+    GetLastSecond = function() return harness.last_second or harness.max_beat * 60 / harness.bpm end,
+    MusicLengthSeconds = function()
+        if harness.music_length == nil then
+            local length, message = _ITG_MUSIC_LENGTH(assert(harness.music_path, "native music path unavailable"))
+            assert(length, message)
+            -- Song::ReCalculateStepStatsAndLastSecond corrects short music.
+            if length < harness.last_second - 10 then length = harness.last_second end
+            harness.music_length = length
+            file_observations.reads[#file_observations.reads + 1] = { path=source_path(harness.music_path), exists=true, generated=false }
+        end
+        return harness.music_length
+    end,
+    GetMusicPath = function() return harness.music_path end,
 }
 
 local all_steps = {}
@@ -1484,13 +1486,16 @@ for index, chart in ipairs(harness.steps or { harness }) do
 	all_steps[index] = {
 		GetDifficulty = function() return chart.difficulty end,
 		GetStepsType = function() return steps_type end,
-		GetDescription = function() return chart.description end,
+        GetDescription = function() return chart.description end,
+        GetAuthorCredit = function() return chart.author_credit or "" end,
+        GetChartName = function() return chart.chart_name or "" end,
 		GetMeter = function() return chart.meter or 0 end,
 		GetTimingData = function() return timing_data end,
 		GetNoteData = function() return {} end,
 	}
 end
 local steps = assert(all_steps[harness.current_steps or 1], "missing current Steps")
+_ITG_CURRENT_STEPS = { PLAYER_1 = steps, PLAYER_2 = steps }
 song.GetAllSteps = function()
 	local result = {}
 	for index, chart in ipairs(all_steps) do result[index] = chart end
@@ -1505,9 +1510,17 @@ song.GetStepsByStepsType = function(_, steps_type)
 	end
 	return result
 end
+song.GetOneSteps = function(_, steps_type, difficulty)
+    steps_type = _ITG_STEPS_TYPE(steps_type)
+    difficulty = _ITG_DIFFICULTY(difficulty)
+    for _, chart in ipairs(all_steps) do
+        if chart:GetStepsType() == steps_type and chart:GetDifficulty() == difficulty then return chart end
+    end
+end
 song.GetEasiestStepsDifficulty = function() return harness.difficulty end
 -- The isolated harness library contains only the current song.
-SONGMAN = { FindSong = function(_, query)
+SONGMAN = { GetSongGroupNames = function() return {} end,
+    FindSong = function(_, query)
 	local key = normalize(query):lower():gsub("/$", "")
 	if key ~= "" and song_dir:lower():sub(-#key) == key then return song end
 	return nil
@@ -1517,6 +1530,7 @@ local style = {
 	GetName = function() return style_name end,
 	ColumnsPerPlayer = function() return column_count end,
 	GetColsPerPlayer = function() return column_count end,
+    GetStyleType = function() return is_double and "StyleType_OnePlayerTwoSides" or (style_name == "routine" and "StyleType_TwoPlayersSharedSides" or "StyleType_TwoPlayersTwoSides") end,
 	GetWidth = function() return column_count * 64 end,
 }
 local game = { GetName = function() return "dance" end }
@@ -1541,7 +1555,7 @@ GAMESTATE = {
 	GetSongBPS = function() return current_bps end,
 	GetCurBPS = function() return current_bps end,
 	GetCurrentSong = function() return song end,
-	GetCurrentSteps = function() return steps end,
+	GetCurrentSteps = function(_, player) return _ITG_CURRENT_STEPS[player_key(player)] end,
 	GetCurrentStyle = function() return style end,
 	GetCurrentGame = function() return game end,
 	GetPlayerState = function(_, player) return player_states[player_key(player)] end,
@@ -1551,9 +1565,30 @@ GAMESTATE = {
 	IsPlayerEnabled = function(_, player) return not is_double or player_key(player) == "PLAYER_1" end,
 	IsHumanPlayer = function(_, player) return not is_double or player_key(player) == "PLAYER_1" end,
 	GetSongOptionsObject = function() return song_options end,
-	GetSongOptions = function() return "" end,
+	GetSongOptions = function() return _ITG_OPTIONS_UPDATE(-1, "GetString") end,
+    GetSongOptionsString = function() return _ITG_OPTIONS_UPDATE(-1, "GetString") end,
+    GetMasterPlayerNumber = function() return PLAYER_1 end,
+    GetCoinMode = function() return "CoinMode_Home" end,
+    GetPremium = function() return "Premium_Off" end,
+    IsEventMode = function() return PREFSMAN:GetPreference("EventMode") end,
 	GetEasiestStepsDifficulty = function() return harness.difficulty end,
-	SetCurrentSteps = function() end,
+    SetCurrentSteps = function(_, player, chart)
+        assert(chart, "SetCurrentSteps requires a Steps object")
+        _ITG_CURRENT_STEPS[player_key(player)] = chart
+        emit("call", nil, "GameState.SetCurrentSteps", safe_args(player, chart:GetStepsType(), chart:GetDifficulty(), chart:GetDescription()))
+    end,
+    SetCurrentStyle = function(_, name)
+        assert(name == "single" or name == "double" or name == "couple" or name == "routine", "unsupported dance style: " .. tostring(name))
+        style_name = name
+        is_double = name == "double"
+        column_count = (name == "double" or name == "routine") and 8 or 4
+        emit("call", nil, "GameState.SetCurrentStyle", safe_args(name))
+    end,
+    ApplyStageModifiers = function(_, player, modifiers)
+        local key = player_key(player)
+        _ITG_APPLY_STAGE_MODIFIERS(key == "PLAYER_2" and 1 or 0, modifiers)
+        emit("modifier", player_states[key], "GameState.ApplyStageModifiers", safe_args(player, modifiers))
+    end,
 	ApplyGameCommand = function(_, command) emit("modifier", nil, "GameState.ApplyGameCommand", safe_args(command)) end,
 }
 
@@ -1599,6 +1634,7 @@ DISPLAY = {
 	GetDisplayHeight = function() return harness.display_height end,
 	GetFPS = function() return 60 end,
 	GetVsync = function() return true end,
+    SupportsRenderToTexture = function() return true end,
 }
 
 -- The host advertises Simply Love; use that checked-out theme's [Player]
@@ -1631,6 +1667,7 @@ THEME = {
 	GetMetric = function(_, group, name) return theme_metric(group, name) or 0 end,
 	GetMetricB = function() return false end,
 	HasMetric = function(_, group, name) return theme_metric(group, name) ~= nil end,
+    GetString = function(_, group, name) return tostring(name) end,
 	GetPathG = function(_, _, path) return tostring(path or "") end,
 	GetPathB = function(_, _, path) return tostring(path or "") end,
 	GetPathS = function(_, _, path) return tostring(path or "") end,
@@ -1641,11 +1678,15 @@ THEME = {
 local timing_window_add = 0
 PREFSMAN = { GetPreference = function(_, name)
 	if tostring(name):lower() == "timingwindowadd" then return timing_window_add end
+	if name == "EventMode" then return true end
+    if name == "CoinMode" then return "CoinMode_Home" end
 	if name == "VideoRenderers" then return "opengl" end
+    if name == "LastSeenVideoDriver" then return "" end
 	if name == "DisplayWidth" then return harness.display_width end
 	if name == "DisplayHeight" then return harness.display_height end
 	if name == "DisplayAspectRatio" then return harness.display_width / harness.display_height end
 	if name == "GlobalOffsetSeconds" then return 0 end
+    if name == "Theme" then return "Simply Love" end
 	-- PrefsManager.cpp defaults to BFM_CoverPreserve.
 	if name == "BackgroundFitMode" then return "BackgroundFitMode_CoverPreserve" end
 	-- Background.cpp declares this as a float, used by numeric diffuse calls.
@@ -1669,13 +1710,26 @@ PROFILEMAN = {
 	IsPersistentProfile = function() return false end,
 	GetNumLocalProfiles = function() return 0 end,
 	GetProfile = function() return harness_profile end,
+    GetPlayerName = function() return "" end,
 }
 STATSMAN = { GetCurStageStats = function() return external_actor("stage-stats", "StageStats") end }
-FILEMAN = { DoesFileExist = function(_, path)
-	if normalize(path):lower():match("/savefile%.lua$") then return false end
-	return is_file(normalize(path))
-end, GetDirListing = function() return {} end }
+FILEMAN = { DoesFileExist = function(_, path) return is_file(normalize(path)) end,
+    GetDirListing = function(_, path, only_dirs, return_path)
+        path = normalize(path)
+        local result = _ITG_DIR_LISTING(path, only_dirs == true, return_path == true)
+        local files = _ITG_DIR_LISTING(path, false, true)
+        local query = { path = source_path(path), only_dirs = only_dirs == true, return_path = return_path == true, files = {} }
+        for _, file in ipairs(files) do query.files[#query.files + 1] = source_path(file) end
+        file_observations.directories[#file_observations.directories + 1] = query
+        return result
+    end }
+
 SOUND = {
+    GetPlayerBalance = function(_, player)
+        if is_double then return 0 end
+        return player_key(player) == "PLAYER_1" and -1 or 1
+    end,
+    PlayMusicPart = function(_, ...) emit("call", nil, "SoundManager.PlayMusicPart", safe_args(...)) end,
 	PlayOnce = function(_, path) emit("call", nil, "SoundManager.PlayOnce", safe_args(path)) end,
 	DimMusic = function(_, volume, seconds) emit("call", nil, "SoundManager.DimMusic", safe_args(volume, seconds)) end,
 }
@@ -1739,7 +1793,7 @@ left, center, right = "HorizAlign_Left", "HorizAlign_Center", "HorizAlign_Right"
 top, middle, bottom = "VertAlign_Top", "VertAlign_Middle", "VertAlign_Bottom"
 align_left, align_center, align_right, align_top, align_middle, align_bottom = 0, 0.5, 1, 0, 0.5, 1
 PlayerOptions = _ITG_PLAYER_OPTION_METHODS
-ActorFrame = setmetatable({ GetChildAt = function(actor, index) return actor.children[index + 1] or actor.children[index] end }, { __index = function() return true end })
+ActorFrame = setmetatable({ GetChildAt = function(actor, index) return actor.children[index + 1] end }, { __index = function() return true end })
 -- Feature probes must reflect the native class bindings. In particular,
 -- ITGmania has neither SM5.2's NoteField.set_skin nor Player.SetNoteData.
 NoteField = {
@@ -1767,6 +1821,8 @@ Difficulty = {
 function Year() return 2026 end
 function MonthOfYear() return 9 end
 function DayOfMonth() return 1 end
+function DayOfYear() return 273 end
+function Weekday() return 4 end
 function Hour() return 12 end
 function Minute() return 0 end
 function Second() return 0 end
@@ -1838,15 +1894,35 @@ ArrowEffects = setmetatable({}, { __index = function(_, name)
 	return function() return 0 end
 end })
 RageFileUtil = { CreateRageFile = function()
-	return {
-		Open = function() return true end,
-		PutLine = function() end,
-		Write = function() end,
-		Close = function() end,
-		destroy = function() end,
-	}
+    local file = { handle = _ITG_FILE_CREATE() }
+    return setmetatable(file, { __index = function(_, method) return function(self, ...)
+        local args = {...}
+        local value = _ITG_FILE_CALL(self.handle, method, ...)
+        if method == "Open" then
+            self.path, self.mode = source_path(normalize(args[1])), args[2]
+            if self.mode % 2 == 1 then
+                file_observations.reads[#file_observations.reads + 1] = { path = self.path, exists = value, generated = file_observations.generated[self.path] == true }
+            elseif value then
+                file_observations.generated[self.path] = true
+                file_observations.writes[#file_observations.writes + 1] = { path=self.path, operation=method, mode=self.mode }
+            end
+        elseif method == "Write" or method == "PutLine" then
+            file_observations.writes[#file_observations.writes + 1] = { path=self.path, operation=method, text=args[1], result=value }
+        end
+        return value
+    end end })
 end }
+
 function GetTimeSinceStart() return current_seconds end
+_G.type = function(value)
+    if type(value) == "table" and getmetatable(value) == actor_mt then return "userdata" end
+    return type(value)
+end
+ThemeManager, GameState, Sprite = THEME, GAMESTATE, {}
+for _, helper in ipairs(_ITG_THEME_HELPERS or {}) do
+    assert(loadstring(helper.source, "@theme:/_fallback/Scripts/" .. helper.name))()
+end
+ThemePrefs.Init({}, true)
 
 local function run_scheduled_beats()
 	local index = 1
@@ -2564,7 +2640,14 @@ end
 attach_screen_layers("SongBackground", function(layer) return layer == "background1" or layer == "background2" end)
 attach_screen_layers("SongForeground", function(layer) return layer == "foreground" end)
 
-for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "Init") end) end
+do
+    local function init(actor)
+        for _, child in ipairs(actor.children) do init(child) end
+        run_command(actor, "Init")
+    end
+    for _, root in ipairs(loaded_roots) do init(root.actor) end
+end
+for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "Begin") end) end
 for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "On") end) end
 
 local function crosses_action(previous, beat, first_frame)
@@ -2683,10 +2766,14 @@ return json_encode({
 	song_clock = _ITG_SONG_POSITION and "native-pauses" or "continuous-bpm",
 	random_seed = random_seed,
 	random_generator = "ITGmania MersenneTwister",
+    random_reseeds = _ITG_RANDOM_RESEEDS,
 	harness_version = harness.harness_version,
 	itgmania_version = harness.itgmania_version,
 	simfile = source_path(harness.simfile),
 	loaded_lua_files = lua_sources,
+    file_reads = file_observations.reads,
+    directory_queries = file_observations.directories,
+    file_writes = file_observations.writes,
 	title = harness.title,
 	theme = "headless",
 	game = "dance",
@@ -2700,13 +2787,17 @@ return json_encode({
 	update_fps = UPDATE_FPS,
 	bpm_segments = bpm_segments,
 	end_position = { beat = current_beat, seconds = current_seconds },
+    trace_until_seconds = end_seconds,
+    calendar = { year=2026, month=10, day=1, hour=12, minute=0, second=0 },
 	update_frames = update_frames,
 	capabilities = {
 		actor_definitions = true, child_layer_order = true, command_execution = true,
 		actor_method_calls = true, callback_calls = true, message_broadcasts = true,
 		modifier_mutations = true, embedded_itgmania_lua = true, launches_itgmania = false,
 		runtime_complete = #runtime_errors == 0,
-		callback_operation_tracks = true,
+        native_file_reads = true, native_directory_listing = true,
+        isolated_file_writes = _ITG_SONG_WRITABLE,
+		callback_operation_tracks = true, recurrent_command_sampling = true,
 		external_actor_paths = true, player_render_samples = true,
 		projected_vertex_samples = true, projected_draw_color_samples = true,
 		manual_draw_frames = true, native_multi_vertex_primitives = true,

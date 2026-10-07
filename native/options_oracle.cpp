@@ -5,11 +5,12 @@
 #include "SongOptions.cpp"
 #undef AddPart
 #include <new>
+#include "ModsGroup.h"
 
 namespace {
 struct OptionState {
-  PlayerOptions players[2];
-  SongOptions song;
+  ModsGroup<PlayerOptions> players[2];
+  ModsGroup<SongOptions> song;
 };
 
 template<class Owner> struct OptionMethod {
@@ -45,11 +46,12 @@ int update_options(lua_State* L) {
   lua_remove(L, 1);
   lua_remove(L, 1);
   if (player == -1) {
-    return call_option(&state->song, L, method, song_methods);
+    if (method == "GetString") { LuaHelpers::Push(L, state->song.GetSong().GetString()); return 1; }
+    return call_option(&state->song.GetSong(), L, method, song_methods);
   }
   if (player < 0 || player > 1) return luaL_error(L, "invalid player");
   if (method == "GetString") {
-    LuaHelpers::Push(L, state->players[player].GetString());
+    LuaHelpers::Push(L, state->players[player].GetSong().GetString());
     return 1;
   }
   if (method == "SetPlayerOptions") {
@@ -57,10 +59,10 @@ int update_options(lua_State* L) {
     // does not add modifiers to the previous PlayerOptions instance.
     PlayerOptions options;
     options.FromString(luaL_checkstring(L, 1));
-    state->players[player] = options;
+    state->players[player].Assign(ModsLevel_Song, options);
     return 0;
   }
-  return call_option(&state->players[player], L, method, player_methods);
+  return call_option(&state->players[player].GetSong(), L, method, player_methods);
 }
 
 int using_modifier(lua_State* L) {
@@ -69,11 +71,11 @@ int using_modifier(lua_State* L) {
   if (player < 0 || player > 1) return luaL_error(L, "invalid player");
   const std::string text = luaL_checkstring(L, 2);
   // GameState::PlayerIsUsingModifier: apply to copies and compare current values.
-  PlayerOptions po = state->players[player];
-  SongOptions so = state->song;
+  PlayerOptions po = state->players[player].GetSong();
+  SongOptions so = state->song.GetSong();
   po.FromString(text);
   so.FromString(text);
-  lua_pushboolean(L, po == state->players[player] && so == state->song);
+  lua_pushboolean(L, po == state->players[player].GetSong() && so == state->song.GetSong());
   return 1;
 }
 }
@@ -95,6 +97,18 @@ void install_option_queries(lua_State* L) {
   lua_pushvalue(L, -1);
   lua_pushcclosure(L, update_options, 1);
   lua_setglobal(L, "_ITG_OPTIONS_UPDATE");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const int player = static_cast<int>(luaL_checkinteger(L, 1));
+    const std::string modifiers = luaL_checkstring(L, 2);
+    if (player < 0 || player > 1) return luaL_error(L, "invalid player");
+    // GameState::ApplyStageModifiers calls the native ModsGroup at Stage.
+    state->players[player].FromString(ModsLevel_Stage, modifiers);
+    state->song.FromString(ModsLevel_Stage, modifiers);
+    return 0;
+  }, 1);
+  lua_setglobal(L, "_ITG_APPLY_STAGE_MODIFIERS");
   lua_pushcclosure(L, using_modifier, 1);
   lua_setglobal(L, "_ITG_USING_MODIFIER");
 }

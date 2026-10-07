@@ -6,6 +6,46 @@ use std::path::{Path, PathBuf};
 const MAGIC: &[u8; 8] = b"ITGSEM\0\0";
 const WIRE_VERSION: u32 = 2;
 const HOST: &str = include_str!("../semantic_host.lua");
+#[cfg(itgmania_oracle)]
+const THEME_HELPERS: &[(&str, &str)] = &[
+    (
+        "01 IniFile.lua",
+        include_str!(concat!(
+            env!("ITGMANIA_BUILD_ROOT"),
+            "/Themes/_fallback/Scripts/01 IniFile.lua"
+        )),
+    ),
+    (
+        "02 ThemePrefs.lua",
+        include_str!(concat!(
+            env!("ITGMANIA_BUILD_ROOT"),
+            "/Themes/_fallback/Scripts/02 ThemePrefs.lua"
+        )),
+    ),
+    (
+        "02 Utilities.lua",
+        include_str!(concat!(
+            env!("ITGMANIA_BUILD_ROOT"),
+            "/Themes/_fallback/Scripts/02 Utilities.lua"
+        )),
+    ),
+    (
+        "02 Sprite.lua",
+        include_str!(concat!(
+            env!("ITGMANIA_BUILD_ROOT"),
+            "/Themes/_fallback/Scripts/02 Sprite.lua"
+        )),
+    ),
+    (
+        "02 Colors.lua",
+        include_str!(concat!(
+            env!("ITGMANIA_BUILD_ROOT"),
+            "/Themes/_fallback/Scripts/02 Colors.lua"
+        )),
+    ),
+];
+#[cfg(not(itgmania_oracle))]
+const THEME_HELPERS: &[(&str, &str)] = &[];
 const PLAYER_OPTION_METHODS: &str =
     include_str!(concat!(env!("OUT_DIR"), "/player_option_methods.lua"));
 
@@ -59,9 +99,6 @@ fn evaluate_with_resources(
     noteskin: Option<crate::noteskin_oracle::Document>,
     judgment: Option<&Path>,
 ) -> Result<Value, Error> {
-    if entries.is_empty() {
-        return Err(Error::Request("song has no Lua entries".into()));
-    }
     if context.random_seed == 0 || context.random_seed > i32::MAX as u32 {
         return Err(Error::Request(
             "random seed must be in 1..=2147483647".into(),
@@ -135,6 +172,15 @@ fn evaluate_with_resources(
         }
         host.push_str("}}\n");
     }
+    host.push_str("\n_ITG_THEME_HELPERS = {\n");
+    for (name, source) in THEME_HELPERS {
+        host.push_str(&format!(
+            "{{name={}, source={}}},\n",
+            crate::song_lua_runtime::lua_quote(name),
+            crate::song_lua_runtime::lua_quote(source)
+        ));
+    }
+    host.push_str("}\n");
     host.push_str(HOST);
     let response = native_eval(&request, host.as_bytes())?;
     let mut input = Reader::new(&response);
@@ -157,12 +203,17 @@ fn evaluate_with_resources(
         return Err(Error::Wire("native response has trailing bytes".into()));
     }
     let mut document: Value = serde_json::from_slice(json).map_err(Error::Json)?;
+    if let Some(path) = std::env::var_os("ITGMANIA_SONG_LUA_RAW_TRACE") {
+        fs::write(path, json)
+            .map_err(|error| Error::Request(format!("write diagnostic raw trace: {error}")))?;
+    }
     crate::song_lua_semantics::enrich(&mut document).map_err(Error::Semantics)?;
     if let (Some(path), Some(bytes)) = (judgment, judgment_bytes) {
         use sha2::{Digest, Sha256};
-        let name = path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-            Error::Request("initial judgment must have a UTF-8 filename".into())
-        })?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| Error::Request("initial judgment must have a UTF-8 filename".into()))?;
         let physical = path.to_string_lossy().replace('\\', "/");
         let physical = physical.trim_start_matches("//?/");
         let portable = format!("judgment:/{name}");
@@ -173,6 +224,10 @@ fn evaluate_with_resources(
             "sha256": Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>()
         });
     }
+    document["theme_reference"] = serde_json::json!({"root":"theme:/_fallback", "files": THEME_HELPERS.iter().map(|(name, source)| {
+        use sha2::{Digest, Sha256};
+        serde_json::json!({"path":format!("Scripts/{name}"), "bytes":source.len(), "sha256":Sha256::digest(source.as_bytes()).iter().map(|byte|format!("{byte:02x}")).collect::<String>()})
+    }).collect::<Vec<_>>()});
     if let Some(noteskin) = noteskin {
         // Keep bundled noteskin dependencies portable and pin their bytes in
         // the trace. Whole-song archives list these as external resources.
@@ -295,7 +350,7 @@ fn encode(entries: &[Entry], context: &Context<'_>) -> Result<Vec<u8>, Error> {
     out.f32(854.0);
     out.f32(480.0);
     out.u32(context.max_events);
-    out.u32(context.max_events.saturating_mul(2));
+    out.u32(context.max_events.saturating_mul(16));
     out.u32(256);
     out.len(entries.len())?;
     for entry in entries {
@@ -517,6 +572,58 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn recovered_host_bindings_and_recurring_commands() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .unwrap();
+        for name in ["host-bindings.lua", "recurring-command.lua"] {
+            let path = dir.join(name);
+            let context = Context {
+                simfile: &path,
+                song_dir: &dir,
+                title: "Host regression",
+                difficulty: "Difficulty_Challenge",
+                steps_type: "dance-single",
+                description: "",
+                max_beat: 1.0,
+                bpm: 60.0,
+                bpm_segments: &[],
+                beat_step: 0.25,
+                max_events: 1000,
+                random_seed: 1,
+            };
+            let trace = evaluate_with_noteskin(
+                &[Entry {
+                    path: path.clone(),
+                    layer: "foreground",
+                    index: 0,
+                    start_beat: 0.0,
+                }],
+                &context,
+                None,
+            )
+            .expect("evaluate recovered host APIs");
+            assert_eq!(trace["runtime_errors"], serde_json::json!([]), "{name}");
+            assert_eq!(trace["dropped_events"], 0, "{name}");
+            assert_eq!(trace["end_position"]["seconds"], 1.0);
+            assert_eq!(trace["trace_until_seconds"], 1.0);
+            if name == "host-bindings.lua" {
+                assert!(
+                    trace["loaded_lua_files"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|p| p == "song:/host-child.lua")
+                );
+                assert!(trace["file_reads"].as_array().unwrap().iter().any(|read| read["path"] == "song:/host-data.txt" && read["exists"] == true));
+                assert!(!dir.join("forbidden.txt").exists());
+            }
+        }
+    }
 
     #[cfg(itgmania_oracle)]
     #[test]
@@ -914,12 +1021,16 @@ mod tests {
             max_events: 1000,
             random_seed: 1,
         };
-        let trace = evaluate(&[Entry {
-            path: song_dir.join("initial-budget.lua"),
-            layer: "foreground",
-            index: 0,
-            start_beat: 0.0,
-        }], &context).expect("finite initial update");
+        let trace = evaluate(
+            &[Entry {
+                path: song_dir.join("initial-budget.lua"),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("finite initial update");
         assert_eq!(trace["runtime_errors"], serde_json::json!([]));
         assert_eq!(trace["end_position"]["beat"], 200.0);
     }
@@ -1832,7 +1943,8 @@ mod tests {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let song_dir = workspace.join("lua-songs/mawaru9");
         let simfile = song_dir.join("mawaru9.sm");
-        let graphic = workspace.join("deadsync/assets/graphics/judgements/Love 2x7 (doubleres).png");
+        let graphic =
+            workspace.join("deadsync/assets/graphics/judgements/Love 2x7 (doubleres).png");
         let context = Context {
             simfile: &simfile,
             song_dir: &song_dir,
@@ -1901,10 +2013,21 @@ mod tests {
         .expect("native loaded judgment before song startup");
         assert_eq!(trace["runtime_errors"], serde_json::json!([]));
         assert_eq!(trace["judgment_reference"]["path"], "Normal 2x6.png");
-        assert!(trace["judgment_reference"]["sha256"].as_str().unwrap().len() == 64);
-        assert!(!trace["events"].as_array().unwrap().iter().any(|event| {
-            event["operation"] == "Sprite.Load"
-        }), "theme setup must not invent a song load operation");
+        assert!(
+            trace["judgment_reference"]["sha256"]
+                .as_str()
+                .unwrap()
+                .len()
+                == 64
+        );
+        assert!(
+            !trace["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| { event["operation"] == "Sprite.Load" }),
+            "theme setup must not invent a song load operation"
+        );
     }
 
     #[cfg(itgmania_oracle)]

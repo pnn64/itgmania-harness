@@ -42,6 +42,7 @@ Initialize the two source submodules before building:
 git clone https://github.com/pnn64/itgmania-harness.git
 cd itgmania-harness
 git submodule update --init
+git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis
 cargo build
 cargo run -- doctor
 ```
@@ -60,8 +61,10 @@ at the baseline version. Simply Love is separate because ITGmania v1.2.0's
 nested theme pin is 5.8.0, while the existing harness baselines use 5.9.0.
 
 The harness uses the engine's checked-in Lua, JSONCPP, PCRE, miniz, noteskins,
-and fallback resources. It does not need ITGmania's nested submodules, so
-`--recursive` is unnecessary. Linux/WSL still needs the system packages listed
+and fallback resources. Native music duration queries also require the pinned
+`extern/ogg` and `extern/vorbis` submodules. Initialize these explicitly with
+`git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis`; the
+remaining nested submodules are unnecessary. Linux/WSL still needs the system packages listed
 below. `ITGMANIA_ROOT` remains available for another engine source checkout;
 set it before invoking Cargo to compile that revision. `doctor --itgmania-root`
 inspects a tree without changing the source compiled into the binary.
@@ -383,6 +386,36 @@ and event bounds
 with `--beat-step` and `--max-events`. A runtime error or event limit marks that
 fixture `partial`; the command still writes its usable trace and records the
 exact error or dropped count in `_semantic_manifest.json`.
+
+Use repeatable `--simfile relative/path.ssc` arguments to retry selected files.
+Selections must resolve to simfiles inside the corpus; duplicates run once.
+Charts with no Lua references produce complete empty actor captures, so their
+original simfiles can still be archived.
+
+The host passes all `LoadActor` arguments, initializes children before their
+parents, and dispatches `BeginCommand` before `OnCommand`. Player option
+getters use the linked native Lua bindings, including approach-speed return
+values. The pinned fallback theme helpers execute unchanged and their hashes
+are recorded in `theme_reference`. The calendar is fixed to October 1, 2026
+at noon and recorded in the trace. Song reseeds are retained; native seed zero
+uses wall time and is marked unreproducible in the archive.
+
+Self-queued recurring commands execute at every 60 Hz update. Their repeated
+operation observations use the same `--beat-step` cadence as update callbacks;
+initialization, audio loads, and boolean changes remain observable. This
+bounds repeated animation traces without reducing the execution cadence.
+`trace_until_seconds` records the native endpoint used by the scheduler;
+native beat/time conversions do not necessarily round-trip to the same beat.
+
+RageFile reads and directory listings access the real corpus. Archives retain
+successful file-read and listing dependencies, including non-Lua data files.
+Writes are disabled by default. To capture a song that generates its own data,
+copy it into an isolated corpus and set `ITGMANIA_SONG_LUA_WRITE_ROOT` to that
+corpus for the capture process. Writes must resolve inside the selected song
+folder. The trace records generated reads and writes, and generated Lua is
+excluded from the original source closure. Archive against the original
+corpus to preserve the input files. Native music-length queries support Ogg
+Vorbis and WAV via ITGmania's unchanged readers; other formats report an error.
 
 Use `--steps-type dance-double --difficulty Challenge` to capture a double
 chart explicitly. An explicit steps type requires a chart with that style

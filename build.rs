@@ -54,6 +54,9 @@ const ITG_SOURCES: &[&str] = &[
     "src/RageTextureRenderTarget.cpp",
     "src/RageTextureID.cpp",
     "src/RageFileBasic.cpp",
+    "src/RageSoundReader.cpp",
+    "src/RageSoundReader_WAV.cpp",
+    "src/RageSoundReader_Vorbisfile.cpp",
     "src/XmlFile.cpp",
     "src/XmlFileUtil.cpp",
     "src/SpecialFiles.cpp",
@@ -186,6 +189,7 @@ fn main() {
 
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     write_player_option_methods(&root, &out);
+    write_song_stats(&root, &out);
     write_compat_headers(&out, &target_os);
     if target_os == "windows" {
         prepare_pcre(&root, &out);
@@ -208,6 +212,8 @@ fn main() {
         .include(out.join("pcre"))
         .include(root.join("extern/pcre"))
         .include(root.join("extern/miniz"))
+        .include(root.join("extern/ogg/include"))
+        .include(root.join("extern/vorbis/include"))
         .include(&out)
         .file(manifest.join("native/oracle_bridge.cpp"))
         .file(manifest.join("native/chart_theme.cpp"))
@@ -236,6 +242,7 @@ fn main() {
     }
     build.compile("itgmania_oracle");
 
+    compile_audio_deps(&root, &out);
     compile_bundled_lua(&root, &target_os);
 
     if target_os == "windows" {
@@ -247,6 +254,94 @@ fn main() {
         }
     }
     println!("cargo:rustc-cfg=itgmania_oracle");
+}
+
+// These are the source lists from the pinned Xiph CMakeLists.txt. Decode and
+// length calculations remain in ITGmania's unchanged native sound readers.
+fn compile_audio_deps(root: &Path, out: &Path) {
+    let ogg = root.join("extern/ogg");
+    let vorbis = root.join("extern/vorbis");
+    assert!(
+        ogg.join("src/framing.c").is_file() && vorbis.join("lib/vorbisfile.c").is_file(),
+        "initialize native audio dependencies: git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis"
+    );
+    let types = out.join("ogg");
+    fs::create_dir_all(&types).expect("create Ogg compatibility include");
+    fs::write(types.join("config_types.h"), "#include <stdint.h>\ntypedef int16_t ogg_int16_t;\ntypedef uint16_t ogg_uint16_t;\ntypedef int32_t ogg_int32_t;\ntypedef uint32_t ogg_uint32_t;\ntypedef int64_t ogg_int64_t;\ntypedef uint64_t ogg_uint64_t;\n").expect("write fixed-width Ogg types");
+    let mut codec = cc::Build::new();
+    codec
+        .warnings(false)
+        .include(out)
+        .include(ogg.join("include"))
+        .include(vorbis.join("include"))
+        .include(vorbis.join("lib"))
+        .define("_CRT_SECURE_NO_WARNINGS", None);
+    for file in [
+        "mdct",
+        "smallft",
+        "block",
+        "envelope",
+        "window",
+        "lsp",
+        "lpc",
+        "analysis",
+        "synthesis",
+        "psy",
+        "info",
+        "floor1",
+        "floor0",
+        "res0",
+        "mapping0",
+        "registry",
+        "codebook",
+        "sharedbook",
+        "lookup",
+        "bitrate",
+        "vorbisfile",
+    ] {
+        let source = vorbis.join("lib").join(format!("{file}.c"));
+        println!("cargo:rerun-if-changed={}", source.display());
+        codec.file(source);
+    }
+    codec.compile("itgmania_vorbis");
+    let mut container = cc::Build::new();
+    container
+        .warnings(false)
+        .include(out)
+        .include(ogg.join("include"));
+    for file in ["bitwise.c", "framing.c"] {
+        let source = ogg.join("src").join(file);
+        println!("cargo:rerun-if-changed={}", source.display());
+        container.file(source);
+    }
+    container.compile("itgmania_ogg");
+}
+
+fn write_song_stats(root: &Path, out: &Path) {
+    let path = root.join("src/Song.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(&path).expect("read native Song.cpp");
+    let start = source
+        .find("void Song::ReCalculateStepStatsAndLastSecond(")
+        .expect("native song stats method");
+    let end = source[start..]
+        .find("\n// Return whether the song is playable")
+        .expect("end of native song stats method")
+        + start;
+    fs::write(out.join("song_stats.inc"), &source[start..end])
+        .expect("write native song stats method");
+    let path = root.join("src/RageFile.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native file helpers");
+    let start = source
+        .find("void FileReading::ReadBytes(")
+        .expect("native binary file readers");
+    let end = source[start..]
+        .find("// lua start")
+        .expect("end of native binary file readers")
+        + start;
+    fs::write(out.join("file_reading.inc"), &source[start..end])
+        .expect("write native file readers");
 }
 
 fn write_player_option_methods(root: &Path, out: &Path) {

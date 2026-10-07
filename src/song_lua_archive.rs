@@ -93,6 +93,7 @@ struct RandomState {
     source: &'static str,
     seed: Option<u64>,
     reproducible: bool,
+    reseeds: Vec<u64>,
 }
 
 #[derive(Serialize)]
@@ -288,6 +289,54 @@ fn archive_members(
         members.insert(member.clone(), bytes);
         asset_members.insert(member);
     }
+    // Runtime reads/listings may depend on files without a texture or Lua extension.
+    let mut runtime_files = BTreeSet::new();
+    for read in trace
+        .get("file_reads")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if read.get("exists").and_then(Value::as_bool) == Some(true)
+            && read.get("generated").and_then(Value::as_bool) != Some(true)
+        {
+            if let Some(path) = read
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(|v| v.strip_prefix("song:/"))
+            {
+                runtime_files.insert(path.to_owned());
+            }
+        }
+    }
+    for query in trace
+        .get("directory_queries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for path in query
+            .get("files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|v| v.strip_prefix("song:/"))
+        {
+            if checked_join(song_dir, path)?.is_file() {
+                runtime_files.insert(path.to_owned());
+            }
+        }
+    }
+    for relative in runtime_files {
+        let path = checked_join(song_dir, &relative)?;
+        let member = format!("song/{relative}");
+        members.insert(
+            member.clone(),
+            fs::read(&path).map_err(|error| Error::io("read runtime dependency", &path, error))?,
+        );
+        asset_members.insert(member);
+    }
     let files = members
         .iter()
         .map(|(path, bytes)| FileMetadata {
@@ -331,12 +380,24 @@ fn archive_members(
                 .and_then(Value::as_f64)
                 .unwrap_or(60.0),
             random_state: RandomState {
-                source: "embedded-native-lua-default-unseeded",
-                seed: trace.pointer("/random_state/seed").and_then(Value::as_u64),
-                reproducible: trace
-                    .pointer("/random_state/reproducible")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
+                source: "ITGmania MersenneTwister",
+                seed: trace.get("random_seed").and_then(Value::as_u64),
+                reproducible: trace.get("random_seed").and_then(Value::as_u64).is_some()
+                    && trace
+                        .get("random_reseeds")
+                        .and_then(Value::as_array)
+                        .is_none_or(|seeds| {
+                            seeds.iter().all(|seed| {
+                                seed.as_u64().is_some_and(|v| v > 0 && v <= i32::MAX as u64)
+                            })
+                        }),
+                reseeds: trace
+                    .get("random_reseeds")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_u64)
+                    .collect(),
             },
         },
         lua_closure: LuaClosure {

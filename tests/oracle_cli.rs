@@ -14,6 +14,113 @@ fn itgmania_root() -> PathBuf {
 }
 
 #[test]
+fn captures_selected_empty_charts_and_isolates_file_writes() {
+    let directory = temp_dir("song-host");
+    let corpus = directory.join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    let chart = "#TITLE:Host;\n#BPMS:0=60;\n#NOTES:dance-single::Challenge:1:0,0,0,0,0:\n1000\n0100\n0010\n0001\n;\n";
+    std::fs::write(corpus.join("empty.sm"), chart).unwrap();
+    let traces = directory.join("empty-traces");
+    let output = run(&[
+        "song-lua-semantic-baseline",
+        corpus.to_str().unwrap(),
+        "--simfile",
+        "empty.sm",
+        "--simfile",
+        "empty.sm",
+        "--out",
+        traces.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(traces.join("_semantic_manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["simfiles"].as_array().unwrap().len(), 1);
+    assert_eq!(manifest["simfiles"][0]["status"], "ok");
+    assert_eq!(manifest["simfiles"][0]["lua_entries"], 0);
+    let archives = directory.join("archives");
+    let output = run(&[
+        "song-lua-archive",
+        corpus.to_str().unwrap(),
+        "--traces",
+        traces.to_str().unwrap(),
+        "--out",
+        archives.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let output = run(&[
+        "song-lua-semantic-baseline",
+        corpus.to_str().unwrap(),
+        "--simfile",
+        "../outside.sm",
+        "--out",
+        traces.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    std::fs::write(
+        corpus.join("write.sm"),
+        format!("#FGCHANGES:0=write.lua;\n{chart}"),
+    )
+    .unwrap();
+    std::fs::write(
+        corpus.join("write.lua"),
+        r#"
+local directory = GAMESTATE:GetCurrentSong():GetSongDir()
+local file = RageFileUtil.CreateRageFile()
+assert(file:Open(directory .. "generated.lua", 2))
+assert(file:Write("return 'captured'\n") > 0)
+file:Close()
+assert(file:Open(directory .. "generated.lua", 1))
+assert(file:Read() == "return 'captured'\n")
+file:destroy()
+assert(assert(loadfile(directory .. "generated.lua"))() == "captured")
+local outside = RageFileUtil.CreateRageFile()
+assert(not outside:Open(directory .. "../escape.txt", 2))
+outside:destroy()
+return Def.Actor{}
+"#,
+    )
+    .unwrap();
+    let traces = directory.join("write-traces");
+    let output = Command::new(BIN)
+        .args([
+            "song-lua-semantic-baseline",
+            corpus.to_str().unwrap(),
+            "--simfile",
+            "write.sm",
+            "--out",
+            traces.to_str().unwrap(),
+        ])
+        .env("ITGMANIA_SONG_LUA_WRITE_ROOT", &corpus)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(traces.join("_semantic_manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["simfiles"][0]["status"], "ok", "{manifest}");
+    let trace: Value =
+        serde_json::from_slice(&std::fs::read(traces.join("write.sm.semantic.json")).unwrap())
+            .unwrap();
+    assert_eq!(trace["capabilities"]["isolated_file_writes"], true);
+    assert!(!trace["file_writes"].as_array().unwrap().is_empty());
+    assert!(
+        !trace["loaded_lua_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "song:/generated.lua")
+    );
+    assert!(!directory.join("escape.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(corpus.join("empty.sm")).unwrap(),
+        chart
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn doctor_uses_vendored_sources_from_another_working_directory() {
     let output = Command::new(BIN)
         .arg("doctor")
@@ -25,6 +132,47 @@ fn doctor_uses_vendored_sources_from_another_working_directory() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("vendor\\itgmania") || text.contains("vendor/itgmania"));
     assert!(text.contains("status: ITGmania source tree is usable"));
+}
+
+#[test]
+fn reads_native_music_duration_and_reports_corrupt_audio() {
+    let directory = temp_dir("music-duration");
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut wave = b"RIFF".to_vec();
+    wave.extend(16036u32.to_le_bytes());
+    wave.extend(b"WAVEfmt ");
+    wave.extend(16u32.to_le_bytes());
+    wave.extend(1u16.to_le_bytes()); // PCM
+    wave.extend(1u16.to_le_bytes()); // mono
+    wave.extend(8000u32.to_le_bytes());
+    wave.extend(16000u32.to_le_bytes());
+    wave.extend(2u16.to_le_bytes());
+    wave.extend(16u16.to_le_bytes());
+    wave.extend(b"data");
+    wave.extend(16000u32.to_le_bytes());
+    wave.resize(16044, 0); // exactly one second of PCM silence
+    std::fs::write(directory.join("music.wav"), wave).unwrap();
+    std::fs::write(directory.join("duration.lua"),
+        "assert(GAMESTATE:GetCurrentSong():MusicLengthSeconds() == 1); return Def.Actor{}").unwrap();
+    std::fs::write(directory.join("music.sm"),
+        "#TITLE:Music;\n#MUSIC:music.wav;\n#BPMS:0=60;\n#FGCHANGES:0=duration.lua;\n#NOTES:dance-single::Challenge:1:0,0,0,0,0:\n1000\n0100\n0010\n0001\n;\n").unwrap();
+    for (label, expected) in [("valid", "ok"), ("corrupt", "error")] {
+        if label == "corrupt" {
+            std::fs::write(directory.join("music.wav"), b"invalid wave").unwrap();
+        }
+        let traces = directory.join(label);
+        let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+            "--simfile", "music.sm", "--out", traces.to_str().unwrap()]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let manifest: Value = serde_json::from_slice(&std::fs::read(traces.join("_semantic_manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["simfiles"][0]["status"], expected, "{manifest}");
+        if label == "valid" {
+            let trace: Value = serde_json::from_slice(&std::fs::read(traces.join("music.sm.semantic.json")).unwrap()).unwrap();
+            assert!(trace["file_reads"].as_array().unwrap().iter()
+                .any(|read| read["path"] == "song:/music.wav" && read["exists"] == true));
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -165,10 +313,12 @@ fn exports_itgmania_font_geometry() {
     let redirected = run(&["font", redirect.to_str().unwrap(), "--text", "A"]);
     assert!(redirected.status.success(), "{}", stderr(&redirected));
     let redirected: Value = serde_json::from_slice(&redirected.stdout).unwrap();
-    assert!(redirected["font"]
-        .as_str()
-        .unwrap()
-        .ends_with("Fonts/Miso/_miso light.ini"));
+    assert!(
+        redirected["font"]
+            .as_str()
+            .unwrap()
+            .ends_with("Fonts/Miso/_miso light.ini")
+    );
 }
 
 #[test]
@@ -183,15 +333,17 @@ fn exports_itgmania_noteskin_semantics() {
     assert_eq!(document["skin"], "default");
     assert_eq!(document["inventory"].as_array().unwrap().len(), 12);
     assert_eq!(document["diagnostics"].as_array().unwrap().len(), 0);
-    assert!(document["metrics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|metric| {
-            metric["section"] == "NoteDisplay"
-                && metric["key"] == "TapNoteAnimationLength"
-                && metric["float"] == 1.0
-        }));
+    assert!(
+        document["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|metric| {
+                metric["section"] == "NoteDisplay"
+                    && metric["key"] == "TapNoteAnimationLength"
+                    && metric["float"] == 1.0
+            })
+    );
     assert!(document["paths"].as_array().unwrap().iter().any(|path| {
         path["button"] == "Down"
             && path["element"] == "Tap Note"
@@ -255,19 +407,21 @@ fn analyzes_song_lua_trace_offline() {
             .len(),
         8
     );
-    assert!(document["tween_segments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|segment| {
-            segment["command"] == "RotateEmMessageCommand"
-                && segment["easing"] == "decelerate"
-                && segment["operations"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|operation| operation["operation"] == "Actor.addrotationz")
-        }));
+    assert!(
+        document["tween_segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|segment| {
+                segment["command"] == "RotateEmMessageCommand"
+                    && segment["easing"] == "decelerate"
+                    && segment["operations"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|operation| operation["operation"] == "Actor.addrotationz")
+            })
+    );
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -288,16 +442,18 @@ fn writes_portable_noteskin_baselines() {
     assert_eq!(manifest["fixture_schema_version"], 1);
     assert_eq!(manifest["fixtures"].as_array().unwrap().len(), 28);
     assert_eq!(manifest["source_files"].as_array().unwrap().len(), 940);
-    assert!(manifest["fixtures"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|entry| {
-            !entry["fixture"].as_str().unwrap().contains('\\')
-                && output_dir
-                    .join(entry["fixture"].as_str().unwrap())
-                    .is_file()
-        }));
+    assert!(
+        manifest["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| {
+                !entry["fixture"].as_str().unwrap().contains('\\')
+                    && output_dir
+                        .join(entry["fixture"].as_str().unwrap())
+                        .is_file()
+            })
+    );
 
     std::fs::remove_dir_all(output_dir).unwrap();
 }
@@ -500,11 +656,13 @@ fn writes_portable_font_baselines() {
     let emoji: Value =
         serde_json::from_slice(&std::fs::read(output_dir.join("emoji/_emoji 16px.json")).unwrap())
             .unwrap();
-    assert!(emoji["glyphs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|glyph| glyph["codepoint"].as_u64().unwrap() > 0xFFFF));
+    assert!(
+        emoji["glyphs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|glyph| glyph["codepoint"].as_u64().unwrap() > 0xFFFF)
+    );
 
     std::fs::remove_dir_all(output_dir).unwrap();
 }

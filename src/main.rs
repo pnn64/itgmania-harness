@@ -401,6 +401,7 @@ struct SongLuaSemanticBaselineArgs {
     steps_type: Option<String>,
     random_seed: u32,
     until_beat: Option<f32>,
+    simfiles: Vec<PathBuf>,
 }
 
 fn parse_song_lua_semantic_baseline_args(
@@ -416,6 +417,7 @@ fn parse_song_lua_semantic_baseline_args(
     let mut steps_type = None;
     let mut random_seed = None;
     let mut until_beat = None;
+    let mut simfiles = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--out") => set_once(
@@ -458,6 +460,7 @@ fn parse_song_lua_semantic_baseline_args(
                 })?;
                 set_once(&mut max_events, value, "--max-events")?;
             }
+            Some("--simfile") => simfiles.push(PathBuf::from(next_utf8(&mut args, "--simfile")?)),
             Some("--until-beat") => {
                 let raw = next_utf8(&mut args, "--until-beat")?;
                 let value = raw.parse::<f32>().map_err(|_| {
@@ -487,6 +490,7 @@ fn parse_song_lua_semantic_baseline_args(
         steps_type,
         random_seed: random_seed.unwrap_or(1),
         until_beat,
+        simfiles,
     })
 }
 
@@ -500,6 +504,7 @@ fn run_song_lua_semantic_baseline(args: SongLuaSemanticBaselineArgs) -> Result<(
         args.steps_type.as_deref(),
         args.random_seed,
         args.until_beat,
+        &args.simfiles,
     )
     .map_err(CliError::SongLuaSemanticBaseline)?;
     println!(
@@ -1201,7 +1206,7 @@ fn print_help() {
            itgmania-harness-rs song-lua-semantic-baseline SONGS_DIR --out DIR\n\
              [--difficulty Challenge] [--steps-type SOURCE]\n\
              [--beat-step BEATS] [--max-events COUNT] [--random-seed 1]\n\
-             [--until-beat MINIMUM]\n\
+             [--until-beat MINIMUM] [--simfile RELATIVE_PATH ...]\n\
            itgmania-harness-rs song-lua-archive SONGS_DIR --traces DIR --out DIR\n\
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\

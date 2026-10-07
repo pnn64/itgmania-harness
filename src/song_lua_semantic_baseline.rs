@@ -104,6 +104,7 @@ pub fn generate(
     steps_type: Option<&str>,
     random_seed: u32,
     until_beat: Option<f32>,
+    selected: &[PathBuf],
 ) -> Result<Report, Error> {
     if until_beat.is_some_and(|beat| !beat.is_finite() || beat < 0.0) {
         return Err(Error::Config(
@@ -129,8 +130,32 @@ pub fn generate(
         .canonicalize()
         .map_err(|source| Error::io("open song corpus", songs_root, source))?;
     let mut simfiles = Vec::new();
-    song_lua_baseline::collect_simfiles(&songs_root, &mut simfiles).map_err(Error::Discovery)?;
+    if selected.is_empty() {
+        song_lua_baseline::collect_simfiles(&songs_root, &mut simfiles)
+            .map_err(Error::Discovery)?;
+    } else {
+        for relative in selected {
+            let path = songs_root
+                .join(relative)
+                .canonicalize()
+                .map_err(|source| Error::io("open selected simfile", relative, source))?;
+            if !path.starts_with(&songs_root)
+                || !path.is_file()
+                || !path
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|v| v.eq_ignore_ascii_case("sm") || v.eq_ignore_ascii_case("ssc"))
+            {
+                return Err(Error::Config(format!(
+                    "selected simfile must be an .sm or .ssc file inside the corpus: {}",
+                    relative.display()
+                )));
+            }
+            simfiles.push(path);
+        }
+    }
     simfiles.sort();
+    simfiles.dedup();
     if simfiles.is_empty() {
         return Err(Error::NoSimfiles(songs_root));
     }
@@ -274,13 +299,6 @@ fn generate_one(
                 })
         })
         .collect::<Vec<_>>();
-    if entries.is_empty() {
-        return Err(Failure {
-            title,
-            lua_entries: 0,
-            message: "simfile has no referenced song Lua entries".into(),
-        });
-    }
     let charts = oracle::load(simfile).map_err(|error| Failure {
         title: title.clone(),
         lua_entries: entries.len(),

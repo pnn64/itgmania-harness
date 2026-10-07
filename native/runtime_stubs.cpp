@@ -55,6 +55,7 @@ extern "C" {
 #include "RageSoundReader_FileReader.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
+#include "RageUtil/Endian.h"
 #include "RageSurface.h"
 #include "RageSurfaceUtils_Zoom.h"
 #include "RageSurface_Save_BMP.h"
@@ -862,6 +863,8 @@ void GetDirListing(const RString& path, std::vector<RString>& out, bool onlyDirs
 	else out.clear();
 }
 
+#include "file_reading.inc"
+
 RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(RString, RString& error, bool*) { error = ""; return nullptr; }
 
 ThreadImpl* MakeThread(int (*)(void*), void*, uint64_t* piThreadID) { if (piThreadID) *piThreadID = 0; return nullptr; }
@@ -898,171 +901,71 @@ RageTextureID ImageCache::LoadCachedImage(std::string, std::string path) {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal RageFile backed by std::ifstream
-class RageFileStd final : public RageFileBasic {
-  public:
-	RageFileStd() : m_mode(0), m_size(-1) {}
-	explicit RageFileStd(const RString& path, int mode = 0)
-		: m_path(path), m_mode(mode), m_size(-1) {}
-
-	RageFileBasic* Copy() const override {
-		auto* copy = new RageFileStd(m_path, m_mode);
-		if (!m_path.empty() && copy->Open(m_path, m_mode)) {
-			const int pos = Tell();
-			if (pos >= 0) copy->Seek(pos);
-		}
-		return copy;
-	}
-	RString GetDisplayPath() const override { return m_path; }
-	RString GetError() const override { return m_error; }
-	void ClearError() override { m_error.clear(); }
-	bool AtEOF() const override { return !m_stream || ((m_mode & RageFile::READ) && m_stream->eof()); }
-
-	int Seek(int offset) override {
-		if (!m_stream) return -1;
-		m_stream->clear();
-		if (m_mode & RageFile::READ) {
-			m_stream->seekg(offset, std::ios::beg);
-		}
-		if (m_mode & RageFile::WRITE) {
-			m_stream->seekp(offset, std::ios::beg);
-		}
-		return Tell();
-	}
-	int Seek(int offset, int whence) override {
-		if (!m_stream) return -1;
-		std::ios::seekdir dir = std::ios::beg;
-		if (whence == SEEK_CUR) dir = std::ios::cur;
-		else if (whence == SEEK_END) dir = std::ios::end;
-		m_stream->clear();
-		if (m_mode & RageFile::READ) {
-			m_stream->seekg(offset, dir);
-		}
-		if (m_mode & RageFile::WRITE) {
-			m_stream->seekp(offset, dir);
-		}
-		return Tell();
-	}
-	int Tell() const override {
-		if (!m_stream) return -1;
-		const std::streampos pos =
-			(m_mode & RageFile::READ) ? m_stream->tellg() : m_stream->tellp();
-		return (pos == std::streampos(-1)) ? -1 : static_cast<int>(pos);
-	}
-
-	int Read(void* buffer, size_t bytes) override {
-		if (!m_stream || !(m_mode & RageFile::READ)) return -1;
-		m_stream->read(static_cast<char*>(buffer), static_cast<std::streamsize>(bytes));
-		return static_cast<int>(m_stream->gcount());
-	}
-	int Read(RString& buffer, int bytes = -1) override {
-		if (!m_stream || !(m_mode & RageFile::READ)) return -1;
-		if (bytes < 0) {
-			std::ostringstream ss;
-			ss << m_stream->rdbuf();
-			buffer = ss.str();
-			return static_cast<int>(buffer.size());
-		}
-		buffer.resize(bytes);
-		m_stream->read(buffer.data(), bytes);
-		return static_cast<int>(m_stream->gcount());
-	}
-	int Read(void* buffer, size_t bytes, int nmemb) override {
-		const int read = Read(buffer, bytes * static_cast<size_t>(nmemb));
-		if (read < 0 || bytes == 0) return read;
-		return read / static_cast<int>(bytes);
-	}
-
-	int Write(const void* buffer, size_t bytes) override {
-		if (!m_stream || !(m_mode & RageFile::WRITE)) return -1;
-		m_stream->write(static_cast<const char*>(buffer), static_cast<std::streamsize>(bytes));
-		if (!*m_stream) {
-			m_error = "write failed";
-			return -1;
-		}
-		m_size = -1;
-		return 0;
-	}
-	int Write(const RString& s) override { return Write(s.data(), s.size()); }
-	int Write(const void* buffer, size_t bytes, int nmemb) override {
-		return Write(buffer, bytes * static_cast<size_t>(nmemb));
-	}
-	int Flush() override {
-		if (!m_stream) return -1;
-		m_stream->flush();
-		if (!*m_stream) {
-			m_error = "flush failed";
-			return -1;
-		}
-		return 0;
-	}
-
-	int GetLine(RString& out) override {
-		if (!m_stream || !(m_mode & RageFile::READ)) return -1;
-		std::string line;
-		if (!std::getline(*m_stream, line)) return 0;
-		if (!line.empty() && line.back() == '\r') line.pop_back();
-		out = line;
-		return 1;
-	}
-	int PutLine(const RString& s) override {
-		if (Write(s) == -1) return -1;
-		return Write("\r\n", 2);
-	}
-
-	void EnableCRC32(bool) override {}
-	bool GetCRC32(uint32_t*) override { return false; }
-
-	int GetFileSize() const override {
-		if (m_size >= 0) return m_size;
-		if (!m_stream) return -1;
-		if (m_mode & RageFile::WRITE) {
-			m_stream->flush();
-			std::error_code ec;
-			const auto size = std::filesystem::file_size(m_path.c_str(), ec);
-			if (ec) return -1;
-			m_size = static_cast<int>(size);
-			return m_size;
-		}
-		auto cur = m_stream->tellg();
-		m_stream->seekg(0, std::ios::end);
-		m_size = static_cast<int>(m_stream->tellg());
-		m_stream->seekg(cur);
-		return m_size;
-	}
-	int GetFD() override { return -1; }
-
-	bool Open(const RString& path, int mode) {
-		m_path = path;
-		m_mode = mode;
-		m_error.clear();
-		std::ios::openmode open_mode = std::ios::binary;
-		if (mode & RageFile::READ) open_mode |= std::ios::in;
-		if (mode & RageFile::WRITE) {
-			open_mode |= std::ios::out | std::ios::trunc;
-			std::error_code ec;
-			const auto parent = std::filesystem::path(path.c_str()).parent_path();
-			if (!parent.empty()) {
-				std::filesystem::create_directories(parent, ec);
-			}
-		}
-		m_stream.reset(new std::fstream(path.c_str(), open_mode));
-		if (!*m_stream) {
-			m_error = "open failed";
-			m_stream.reset();
-			return false;
-		}
-		m_size = -1;
-		return true;
-	}
-
-	  private:
-		RString m_path;
-		int m_mode;
-		mutable int m_size;
-		RString m_error;
-		mutable std::unique_ptr<std::fstream> m_stream;
-	};
+// Native RageFileObj owns buffering, EOF, line endings, byte counts and CRC.
+// The harness supplies only the operating-system file boundary.
+class RageFileStd final : public RageFileObj {
+ public:
+    RageFileBasic* Copy() const override {
+        auto* copy = new RageFileStd;
+        if (copy->Open(m_path, m_mode)) copy->Seek(Tell());
+        return copy;
+    }
+    RString GetDisplayPath() const override { return m_path; }
+    int GetFileSize() const override {
+        if (!m_stream) return -1;
+        if (m_mode & RageFile::WRITE) m_stream->flush();
+        std::error_code error;
+        const auto bytes = std::filesystem::file_size(m_path, error);
+        if (error || bytes > static_cast<uintmax_t>(std::numeric_limits<int>::max())) return -1;
+        return static_cast<int>(bytes);
+    }
+    bool Open(const RString& path, int mode) {
+        m_path = path;
+        m_mode = mode;
+        std::ios::openmode flags = std::ios::binary;
+        if (mode & RageFile::READ) flags |= std::ios::in;
+        if (mode & RageFile::WRITE) {
+            flags |= std::ios::out | std::ios::trunc;
+            std::error_code error;
+            const auto parent = std::filesystem::path(path).parent_path();
+            if (!parent.empty()) std::filesystem::create_directories(parent, error);
+        }
+        m_stream = std::make_unique<std::fstream>(path, flags);
+        if (!*m_stream) { SetError("open failed"); m_stream.reset(); return false; }
+        return true;
+    }
+ protected:
+    int SeekInternal(int offset) override {
+        if (!m_stream) return -1;
+        m_stream->clear();
+        if (m_mode & RageFile::READ) m_stream->seekg(offset, std::ios::beg);
+        if (m_mode & RageFile::WRITE) m_stream->seekp(offset, std::ios::beg);
+        if (!*m_stream) { SetError("seek failed"); return -1; }
+        return offset;
+    }
+    int ReadInternal(void* buffer, size_t bytes) override {
+        if (!m_stream || !(m_mode & RageFile::READ)) return -1;
+        m_stream->read(static_cast<char*>(buffer), static_cast<std::streamsize>(bytes));
+        if (m_stream->bad()) { SetError("read failed"); return -1; }
+        return static_cast<int>(m_stream->gcount());
+    }
+    int WriteInternal(const void* buffer, size_t bytes) override {
+        if (!m_stream || !(m_mode & RageFile::WRITE)) return -1;
+        m_stream->write(static_cast<const char*>(buffer), static_cast<std::streamsize>(bytes));
+        if (!*m_stream) { SetError("write failed"); return -1; }
+        return static_cast<int>(bytes);
+    }
+    int FlushInternal() override {
+        if (!m_stream) return -1;
+        m_stream->flush();
+        if (!*m_stream) { SetError("flush failed"); return -1; }
+        return 0;
+    }
+ private:
+    RString m_path;
+    int m_mode = 0;
+    std::unique_ptr<std::fstream> m_stream;
+};
 
 RageFile::RageFile() : m_File(nullptr), m_Mode(0) {}
 RageFile::RageFile(const RageFile& cpy) : RageFileBasic(cpy) {
@@ -1124,8 +1027,14 @@ int RageFile::Seek(int offset, int whence) { return m_File ? m_File->Seek(offset
 int RageFile::Tell() const { return m_File ? m_File->Tell() : -1; }
 int RageFile::GetFileSize() const { return m_File ? m_File->GetFileSize() : -1; }
 int RageFile::GetFD() { return -1; }
-RString RageFile::GetError() const { return m_sError; }
-void RageFile::ClearError() { m_sError = ""; }
+RString RageFile::GetError() const {
+    if (m_File && !m_File->GetError().empty()) return m_File->GetError();
+    return m_sError;
+}
+void RageFile::ClearError() {
+    if (m_File) m_File->ClearError();
+    m_sError.clear();
+}
 bool RageFile::AtEOF() const { return m_File ? m_File->AtEOF() : true; }
 void RageFile::SetError(const RString& err) { m_sError = err; }
 void RageFile::PushSelf(lua_State*) {}
@@ -1748,6 +1657,7 @@ Steps::~Steps() = default;
 Song::Song()
 		: m_SelectionDisplay(SHOW_ALWAYS),
 		  m_fMusicSampleStartSeconds(0.0f),
+          m_fMusicLengthSeconds(0.0f),
 		  m_fMusicSampleLengthSeconds(0.0f),
 		  m_DisplayBPMType(DISPLAY_BPM_ACTUAL),
 		  m_fSpecifiedBPMMin(0.0f),
@@ -1775,7 +1685,7 @@ void Song::LoadEditsFromSongDir(RString) {}
 bool Song::HasAutosaveFile() { return false; }
 bool Song::LoadAutosaveFile() { return false; }
 void Song::TidyUpData(bool, bool) {}
-void Song::ReCalculateStepStatsAndLastSecond(bool, bool) {}
+#include "song_stats.inc"
 void Song::TranslateTitles() {}
 void Song::AddBackgroundChange(BackgroundLayer layer, BackgroundChange seg) {
 	BackgroundUtil::AddBackgroundChange(GetBackgroundChanges(layer), seg);

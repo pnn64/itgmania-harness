@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +24,11 @@
 #include "NoteSkinManager.h"
 #include "PlayerOptions.h"
 #include "RageMath.h"
+#include "RageFile.h"
+#include "RageFileManager.h"
+#include "RageSoundReader_WAV.h"
+#include "RageSoundReader_Vorbisfile.h"
+#include <cstdlib>
 #include "Song.h"
 #include "Steps.h"
 #include "TimingData.h"
@@ -337,6 +343,84 @@ void song_lua_instruction_hook(lua_State* state, lua_Debug*) {
     luaL_error(state, "song Lua instruction budget exhausted at beat %f",
                song_lua_frame_beat);
   }
+}
+
+// File methods call the linked RageFile implementation. Writes require an
+// explicitly supplied isolated corpus; ordinary captures remain read-only.
+void install_song_io(lua_State* state, const std::string& song_dir) {
+  const char* write_root = std::getenv("ITGMANIA_SONG_LUA_WRITE_ROOT");
+  std::string writable;
+  if (write_root) {
+    const auto root = std::filesystem::weakly_canonical(write_root);
+    const auto song = std::filesystem::weakly_canonical(song_dir);
+    auto relative = song.lexically_relative(root);
+    if (!relative.empty() && *relative.begin() != "..") writable = song.generic_string();
+  }
+  lua_pushboolean(state, !writable.empty());
+  lua_setglobal(state, "_ITG_SONG_WRITABLE");
+  luaL_newmetatable(state, "itgmania.song-file");
+  lua_pushcfunction(state, [](lua_State* L) -> int {
+    auto** file = static_cast<RageFile**>(luaL_checkudata(L, 1, "itgmania.song-file"));
+    delete *file; *file = nullptr; return 0;
+  });
+  lua_setfield(state, -2, "__gc");
+  lua_pop(state, 1);
+  lua_pushcfunction(state, [](lua_State* L) -> int {
+    auto** file = static_cast<RageFile**>(lua_newuserdata(L, sizeof(RageFile*)));
+    *file = new RageFile;
+    luaL_getmetatable(L, "itgmania.song-file"); lua_setmetatable(L, -2);
+    return 1;
+  });
+  lua_setglobal(state, "_ITG_FILE_CREATE");
+  lua_pushlstring(state, writable.data(), writable.size());
+  lua_pushcclosure(state, [](lua_State* L) -> int {
+    auto** handle = static_cast<RageFile**>(luaL_checkudata(L, 1, "itgmania.song-file"));
+    const std::string method = luaL_checkstring(L, 2);
+    if (method == "destroy") { delete *handle; *handle = nullptr; return 0; }
+    if (!*handle) return luaL_error(L, "RageFile has been destroyed");
+    RageFile& file = **handle;
+    if (method == "Open") {
+      const std::string path = luaL_checkstring(L, 3);
+      const int mode = static_cast<int>(luaL_checkinteger(L, 4));
+      if (mode & RageFile::WRITE) {
+        const std::string root = lua_tostring(L, lua_upvalueindex(1));
+        const auto relative = std::filesystem::weakly_canonical(path).lexically_relative(root);
+        if (root.empty() || relative.empty() || *relative.begin() == "..") {
+          lua_pushboolean(L, false); return 1;
+        }
+      }
+      lua_pushboolean(L, file.Open(path, mode)); return 1;
+    }
+    if (method == "Close") { file.Close(); return 0; }
+    if (method == "GetError") { lua_pushstring(L, file.GetError().c_str()); return 1; }
+    if (method == "ClearError") { file.ClearError(); return 0; }
+    if (!file.IsOpen()) return luaL_error(L, "RageFile is not open");
+    if (method == "PutLine" || method == "Write" || method == "Flush") {
+      if (!(file.GetMode() & RageFile::WRITE)) return luaL_error(L, "RageFile is not open for writing");
+      if (method == "Flush") { file.Flush(); return 0; }
+      const std::string text = luaL_checkstring(L, 3);
+      lua_pushinteger(L, method == "PutLine" ? file.PutLine(text) : file.Write(text.data(), text.size())); return 1;
+    }
+    if (!(file.GetMode() & RageFile::READ)) return luaL_error(L, "RageFile is not open for reading");
+    if (method == "AtEOF") { lua_pushboolean(L, file.AtEOF()); return 1; }
+    if (method == "Seek") { lua_pushinteger(L, file.Seek(static_cast<int>(luaL_checkinteger(L, 3)))); return 1; }
+    if (method == "Tell") { lua_pushinteger(L, file.Tell()); return 1; }
+    std::string text;
+    if (method == "GetLine") file.GetLine(text);
+    else if (method == "Read") file.Read(text);
+    else if (method == "ReadBytes") file.Read(text, static_cast<int>(luaL_checkinteger(L, 3)));
+    else return luaL_error(L, "unavailable RageFile method %s", method.c_str());
+    lua_pushstring(L, text.c_str()); return 1;
+  }, 1);
+  lua_setglobal(state, "_ITG_FILE_CALL");
+  lua_pushcfunction(state, [](lua_State* L) -> int {
+    std::vector<std::string> files;
+    FILEMAN->GetDirListing(luaL_checkstring(L, 1), files, lua_toboolean(L, 2), lua_toboolean(L, 3));
+    lua_createtable(L, static_cast<int>(files.size()), 0);
+    for (size_t i = 0; i < files.size(); ++i) { lua_pushstring(L, files[i].c_str()); lua_rawseti(L, -2, static_cast<int>(i + 1)); }
+    return 1;
+  });
+  lua_setglobal(state, "_ITG_DIR_LISTING");
 }
 
 std::string lua_error_text(lua_State* state) {
@@ -856,10 +940,6 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     }
     const SongLuaSemanticRequest request =
         read_song_lua_semantic_request(request_data, request_len);
-    if (request.entries.empty()) {
-      return song_lua_semantic_error_buffer(
-          "semantic request has no Lua entries");
-    }
     if (!std::isfinite(request.max_beat) || request.max_beat < 0.0f ||
         !std::isfinite(request.bpm) || request.bpm <= 0.0f ||
         !std::isfinite(request.beat_step) || request.beat_step <= 0.0f) {
@@ -874,6 +954,28 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     luaL_openlibs(state);
     harness_register_lua_globals(state);
     push_song_lua_semantic_request(state, request);
+    install_song_io(state, request.song_dir);
+    lua_pushcfunction(state, [](lua_State* L) -> int {
+      const std::string path = luaL_checkstring(L, 1);
+      std::string extension = std::filesystem::path(path).extension().string();
+      MakeLower(extension);
+      std::unique_ptr<RageSoundReader_FileReader> reader;
+      if (extension == ".ogg") reader = std::make_unique<RageSoundReader_Vorbisfile>();
+      else if (extension == ".wav") reader = std::make_unique<RageSoundReader_WAV>();
+      else { lua_pushnil(L); lua_pushliteral(L, "native music length supports Ogg Vorbis and WAV"); return 2; }
+      auto file = std::make_unique<RageFile>();
+      std::string error;
+      if (!file->Open(path, RageFile::READ)) error = file->GetError();
+      else if (reader->Open(file.release()) != RageSoundReader_FileReader::OPEN_OK) {
+        error = reader->GetError();
+        if (error.empty()) error = "native sound reader could not open music";
+      }
+      if (!error.empty()) { lua_pushnil(L); lua_pushlstring(L, error.data(), error.size()); return 2; }
+      // Song::TidyUpData converts native integer milliseconds to a float.
+      lua_pushnumber(L, reader->GetLength() / 1000.0f);
+      return 1;
+    });
+    lua_setglobal(state, "_ITG_MUSIC_LENGTH");
     // Stream the final document out of Lua. Whole-song traces otherwise keep
     // nested JSON strings alongside every retained observation and its copies.
     std::string document;
@@ -899,6 +1001,12 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       return 1;
     });
     lua_setglobal(state, "_ITG_STEPS_TYPE");
+    lua_pushcfunction(state, [](lua_State* L) -> int {
+      const Difficulty difficulty = Enum::Check<Difficulty>(L, 1);
+      const std::string name = "Difficulty_" + DifficultyToString(difficulty);
+      lua_pushlstring(L, name.data(), name.size()); return 1;
+    });
+    lua_setglobal(state, "_ITG_DIFFICULTY");
     lua_pushcfunction(state, [](lua_State* L) -> int {
       song_lua_frame_beat = luaL_checknumber(L, 1);
       // The initial zero-delta update can build chart-sized spline data.
@@ -938,9 +1046,15 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       if (!load_song(request.simfile, timing_song)) {
         throw std::runtime_error("could not load semantic chart timing");
       }
+      timing_song.m_SongTiming.TidyUpData(false);
+      for (Steps* steps : timing_song.GetAllSteps()) steps->GetTimingData()->TidyUpData(false);
+      timing_song.ReCalculateStepStatsAndLastSecond(false, false);
       lua_getglobal(state, "_HARNESS");
       const std::string background = timing_song.GetBackgroundPath();
       if (!background.empty()) lua_field(state, "background_path", background);
+      lua_field(state, "first_second", timing_song.GetFirstSecond());
+      lua_field(state, "last_second", timing_song.GetLastSecond());
+      lua_field(state, "music_path", Song::GetSongAssetPath(timing_song.m_sMusicFile, timing_song.GetSongDir()));
       lua_pop(state, 1);
       Steps* selected = nullptr;
       for (Steps* steps : timing_song.GetAllSteps()) {
@@ -967,6 +1081,8 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
         lua_field(state, "difficulty", "Difficulty_" + DifficultyToString(steps->GetDifficulty()));
         lua_field(state, "steps_type", "StepsType_" + StepsTypeToString(steps->m_StepsType));
         lua_field(state, "description", steps->GetDescription());
+        lua_field(state, "author_credit", steps->GetCredit());
+        lua_field(state, "chart_name", steps->GetChartName());
         lua_pushinteger(state, steps->GetMeter());
         lua_setfield(state, -2, "meter");
         lua_rawseti(state, -2, static_cast<int>(index + 1));
