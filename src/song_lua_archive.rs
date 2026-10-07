@@ -140,6 +140,7 @@ struct ArchiveIndex {
 struct ArchiveIndexEntry {
     title: String,
     source_simfile: String,
+    harness_version: String,
     archive: String,
     sha256: String,
     compressed_bytes: u64,
@@ -200,6 +201,7 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path) -> Resu
         index_entries.push(ArchiveIndexEntry {
             title: entry.title.clone(),
             source_simfile: entry.simfile.clone(),
+            harness_version: semantic.harness_version.clone(),
             archive: filename,
             sha256: digest,
             compressed_bytes,
@@ -736,24 +738,34 @@ fn resolve_asset_relative(
         "png", "jpg", "jpeg", "gif", "webp", "bmp", "ogg", "wav", "mp3", "lua", "xml", "frag",
         "vert", "ini",
     ];
-    for entry in fs::read_dir(parent).ok()? {
+    // ActorUtil::ResolvePath appends '*' after an exact miss. Frame hints
+    // such as "overlay 3x4.png" are therefore part of the resolved asset.
+    let mut matches = fs::read_dir(parent).ok()?.filter_map(|entry| {
         let candidate = entry.ok()?.path();
-        let candidate_stem = candidate.file_stem()?.to_string_lossy();
         let candidate_name = candidate.file_name()?.to_string_lossy();
         let extension = candidate.extension()?.to_string_lossy();
         if ((has_extension && candidate_name.eq_ignore_ascii_case(&name))
-            || (!has_extension && candidate_stem.eq_ignore_ascii_case(&name)))
+            || (!has_extension
+                && candidate_name
+                    .to_ascii_lowercase()
+                    .starts_with(&name.to_ascii_lowercase())))
             && EXTENSIONS
                 .iter()
                 .any(|known| extension.eq_ignore_ascii_case(known))
         {
-            return candidate
-                .canonicalize()
-                .ok()
-                .filter(|path| path.starts_with(song_dir));
+            Some(candidate)
+        } else {
+            None
         }
+    });
+    let candidate = matches.next()?;
+    if matches.next().is_some() {
+        return None;
     }
-    None
+    candidate
+        .canonicalize()
+        .ok()
+        .filter(|path| path.starts_with(song_dir))
 }
 
 fn is_asset_path(path: &Path) -> bool {
@@ -1089,6 +1101,34 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hinted_actor_assets_are_archived_without_ambiguous_prefixes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/hinted-actor-assets");
+        let nested = root.join("lua");
+        fs::create_dir_all(&nested).expect("fixture directory");
+        let source = nested.join("default.lua");
+        fs::write(&source, "return LoadActor('overlay2')").expect("actor source");
+        fs::write(nested.join("overlay2 3x4.png"), []).expect("hinted image");
+        fs::write(nested.join("ambiguous 2x2.png"), []).expect("first image");
+        fs::write(nested.join("ambiguous 3x4.png"), []).expect("second image");
+        let root = root.canonicalize().expect("fixture root");
+        let nested = nested.canonicalize().expect("nested source");
+        let refs = asset_references(
+            &Value::Null,
+            &root,
+            &BTreeSet::from([source.canonicalize().expect("Lua path")]),
+        )
+        .expect("asset references");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].local_path.as_deref(), Some("lua/overlay2 3x4.png"));
+        assert!(refs[0].exists);
+        assert!(resolve_asset_relative(&root, Some(&nested), "ambiguous").is_none());
+        assert_eq!(
+            resolve_asset_relative(&root, Some(&nested), "overlay2 3x4.png"),
+            Some(nested.join("overlay2 3x4.png")),
+        );
+    }
 
     #[test]
     fn numbered_font_assets_include_ini_and_implicit_pages() {

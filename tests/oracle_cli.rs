@@ -49,6 +49,13 @@ fn captures_selected_empty_charts_and_isolates_file_writes() {
     ]);
     assert!(output.status.success(), "{}", stderr(&output));
 
+    let index: Value =
+        serde_json::from_slice(&std::fs::read(archives.join("index.json")).unwrap()).unwrap();
+    assert_eq!(
+        index["archives"][0]["harness_version"],
+        manifest["harness_version"]
+    );
+
     let output = run(&[
         "song-lua-semantic-baseline",
         corpus.to_str().unwrap(),
