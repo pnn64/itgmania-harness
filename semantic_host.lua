@@ -819,6 +819,7 @@ local function actor_call(actor, name, ...)
 		return out
 	end
 	if name == "GetNumChildren" then return #(actor.children or {}) end
+	if name == "GetUpdateRate" then return rawget(actor, "update_rate") or 1 end
 	if name == "GetNumWrapperStates" then return #(rawget(actor, "wrappers") or {}) end
 	if name == "GetWrapperState" then
 		local index = tonumber((...)) or 1
@@ -979,6 +980,10 @@ local function actor_call(actor, name, ...)
 		begin_tween(actor, 0, "linear")
 	elseif name == "hibernate" then
 		actor.hibernate_seconds = _ITG_FLOAT(tonumber((...)) or 0)
+	elseif name == "SetUpdateRate" then
+		local rate = _ITG_FLOAT(tonumber((...)) or 0)
+		if rate <= 0 then error("ActorFrame:SetUpdateRate: update rate must be greater than 0") end
+		actor.update_rate = rate
 	elseif name == "linear" or name == "accelerate" or name == "decelerate" or name == "smooth" or name == "spring" then
 		begin_tween(actor, (...), name)
 	elseif name == "bouncebegin" or name == "bounceend" then
@@ -1974,6 +1979,9 @@ local function advance_actor(actor, delta)
 		if delta == nil then return end
 	end
 	for _, wrapper in ipairs(actor.wrappers or {}) do advance_actor(wrapper, delta) end
+	-- ActorFrame::UpdateInternal multiplies its delta after Actor::Update has
+	-- woken the owner and updated its wrappers, before its tweens and children.
+	delta = _ITG_FLOAT(delta * (rawget(actor, "update_rate") or 1))
 	-- Actor::UpdateInternal advances the effect clock, accumulates spin into
 	-- current rotation, then interpolates the complete queued tween state.
 	local clock = tostring(actor.state.effectclock or "timer"):lower()

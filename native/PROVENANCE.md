@@ -201,6 +201,15 @@ unchanged own visibility. Captures before harness 0.1.6 that execute a
 positive hibernate require regeneration; passing against their unpaused
 tweens is not evidence of native actor-update parity.
 
+`SetUpdateRate` and `GetUpdateRate` now retain the native float rate.
+`ActorFrame.cpp::UpdateInternal` multiplies that rate after hibernation and
+wrapper updates and before its own tween/effect work, children, and callback.
+The host performs that multiplication through the linked float conversion.
+The scaled hibernation regression covers an unscaled wrapper, a doubled
+owner delta, nested child rates, getters, and resulting native tween alpha.
+Earlier captures that execute a non-default `SetUpdateRate` require
+regeneration with harness `0.1.7` or newer.
+
 ITGmania itself is a separate work with its own license in `vendor/itgmania`.
 Simply Love is pinned separately in
 `vendor/simply-love` and retains its own license. See the source pins and update

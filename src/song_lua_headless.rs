@@ -1179,50 +1179,60 @@ mod tests {
             .join("tests/fixtures/song-lua-headless")
             .canonicalize()
             .unwrap();
-        let entry = song_dir.join("hibernate.lua");
-        let bpms = [BpmSegment {
-            beat: 0.0,
-            bpm: 60.0,
-        }];
-        let context = Context {
-            simfile: &entry,
-            song_dir: &song_dir,
-            title: "hibernation",
-            difficulty: "Difficulty_Challenge",
-            steps_type: "dance-single",
-            description: "",
-            max_beat: 0.5,
-            bpm: 60.0,
-            bpm_segments: &bpms,
-            beat_step: 0.25,
-            max_events: 1000,
-            random_seed: 1,
-        };
-        let trace = evaluate(
-            &[Entry {
-                path: entry.clone(),
-                layer: "foreground",
-                index: 0,
-                start_beat: 0.0,
-            }],
-            &context,
-        )
-        .expect("native hibernation trace");
-        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
-        for actor in trace["runtime_actors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|actor| actor["name"] == "Sleeping" || actor["name"] == "Child")
-        {
-            let samples = actor["render_state_samples"].as_array().unwrap();
-            assert_eq!(samples[0], serde_json::json!([0, 1, true]));
-            assert_eq!(samples[1][0], 8, "updates pause through frame seven");
-            assert!((samples[1][1].as_f64().unwrap() - 29.0 / 30.0).abs() < 0.000001);
-            assert_eq!(
-                actor["final_render_state"],
-                serde_json::json!({"alpha": 0, "visible": true})
-            );
+        for (fixture, parent_alpha, child_alpha) in [
+            ("hibernate.lua", 29.0 / 30.0, 29.0 / 30.0),
+            ("hibernate-rate.lua", 14.0 / 15.0, 0.8),
+        ] {
+            let entry = song_dir.join(fixture);
+            let bpms = [BpmSegment {
+                beat: 0.0,
+                bpm: 60.0,
+            }];
+            let context = Context {
+                simfile: &entry,
+                song_dir: &song_dir,
+                title: "hibernation",
+                difficulty: "Difficulty_Challenge",
+                steps_type: "dance-single",
+                description: "",
+                max_beat: 0.5,
+                bpm: 60.0,
+                bpm_segments: &bpms,
+                beat_step: 0.25,
+                max_events: 1000,
+                random_seed: 1,
+            };
+            let trace = evaluate(
+                &[Entry {
+                    path: entry.clone(),
+                    layer: "foreground",
+                    index: 0,
+                    start_beat: 0.0,
+                }],
+                &context,
+            )
+            .expect("native hibernation trace");
+            assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+            for actor in trace["runtime_actors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|actor| actor["name"] == "Sleeping" || actor["name"] == "Child")
+            {
+                let samples = actor["render_state_samples"].as_array().unwrap();
+                assert_eq!(samples[0], serde_json::json!([0, 1, true]));
+                assert_eq!(samples[1][0], 8, "updates pause through frame seven");
+                let expected = if actor["name"] == "Sleeping" {
+                    parent_alpha
+                } else {
+                    child_alpha
+                };
+                assert!((samples[1][1].as_f64().unwrap() - expected).abs() < 0.000001);
+                assert_eq!(
+                    actor["final_render_state"],
+                    serde_json::json!({"alpha": 0, "visible": true})
+                );
+            }
         }
     }
 
