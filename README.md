@@ -847,3 +847,11 @@ The minimal runtime scaffolding is owned by this project. It supplies singleton
 and unrelated link symbols only; it is not invoked as an oracle. Further
 pruning is covered by the integration corpus so unused game-application surface
 can be removed safely.
+
+Real simfiles use native `TimingData` for the song clock, including charts
+with only BPM segments. This matches `SongPosition` float arithmetic and
+keeps global song timing separate from chart timing. These captures report
+`song_clock: native-song-timing`; synthetic actor-only inputs retain the
+continuous BPM fallback. Captures made before harness 0.1.5 can retain a
+double-precision clock for simple charts and should be regenerated when
+strict beat boundaries are relevant.

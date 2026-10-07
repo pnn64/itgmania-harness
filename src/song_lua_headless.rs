@@ -1397,7 +1397,7 @@ mod tests {
             &context,
         )
         .unwrap();
-        assert_eq!(trace["song_clock"], "native-pauses");
+        assert_eq!(trace["song_clock"], "native-song-timing");
         assert_eq!(trace["runtime_errors"], serde_json::json!([]));
         let events = trace["events"].as_array().unwrap();
         for (second, invert, freeze, delay, speed, x) in [
@@ -1436,6 +1436,51 @@ mod tests {
                     "{operation} at {second}: {actual} != {expected}"
                 );
             }
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn continuous_song_clock_uses_native_float() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .unwrap();
+        let entry = song_dir.join("song-clock.lua");
+        let simfile = song_dir.join("song-clock-continuous.sm");
+        let context = Context {
+            simfile: &simfile,
+            song_dir: &song_dir,
+            title: "continuous float clock",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "clock",
+            max_beat: 0.1,
+            bpm: 120.0,
+            bpm_segments: &[],
+            beat_step: 1.0 / 60.0,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry,
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .unwrap();
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["song_clock"], "native-song-timing");
+        // SongPosition::UpdateSongPosition receives float music seconds;
+        // TimingData multiplies by the float BPS even without timing pauses.
+        for (frame, seconds) in [(1, 1.0_f64 / 60.0), (2, 2.0_f64 / 60.0)] {
+            assert_eq!(
+                trace["update_frames"][frame][0].as_f64().unwrap(),
+                f64::from(seconds as f32 * 2.0)
+            );
         }
     }
 

@@ -2763,7 +2763,7 @@ return json_encode({
 	schema_version = 1,
 	oracle = "itgmania_song_lua_headless_semantic_trace",
 	arrow_timing = _ITG_TIMING_Y_OFFSET and "native" or "linear",
-	song_clock = _ITG_SONG_POSITION and "native-pauses" or "continuous-bpm",
+	song_clock = _ITG_SONG_POSITION and "native-song-timing" or "continuous-bpm",
 	random_seed = random_seed,
 	random_generator = "ITGmania MersenneTwister",
     random_reseeds = _ITG_RANDOM_RESEEDS,

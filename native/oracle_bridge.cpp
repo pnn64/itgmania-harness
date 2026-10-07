@@ -1108,37 +1108,35 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
         return 1;
       }, 1);
       lua_setglobal(state, "_ITG_TIMING_Y_OFFSET");
-      // Continuous BPM maps retain the existing double-precision clock. Pauses
-      // and warps must use the song's native timing, independently of Steps.
+      // SongPosition always reads native float TimingData, including simple
+      // BPM maps. The song clock remains independent of Steps timing.
       TimingData* song_timing = &timing_song.m_SongTiming;
       song_timing->TidyUpData(false);
       song_timing->PrepareLookup();
-      if (song_timing->HasStops() || song_timing->HasDelays() || song_timing->HasWarps()) {
-        lua_pushlightuserdata(state, song_timing);
-        lua_pushcclosure(state, [](lua_State* L) -> int {
-          auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));
-          TimingData::GetBeatArgs args;
-          // Traces use seconds relative to beat zero, as the continuous clock
-          // does. Restore the native music timestamp before asking TimingData.
-          args.elapsed_time = static_cast<float>(luaL_checknumber(L, 1)) +
-                              timing->GetElapsedTimeFromBeat(0.0f);
-          timing->GetBeatAndBPSFromElapsedTimeNoOffset(args);
-          lua_pushnumber(L, args.beat);
-          lua_pushnumber(L, args.bps_out);
-          lua_pushboolean(L, args.freeze_out);
-          lua_pushboolean(L, args.delay_out);
-          return 4;
-        }, 1);
-        lua_setglobal(state, "_ITG_SONG_POSITION");
-        lua_pushlightuserdata(state, song_timing);
-        lua_pushcclosure(state, [](lua_State* L) -> int {
-          auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));
-          const float beat = static_cast<float>(luaL_checknumber(L, 1));
-          lua_pushnumber(L, timing->GetElapsedTimeFromBeat(beat) - timing->GetElapsedTimeFromBeat(0.0f));
-          return 1;
-        }, 1);
-        lua_setglobal(state, "_ITG_SONG_SECONDS");
-      }
+      lua_pushlightuserdata(state, song_timing);
+      lua_pushcclosure(state, [](lua_State* L) -> int {
+        auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));
+        TimingData::GetBeatArgs args;
+        // Traces use seconds relative to beat zero, as the continuous clock
+        // does. Restore the native music timestamp before asking TimingData.
+        args.elapsed_time = static_cast<float>(luaL_checknumber(L, 1)) +
+                            timing->GetElapsedTimeFromBeat(0.0f);
+        timing->GetBeatAndBPSFromElapsedTimeNoOffset(args);
+        lua_pushnumber(L, args.beat);
+        lua_pushnumber(L, args.bps_out);
+        lua_pushboolean(L, args.freeze_out);
+        lua_pushboolean(L, args.delay_out);
+        return 4;
+      }, 1);
+      lua_setglobal(state, "_ITG_SONG_POSITION");
+      lua_pushlightuserdata(state, song_timing);
+      lua_pushcclosure(state, [](lua_State* L) -> int {
+        auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));
+        const float beat = static_cast<float>(luaL_checknumber(L, 1));
+        lua_pushnumber(L, timing->GetElapsedTimeFromBeat(beat) - timing->GetElapsedTimeFromBeat(0.0f));
+        return 1;
+      }, 1);
+      lua_setglobal(state, "_ITG_SONG_SECONDS");
     }
 
     lua_getglobal(state, "os");
