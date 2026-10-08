@@ -81,6 +81,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn proxy_methods_use_native_userdata() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/proxy-methods.json");
+        let result = evaluate(&path).expect("native ActorProxy assertions");
+        assert_eq!(result, evaluate(&path).expect("repeat native ActorProxy"));
+        assert_eq!(result["script_errors"], serde_json::json!([]));
+        assert_eq!(result["diagnostics"], serde_json::json!([]));
+        assert_eq!(result["allocations"], serde_json::json!([]));
+    }
+
+    #[test]
     fn aft_creation_uses_native_allocation_and_lua_methods() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/aft-creation.json");
         let result = evaluate(&path).expect("native AFT allocation assertions");

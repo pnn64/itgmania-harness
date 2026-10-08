@@ -17,6 +17,7 @@
 
 #include "ActorFrame.h"
 #include "ActorFrameTexture.h"
+#include "ActorProxy.h"
 #include "CubicSpline.h"
 #include "ModelTypes.h"
 #include "MessageManager.h"
@@ -1065,9 +1066,10 @@ Json::Value spline_samples(const Json::Value& fixtures) {
   return out;
 }
 
-Json::Value evaluate_aft_creation(const Json::Value& request) {
-  if (!request["aft_creation"].isString())
-    throw std::runtime_error("aft_creation must be a Lua assertion body");
+Json::Value evaluate_lua_assertions(const Json::Value& request) {
+  const char* key = request.isMember("lua_assertions") ? "lua_assertions" : "aft_creation";
+  if (!request[key].isString())
+    throw std::runtime_error(std::string(key) + " must be a Lua assertion body");
   HarnessDisplay display(640, 480);
   DISPLAY = &display;
   harness_clear_diagnostics();
@@ -1090,23 +1092,27 @@ Json::Value evaluate_aft_creation(const Json::Value& request) {
     luaL_openlibs(state);
     harness_register_lua_globals(state);
     ActorFrameTexture frozen, collision, unused;
-    for (auto [name, actor] : {std::pair{"frozen", &frozen}, {"collision", &collision}, {"unused", &unused}}) {
+    Actor target;
+    ActorProxy proxy;
+    for (auto [name, actor] : {
+        std::pair<const char*, Actor*>{"frozen", &frozen}, {"collision", &collision},
+        {"unused", &unused}, {"native_target", &target}, {"native_proxy", &proxy}}) {
       actor->PushSelf(state);
       lua_setglobal(state, name);
     }
-    const auto script = request["aft_creation"].asString();
-    const bool failed = luaL_loadbuffer(state, script.data(), script.size(), "aft_creation") != 0 ||
+    const auto script = request[key].asString();
+    const bool failed = luaL_loadbuffer(state, script.data(), script.size(), key) != 0 ||
         lua_pcall(state, 0, 0, 0) != 0;
     const bool balanced = lua_gettop(state) == stack;
     const std::string error = failed ? lua_tostring(state, -1) : "";
-    for (const char* name : {"frozen", "collision", "unused"}) {
+    for (const char* name : {"frozen", "collision", "unused", "native_target", "native_proxy"}) {
       lua_pushnil(state);
       lua_setglobal(state, name);
     }
     lua_settop(state, stack);
     LUA->Release(state);
     if (failed) throw std::runtime_error(error);
-    if (!balanced) throw std::runtime_error("AFT creation leaked Lua stack entries");
+    if (!balanced) throw std::runtime_error("actor assertions leaked Lua stack entries");
     result["script_errors"] = errors.messages;
     result["allocations"] = Json::Value(Json::arrayValue);
     for (const auto& param : display.allocations) {
@@ -1129,7 +1135,8 @@ Json::Value evaluate(const Json::Value& request) {
   if (!request.isObject()) throw std::runtime_error("fixture must be a JSON object");
   const int schema = request.get("schema_version", 1).asInt();
   if (schema != 1) throw std::runtime_error("unsupported actor fixture schema_version");
-  if (request.isMember("aft_creation")) return evaluate_aft_creation(request);
+  if (request.isMember("aft_creation") || request.isMember("lua_assertions"))
+    return evaluate_lua_assertions(request);
   if (request.isMember("animated_texture")) return evaluate_texture(request);
   const std::string name = field_string(request, "name", "unnamed", "fixture");
   const Json::Value& screen = request["screen"];

@@ -37,6 +37,7 @@ const ITG_SOURCES: &[&str] = &[
     "src/ColumnCues.cpp",
     "src/CubicSpline.cpp",
     "src/Actor.cpp",
+    "src/ActorProxy.cpp",
     "src/ActorFrame.cpp",
     "src/ActorFrameTexture.cpp",
     "src/Tween.cpp",
