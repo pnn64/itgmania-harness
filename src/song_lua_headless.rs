@@ -801,6 +801,41 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn runtime_actor_contracts() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("native runtime actor fixtures");
+        for name in ["actor-string", "bitmap-bools"] {
+            let entry = song_dir.join(format!("{name}.lua"));
+            let input = root.join(format!("fixtures/actors/{name}.json"));
+            let native_input: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&input).expect("native runtime actor input"),
+            ).expect("native runtime actor JSON");
+            let body = native_input["lua_assertions"].as_str()
+                .expect("native runtime actor assertions");
+            assert!(std::fs::read_to_string(&entry).expect("runtime actor assertions")
+                .replace("\r\n", "\n").contains(body));
+            let native = crate::actor_conformance::evaluate(&input)
+                .expect("same assertions on compiled native userdata");
+            for key in ["script_errors", "diagnostics", "allocations"] {
+                assert_eq!(native[key], serde_json::json!([]), "{name}: {key}");
+            }
+            let context = Context {
+                simfile: &entry, song_dir: &song_dir, title: "Native runtime actor contracts",
+                difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+                max_beat: 4.0, bpm: 120.0, bpm_segments: &[], beat_step: 0.25,
+                max_events: 1000, random_seed: 1,
+            };
+            let trace = evaluate_with_noteskin(&[Entry {
+                path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+            }], &context, None).expect("native runtime actor semantic control");
+            assert_eq!(trace["runtime_errors"], serde_json::json!([]), "{name}");
+            assert_eq!(trace["dropped_events"], 0, "{name}");
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn bitmap_methods_match_native() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let song_dir = root.join("tests/fixtures/song-lua-headless")

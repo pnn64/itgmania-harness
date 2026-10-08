@@ -197,7 +197,7 @@ local function safe_value(value, depth, seen)
 	if kind == "function" then return function_source(value) end
 	if kind ~= "table" then return { type = kind, value = tostring(value) } end
 	if is_actor(value) then
-		return { actor = value.id, path = value.path, name = value.name }
+		return { actor = value.id, path = value.path, name = value.__songlua_name }
 	end
 	if depth >= 5 then return { type = "table", truncated = "depth" } end
 	if seen[value] then return { type = "table", cycle = true } end
@@ -559,13 +559,14 @@ local function external_actor(path, class)
 		__actor = true,
 		id = "external-" .. string.format("%04d", external_count),
 		path = path,
-		name = path:match("([^/]+)$") or path,
+		__songlua_name = path:match("([^/]+)$") or path,
 		class = class or "ActorFrame",
 		children = {}, children_by_name = {}, wrappers = {},
 		state = {}, tweens = {},
 	}
+	actor.identity = tostring(actor):match("^table: (.+)$")
 	external_actors[#external_actors + 1] = {
-		id = actor.id, path = actor.path, name = actor.name, class = actor.class,
+		id = actor.id, path = actor.path, name = actor.__songlua_name, class = actor.class,
 	}
 	actor_by_id[actor.id] = actor
 	return setmetatable(actor, actor_mt)
@@ -794,6 +795,10 @@ local function actor_call(actor, name, ...)
         return unpack(result)
     end
 	local args = safe_args(...)
+	if name == "rainbowscroll" or name == "jitter" or name == "uppercase" then
+		-- BArg is strict; BIArg and lua_toboolean have different contracts.
+		if type((...)) ~= "boolean" then error(name .. ": boolean expected") end
+	end
 	if name == "GetTarget" and actor.class == "ActorProxy" then return actor.state.target end
 	if name == "SetTarget" and actor.class == "ActorProxy" then
 		local target = (...)
@@ -801,7 +806,7 @@ local function actor_call(actor, name, ...)
 			error("ActorProxy.SetTarget requires an Actor")
 		end
 	end
-	if name == "GetName" then return actor.name or "" end
+	if name == "GetName" then return actor.__songlua_name or "" end
 	if name == "GetText" then return actor.state.text or "" end
 	if name == "get_mult_attrs_with_diffuse" then return actor.state.mult_attrs_with_diffuse == true end
 	if name == "GetWidth" or name == "GetHeight" then
@@ -857,7 +862,7 @@ local function actor_call(actor, name, ...)
 		-- map traversal produces a different Lua 5.1 table and draw order.
 		local out, groups = {}, {}
 		for _, child in ipairs(actor.children or {}) do
-			local child_name = child.name
+			local child_name = child.__songlua_name
 			if out[child_name] == nil then out[child_name] = child
 			elseif groups[child_name] then
 				local group = groups[child_name]
@@ -933,6 +938,19 @@ local function actor_call(actor, name, ...)
 	local event = emit("call", actor, event_operation(actor, name), args)
 	if name == "SetUpdateFunction" then
 		actor.update_fn = (...)
+	elseif name == "name" then
+		local value = (...)
+		if type(value) ~= "string" and type(value) ~= "number" then error("name: string expected") end
+		actor.__songlua_name = tostring(value)
+		if actor.parent then
+			local groups = {}
+			for _, child in ipairs(actor.parent.children) do
+				local child_name = child.__songlua_name
+				groups[child_name] = groups[child_name] or {}
+				table.insert(groups[child_name], child)
+			end
+			actor.parent.children_by_name = groups
+		end
 	elseif name == "set_mult_attrs_with_diffuse" then
 		-- GETTER_SETTER_BOOL_METHOD uses lua_toboolean, so even numeric 0 is true.
 		actor.state.mult_attrs_with_diffuse = not not (...)
@@ -1293,7 +1311,10 @@ actor_mt.__index = function(actor, name)
         or actor.class == "DeviceList" or actor.class == "InputList") then return nil end
 	return function(self, ...) return actor_call(self, name, ...) end
 end
-actor_mt.__tostring = function(actor) return actor.class .. ": " .. actor.path end
+actor_mt.__tostring = function(actor)
+    local class = ({Quad = "Sprite", Screen = "ScreenGameplay"})[actor.class] or actor.class
+    return class .. " (" .. actor.identity .. ")"
+end
 
 local function command_info(fn)
 	local info = debug.getinfo(fn, "Sl") or {}
@@ -1415,11 +1436,12 @@ local function instantiate(definition, parent)
 	local instance = #record.runtime_actors + 1
 	local id = record.id .. (instance == 1 and "" or "#" .. instance)
 	local actor = {
-		__actor = true, id = id, path = id, name = record.name or "",
+		__actor = true, id = id, path = id, __songlua_name = record.name or "",
 		class = record.class, definition_id = record.id, parent = parent,
 		children = {}, children_by_name = {}, wrappers = {}, state = {}, tweens = {},
 		source = record.source,
 	}
+	actor.identity = tostring(actor):match("^table: (.+)$")
 	for key, value in pairs(definition) do
 		if type(key) == "string" and key:match("Command$") and type(value) == "function" then actor[key] = value end
 	end
@@ -1432,7 +1454,7 @@ local function instantiate(definition, parent)
 	setmetatable(actor, actor_mt)
 	record.runtime_actors[#record.runtime_actors + 1] = actor.id
 	actor_by_id[actor.id] = actor
-	runtime_actors[#runtime_actors + 1] = { id = actor.id, path = actor.path, name = actor.name, definition_id = record.id, parent_id = parent and parent.id or nil }
+	runtime_actors[#runtime_actors + 1] = { id = actor.id, path = actor.path, name = actor.__songlua_name, definition_id = record.id, parent_id = parent and parent.id or nil }
 	local subscriber = manual.ensure_message_subscriber(actor)
 	for _, command in ipairs(record.commands) do
 		local message = command.name:match("^(.*)MessageCommand$")
@@ -1442,7 +1464,7 @@ local function instantiate(definition, parent)
 		if type(child_definition) == "table" then
 			local child = instantiate(child_definition, actor)
 			actor.children[#actor.children + 1] = child
-			local child_name = child.name
+			local child_name = child.__songlua_name
 			actor.children_by_name[child_name] = actor.children_by_name[child_name] or {}
 			table.insert(actor.children_by_name[child_name], child)
 		end
@@ -2856,7 +2878,7 @@ local function attach_screen_layers(name, predicate)
 		if predicate(root.entry.layer) then
 			root.actor.parent = screen_frame
 			screen_frame.children[#screen_frame.children + 1] = root.actor
-			local child_name = root.actor.name
+			local child_name = root.actor.__songlua_name
 			screen_frame.children_by_name[child_name] = screen_frame.children_by_name[child_name] or {}
 			table.insert(screen_frame.children_by_name[child_name], root.actor)
 		end
