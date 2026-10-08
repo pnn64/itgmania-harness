@@ -1101,6 +1101,91 @@ impl fmt::Display for Error {
 mod tests {
     use super::*;
 
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn archive_runtime_sprite() {
+        use crate::song_lua_headless::{Context, Entry, evaluate_with_noteskin};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("Sprite fixtures");
+        let simfile = root.join("sprite-background-assets.sm");
+        let context = Context {
+            simfile: &simfile,
+            song_dir: &root,
+            title: "Runtime sprite asset",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 4.0,
+            bpm: 120.0,
+            bpm_segments: &[],
+            beat_step: 0.25,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(
+            &[Entry {
+                path: root.join("sprite-background-assets.lua"),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+            None,
+        )
+        .expect("native parsed background and fallback helper");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        assert!(
+            trace["projected_vertex_tracks"]
+                .as_array()
+                .expect("tracks")
+                .is_empty()
+        );
+        assert_eq!(trace["texture_requests"][0]["path"], "song:/fit-rect.png");
+        let source = serde_json::to_vec(&trace).expect("native trace bytes");
+        let provenance = || SemanticItgmania {
+            git_revision: "native-test".into(),
+            git_dirty: "false".into(),
+        };
+        let semantic = SemanticManifest {
+            fixture_schema_version: 1,
+            oracle_schema_version: 2,
+            harness_version: env!("CARGO_PKG_VERSION").into(),
+            itgmania: provenance(),
+            simfiles: vec![],
+        };
+        let entry = SemanticEntry {
+            simfile: "sprite-background-assets.sm".into(),
+            fixture: "semantic.json".into(),
+            title: context.title.into(),
+            status: "ok".into(),
+            itgmania: Some(provenance()),
+        };
+        let (members, manifest) =
+            archive_members(&root, &simfile, &source, &trace, &semantic, &entry)
+                .expect("complete runtime dependency archive");
+        let image = fs::read(root.join("fit-rect.png")).expect("native loaded image");
+        assert_eq!(members.get("song/fit-rect.png"), Some(&image));
+        assert!(
+            manifest
+                .required_assets
+                .iter()
+                .any(|asset| asset.local_path.as_deref() == Some("fit-rect.png") && asset.exists)
+        );
+        let texture = manifest
+            .textures
+            .iter()
+            .find(|texture| texture.reference == "song:/fit-rect.png")
+            .expect("runtime image metadata");
+        assert_eq!((texture.width, texture.height), (Some(64), Some(32)));
+        assert_eq!(
+            texture.source_sha256.as_deref(),
+            Some(hash_bytes(&image).as_str())
+        );
+    }
+
     #[test]
     fn movie_actor_assets_are_required_textures() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/movie-actor-assets");

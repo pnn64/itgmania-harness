@@ -75,7 +75,7 @@ end
 -- Keep dependencies loaded through computed paths (for example xero.require)
 -- even when their actor mutations are attributed to the caller's command.
 local loaded_lua_files = {}
-local file_observations = { reads = {}, directories = {}, writes = {}, generated = {} }
+local file_observations = { reads = {}, directories = {}, writes = {}, generated = {}, textures = {} }
 local native_loadfile = loadfile
 function loadfile(path, ...)
 	local chunk, message = native_loadfile(path, ...)
@@ -799,6 +799,10 @@ local function actor_call(actor, name, ...)
 		-- BArg is strict; BIArg and lua_toboolean have different contracts.
 		if type((...)) ~= "boolean" then error(name .. ": boolean expected") end
 	end
+	if name == "LoadBackground" or name == "LoadBanner" then
+		local value = (...)
+		if type(value) ~= "string" and type(value) ~= "number" then error(name .. ": string expected") end
+	end
 	if name == "GetTarget" and actor.class == "ActorProxy" then return actor.state.target end
 	if name == "SetTarget" and actor.class == "ActorProxy" then
 		local target = (...)
@@ -963,9 +967,6 @@ local function actor_call(actor, name, ...)
 		if manual.context then manual.begin(actor, (...)) end
 	elseif name == "FinishRenderingTo" and actor.class == "RageTexture" then
 		if manual.context then manual.finish(actor) end
-	elseif name == "LoadFromCurrentSongBackground" and actor.class == "Sprite" then
-		actor.state.texture = harness.background_path
-		if harness.background_path then actor.state.width, actor.state.height = image_size(harness.background_path) end
 	elseif name == "SetVertices" and actor.class == "ActorMultiVertex" then
 		actor.state.vertices = copy_value((...))
 	elseif name == "SetDrawState" and actor.class == "ActorMultiVertex" then
@@ -1008,8 +1009,12 @@ local function actor_call(actor, name, ...)
         or name == "EnableFloat" or name == "EnablePreserveTexture") then
         if type((...)) ~= "boolean" then error("boolean expected") end
         actor.state[name:lower()] = (...)
-	elseif name == "SetTexture" or (name == "Load" and actor.class == "Sprite") then
+	elseif name == "SetTexture" or (actor.class == "Sprite"
+		and (name == "Load" or name == "LoadBackground" or name == "LoadBanner")) then
 		local texture = (...)
+		if name == "LoadBackground" or name == "LoadBanner" then
+			texture = tostring(texture)
+		end
 		actor.state.texture = texture
 		local resource = actor_texture(actor)
 		if type(resource) == "table" and resource.class == "RageTexture" then
@@ -1017,8 +1022,15 @@ local function actor_call(actor, name, ...)
 		elseif actor.class == "Sprite" then
 			-- Sprite::Load replaces its size, even after a previous SetTexture.
 			local path = texture_path(actor)
-			if path then actor.state.width, actor.state.height = image_size(path) end
+			if path then
+				actor.state.width, actor.state.height = image_size(path)
+				-- Retain runtime-loaded assets even when no frame draws the Sprite.
+				file_observations.textures[#file_observations.textures + 1] = { actor = actor.id, method = name,
+					path = source_path(path), exists = is_file(path) }
+			end
 		end
+		-- These two LunaSprite methods return the existing top stack argument.
+		if name == "LoadBackground" or name == "LoadBanner" then return select(select("#", ...), ...) end
 	elseif name == "playcommand" or name == "PlayCommand" or name == "propagatecommand" then
 		run_command_tree(actor, tostring((...)), select(2, ...))
     elseif name == "queuecommand" or name == "QueueCommand" then
@@ -3034,6 +3046,7 @@ return json_encode({
 	itgmania_version = harness.itgmania_version,
 	simfile = source_path(harness.simfile),
 	loaded_lua_files = lua_sources,
+    texture_requests = file_observations.textures,
     file_reads = file_observations.reads,
     directory_queries = file_observations.directories,
     file_writes = file_observations.writes,

@@ -1,0 +1,15 @@
+#TITLE:Runtime sprite asset;
+#BACKGROUND:fit-rect.png;
+#BPMS:0=120;
+#FGCHANGES:0=sprite-background-assets.lua=1=0=0=0;
+#NOTES:
+ dance-single:
+ :
+ Challenge:
+ 1:
+ 0,0,0,0,0:
+1000
+0000
+0000
+0000
+;
