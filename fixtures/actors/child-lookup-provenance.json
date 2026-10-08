@@ -1,0 +1,99 @@
+{
+  "scope": "Missing named children and GetText availability",
+  "native_control": {
+    "native_executable_sha256": "d4fbf9080f740322bb35f502fb5bac891c59d215964af15feae7d22f2e8c1faa",
+    "exit_code": 0,
+    "seconds": 0.05953049659729004,
+    "source_reference": {
+      "ActorFrame.cpp": "175-181,364-401,617-627",
+      "note": "ActorFrameTexture derives from native ActorFrame; this assertion body invokes the actual native Lua methods, not semantic_host.lua."
+    },
+    "result": {
+      "allocations": [],
+      "diagnostics": [],
+      "provenance": {
+        "execution": "embedded_native_sources",
+        "git_dirty": "false",
+        "git_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+        "source_root": "C:\\GitHub\\itgmania-harness\\vendor/itgmania"
+      },
+      "script_errors": []
+    }
+  },
+  "before_host": {
+    "harness_version": "0.1.18",
+    "runtime_errors": [
+      {
+        "actor": "def-0002",
+        "beat": 0,
+        "command": "InitCommand",
+        "definition_id": "def-0002",
+        "line": 2,
+        "message": "C:/GitHub/itgmania-harness/target/song-lua-repair/pass52-native-child-lookup/corpus/probe/default.lua:3: native missing child must be nil",
+        "name": "InitCommand",
+        "operation": "command.error",
+        "seconds": 0,
+        "source": "song:/default.lua"
+      },
+      {
+        "actor": "def-0003",
+        "beat": 0,
+        "command": "InitCommand",
+        "definition_id": "def-0003",
+        "line": 5,
+        "message": "C:/GitHub/itgmania-harness/target/song-lua-repair/pass52-native-child-lookup/corpus/probe/default.lua:6: native ActorFrame has no GetText method",
+        "name": "InitCommand",
+        "operation": "command.error",
+        "seconds": 0,
+        "source": "song:/default.lua"
+      }
+    ]
+  },
+  "after_host": {
+    "harness_version": "0.1.19",
+    "test": "song_lua_headless::actor_lookup_matches_itg",
+    "runtime_errors": [],
+    "dropped_events": 0,
+    "checks": "Missing named/unnamed child lookup creates no actor; ActorFrame GetText is absent; BitmapText GetText remains callable and reads Alpha."
+  },
+  "tests": {
+    "path": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass52-actor-lookup.exe",
+    "sha256": "06d27bde3def7b709fd34a123403fb0e3da6fac081f6921d36b9013b1c3baeea",
+    "results": [
+      {
+        "test": "song_lua_headless::actor_lookup_matches_itg",
+        "exit_code": 0,
+        "seconds": 2.0334718227386475,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 1.08s"
+        ],
+        "log_sha256": "9d941ce6dcc2a51574b9205db925851c5c73ea42bd0f121134b176226a78d253"
+      },
+      {
+        "test": "song_lua_headless::child_tables_follow_native_insertion_and_group_rules",
+        "exit_code": 0,
+        "seconds": 1.1378872394561768,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 1.10s"
+        ],
+        "log_sha256": "8b383040a88b7818784e29a3dad2db2154a076ea719c5085bfb0008d17779411"
+      },
+      {
+        "test": "actor_conformance::tests::aft_creation_uses_native_allocation_and_lua_methods",
+        "exit_code": 0,
+        "seconds": 0.06360125541687012,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s"
+        ],
+        "log_sha256": "08fa26ad8e3ed91fd2ca096bb33a188c2ab843104dac22b3a6c860ef2749147a"
+      }
+    ]
+  },
+  "source_references": [
+    "vendor/itgmania/src/ActorFrame.cpp:392-409",
+    "vendor/itgmania/src/BitmapText.cpp:1091-1094,1135",
+    "vendor/itgmania/src/RollingNumbers.h:11",
+    "vendor/itgmania/src/LuaBinding.cpp:67-140"
+  ],
+  "limits": "External screen/theme child context and generic unknown-method lookup still require separate source-based work. This control does not establish full-corpus parity."
+}

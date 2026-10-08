@@ -5898,6 +5898,31 @@ fn late_draw_colors_match_native() {
 
 #[cfg(all(test, itgmania_oracle))]
 #[test]
+fn actor_lookup_matches_itg() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/child-lookup.json"))
+        .expect("actual native ActorFrame Lua lookup assertions");
+    assert_eq!(native["script_errors"], serde_json::json!([]));
+    assert_eq!(native["allocations"], serde_json::json!([]));
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize()
+        .expect("actor lookup fixture folder");
+    let entry = song_dir.join("actor-lookup.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native actor lookup",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 0.25, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate(&[Entry {path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0}], &context)
+        .expect("song ActorFrame lookup capture");
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    assert_eq!(trace["runtime_actors"].as_array().expect("song actors").len(), 3);
+    assert!(trace.to_string().contains("ActorFrame.aux"));
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
 fn child_tables_follow_native_insertion_and_group_rules() {
     let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/song-lua-headless")

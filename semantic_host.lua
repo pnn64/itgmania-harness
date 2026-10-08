@@ -825,7 +825,10 @@ local function actor_call(actor, name, ...)
     if name == "GetLife" and actor.class == "LifeMeterBar" then return 0.5 end
 	if name == "GetChild" then
         local child_name = (...)
-        if rawget(actor, "child_lookup_exact") and not actor.children_by_name[child_name] then return nil end
+        -- Song ActorFrames already own their complete child list. Native
+        -- ActorFrame::PushChildTable returns nil and creates no missing child.
+        if (rawget(actor, "definition_id") or rawget(actor, "child_lookup_exact"))
+            and not actor.children_by_name[child_name] then return nil end
         return actor_child(actor, child_name)
     end
 	if name == "GetChildren" then
@@ -1204,6 +1207,9 @@ end
 
 actor_mt.__index = function(actor, name)
     if name == "Name" then return nil end
+    -- GetText belongs to LunaBitmapText and its RollingNumbers subclass.
+    -- Native Actor/ActorFrame instances do not expose the method at all.
+    if name == "GetText" and actor.class ~= "BitmapText" and actor.class ~= "RollingNumbers" then return nil end
 	return function(self, ...) return actor_call(self, name, ...) end
 end
 actor_mt.__tostring = function(actor) return actor.class .. ": " .. actor.path end
