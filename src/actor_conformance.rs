@@ -81,6 +81,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bitmap_methods_use_native_userdata() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-methods.json");
+        let result = evaluate(&path).expect("native BitmapText assertions");
+        assert_eq!(result, evaluate(&path).expect("repeat native BitmapText"));
+        assert_eq!(result["script_errors"], serde_json::json!([]));
+        assert_eq!(result["diagnostics"], serde_json::json!([]));
+        assert_eq!(result["allocations"], serde_json::json!([]));
+    }
+
+    #[test]
     fn proxy_methods_use_native_userdata() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/proxy-methods.json");
         let result = evaluate(&path).expect("native ActorProxy assertions");

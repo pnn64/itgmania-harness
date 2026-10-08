@@ -48,6 +48,8 @@ const ITG_SOURCES: &[&str] = &[
     "src/Sprite.cpp",
     "src/ModelTypes.cpp",
     "src/Font.cpp",
+    "src/FontManager.cpp",
+    "src/BitmapText.cpp",
     "src/FontCharAliases.cpp",
     "src/FontCharmaps.cpp",
     "src/MsdFile.cpp",

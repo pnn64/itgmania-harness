@@ -33,6 +33,7 @@ extern "C" {
 #include "Song.h"
 #include "Style.h"
 #include "ThemeManager.h"
+#include "FontCharAliases.h"
 #include "BackgroundUtil.h"
 #include "ActorUtil.h"
 #include "DisplaySpec.h"
@@ -1594,6 +1595,8 @@ void ThemeManager::GetMetric(const RString& group, const RString& name, LuaRefer
 	}
 }
 bool ThemeManager::HasString(const RString&, const RString&) { return false; }
+// ThemeManager.cpp delegates text evaluation to the native marker replacer.
+void ThemeManager::EvaluateString(std::string& text) { FontCharAliases::ReplaceMarkers(text); }
 RString ThemeManager::GetString(const RString&, const RString&) { return ""; }
 void ThemeManager::FilterFileLanguages(std::vector<RString>&) {}
 void ThemeManager::GetMetricsThatBeginWith(const RString&, const RString&, std::set<RString>&) {}

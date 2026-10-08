@@ -18,6 +18,7 @@
 #include "ActorFrame.h"
 #include "ActorFrameTexture.h"
 #include "ActorProxy.h"
+#include "BitmapText.h"
 #include "CubicSpline.h"
 #include "ModelTypes.h"
 #include "MessageManager.h"
@@ -1094,9 +1095,11 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
     ActorFrameTexture frozen, collision, unused;
     Actor target;
     ActorProxy proxy;
+    BitmapText label;
     for (auto [name, actor] : {
         std::pair<const char*, Actor*>{"frozen", &frozen}, {"collision", &collision},
-        {"unused", &unused}, {"native_target", &target}, {"native_proxy", &proxy}}) {
+        {"unused", &unused}, {"native_target", &target}, {"native_proxy", &proxy},
+        {"native_label", &label}}) {
       actor->PushSelf(state);
       lua_setglobal(state, name);
     }
@@ -1105,7 +1108,7 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
         lua_pcall(state, 0, 0, 0) != 0;
     const bool balanced = lua_gettop(state) == stack;
     const std::string error = failed ? lua_tostring(state, -1) : "";
-    for (const char* name : {"frozen", "collision", "unused", "native_target", "native_proxy"}) {
+    for (const char* name : {"frozen", "collision", "unused", "native_target", "native_proxy", "native_label"}) {
       lua_pushnil(state);
       lua_setglobal(state, name);
     }
