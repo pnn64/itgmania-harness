@@ -801,59 +801,61 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
-    fn sprite_load_match_native() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let song_dir = root
-            .join("tests/fixtures/song-lua-headless")
-            .canonicalize()
-            .expect("native Sprite fixtures");
-        let entry = song_dir.join("sprite-load.lua");
-        let input = root.join("fixtures/actors/sprite-load.json");
-        let native_input: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&input).expect("native Sprite input"))
-                .expect("native Sprite JSON");
-        let body = native_input["lua_assertions"]
-            .as_str()
-            .expect("native Sprite assertions")
-            .split_once('\n')
-            .expect("fixture path boundary")
-            .1;
-        assert!(
-            std::fs::read_to_string(&entry)
-                .expect("runtime Sprite assertions")
-                .replace("\r\n", "\n")
-                .contains(body)
-        );
-        let native = crate::actor_conformance::evaluate(&input)
-            .expect("same assertions on compiled Sprite userdata");
-        assert_eq!(native["script_errors"], serde_json::json!([]));
-        let context = Context {
-            simfile: &entry,
-            song_dir: &song_dir,
-            title: "Native Sprite loading",
-            difficulty: "Difficulty_Challenge",
-            steps_type: "dance-single",
-            description: "",
-            max_beat: 4.0,
-            bpm: 120.0,
-            bpm_segments: &[],
-            beat_step: 0.25,
-            max_events: 1000,
-            random_seed: 1,
-        };
-        let trace = evaluate_with_noteskin(
-            &[Entry {
-                path: entry.clone(),
-                layer: "foreground",
-                index: 0,
-                start_beat: 0.0,
-            }],
-            &context,
-            None,
-        )
-        .expect("native Sprite semantic control");
-        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
-        assert_eq!(trace["dropped_events"], 0);
+    fn sprite_methods_match_native() {
+        for name in ["sprite-load", "texture-path"] {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let song_dir = root
+                .join("tests/fixtures/song-lua-headless")
+                .canonicalize()
+                .expect("native Sprite fixtures");
+            let entry = song_dir.join(format!("{name}.lua"));
+            let input = root.join(format!("fixtures/actors/{name}.json"));
+            let native_input: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&input).expect("native Sprite input"))
+                    .expect("native Sprite JSON");
+            let body = native_input["lua_assertions"]
+                .as_str()
+                .expect("native Sprite assertions")
+                .split_once('\n')
+                .expect("fixture path boundary")
+                .1;
+            assert!(
+                std::fs::read_to_string(&entry)
+                    .expect("runtime Sprite assertions")
+                    .replace("\r\n", "\n")
+                    .contains(body)
+            );
+            let native = crate::actor_conformance::evaluate(&input)
+                .expect("same assertions on compiled Sprite userdata");
+            assert_eq!(native["script_errors"], serde_json::json!([]));
+            let context = Context {
+                simfile: &entry,
+                song_dir: &song_dir,
+                title: "Native Sprite loading",
+                difficulty: "Difficulty_Challenge",
+                steps_type: "dance-single",
+                description: "",
+                max_beat: 4.0,
+                bpm: 120.0,
+                bpm_segments: &[],
+                beat_step: 0.25,
+                max_events: 1000,
+                random_seed: 1,
+            };
+            let trace = evaluate_with_noteskin(
+                &[Entry {
+                    path: entry.clone(),
+                    layer: "foreground",
+                    index: 0,
+                    start_beat: 0.0,
+                }],
+                &context,
+                None,
+            )
+            .expect("native Sprite semantic control");
+            assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+            assert_eq!(trace["dropped_events"], 0);
+        }
     }
 
     #[cfg(itgmania_oracle)]

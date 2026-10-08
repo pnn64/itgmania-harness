@@ -81,11 +81,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sprite_load_uses_native() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/sprite-load.json");
-        let result = evaluate(&path).expect("native Sprite loading assertions");
-        for key in ["script_errors", "diagnostics", "allocations"] {
-            assert_eq!(result[key], serde_json::json!([]), "{key}");
+    fn sprite_methods_use_native() {
+        for name in ["sprite-load", "texture-path"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("fixtures/actors/{name}.json"));
+            let result = evaluate(&path).expect("native Sprite assertions");
+            for key in ["script_errors", "diagnostics", "allocations"] {
+                assert_eq!(result[key], serde_json::json!([]), "{name}: {key}");
+            }
         }
     }
 

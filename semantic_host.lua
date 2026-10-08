@@ -902,7 +902,7 @@ local function actor_call(actor, name, ...)
 		end
 		return rawget(actor, "allocated_texture")
 	end
-	if name == "GetPath" and actor.class == "RageTexture" then return source_path(actor.state.path or "") end
+	if name == "GetPath" and actor.class == "RageTexture" then return _ITG_TEXTURE_NAME(actor.state.path or "") end
 	if name == "GetPlayerStageStats" then return external_actor(actor.path .. "/PlayerStageStats", "PlayerStageStats") end
 	if name == "GetPercentDancePoints" then return 0 end
 	if name == "GetSpline" or name == "get_spline" or name:match("Handler$") or name:match("^get_.*_handler$") then
