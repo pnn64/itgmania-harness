@@ -801,6 +801,39 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn bitmap_methods_match_native() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("native bitmap fixtures");
+        let entry = song_dir.join("bitmap-methods.lua");
+        let input = root.join("fixtures/actors/bitmap-methods.json");
+        let native_input: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&input).expect("native bitmap input"),
+        ).expect("native bitmap JSON");
+        // The native oracle checks raw inventory, before fallback Lua helpers.
+        let assertions = native_input["lua_assertions"].as_str()
+            .expect("native bitmap assertions").split_once("assert(type(BitmapText.GetX)")
+            .expect("native inventory boundary").1;
+        assert!(std::fs::read_to_string(&entry).expect("semantic bitmap assertions")
+            .replace("\r\n", "\n").contains(&format!("assert(type(BitmapText.GetX){assertions}")));
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Native bitmap methods",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 4.0, bpm: 120.0, bpm_segments: &[], beat_step: 0.25,
+            max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context, None).expect("native bitmap semantic control");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let native = crate::actor_conformance::evaluate(&input)
+            .expect("same assertions on native BitmapText userdata");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn loads_relative_actor_from_queued_command() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

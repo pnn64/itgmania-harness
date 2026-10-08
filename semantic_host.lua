@@ -544,12 +544,12 @@ local actor_mt = { classes = {
     native = {
         Actor = Actor, ActorFrame = ActorFrame, ActorFrameTexture = ActorFrameTexture,
         ActorMultiVertex = ActorMultiVertex, Sprite = Sprite,
-        ActorProxy = ActorProxy,
+        ActorProxy = ActorProxy, BitmapText = BitmapText,
     },
     bases = {
         ActorFrame = "Actor", ActorFrameTexture = "ActorFrame",
         ActorMultiVertex = "Actor", Sprite = "Actor",
-        ActorProxy = "Actor",
+        ActorProxy = "Actor", BitmapText = "Actor",
     },
 } }
 
@@ -802,6 +802,8 @@ local function actor_call(actor, name, ...)
 		end
 	end
 	if name == "GetName" then return actor.name or "" end
+	if name == "GetText" then return actor.state.text or "" end
+	if name == "get_mult_attrs_with_diffuse" then return actor.state.mult_attrs_with_diffuse == true end
 	if name == "GetWidth" or name == "GetHeight" then
 		local width, height = actor_size(actor)
 		return name == "GetWidth" and width or height
@@ -931,6 +933,9 @@ local function actor_call(actor, name, ...)
 	local event = emit("call", actor, event_operation(actor, name), args)
 	if name == "SetUpdateFunction" then
 		actor.update_fn = (...)
+	elseif name == "set_mult_attrs_with_diffuse" then
+		-- GETTER_SETTER_BOOL_METHOD uses lua_toboolean, so even numeric 0 is true.
+		actor.state.mult_attrs_with_diffuse = not not (...)
 	elseif name == "SetDrawFunction" then
 		actor.draw_fn = (...)
 		manual.actors[actor] = true
@@ -1245,6 +1250,28 @@ for class, native in pairs(actor_classes.native) do
 end
 -- Quad has Sprite's Lua type (Quad.h), without a separate Lua method table.
 actor_classes.Quad = actor_classes.Sprite
+-- _fallback/Scripts/02 Actor.lua helper bodies use native actor primitives.
+function BitmapText:PixelFont()
+    self:SetTextureFiltering(false)
+    return self
+end
+function BitmapText:Stroke(c)
+    self:strokecolor(c)
+    return self
+end
+function BitmapText:NoStroke()
+    self:strokecolor(color("0,0,0,0"))
+    return self
+end
+function BitmapText:settextf(...)
+    self:settext(string.format(...))
+    return self
+end
+function BitmapText:DiffuseAndStroke(diffuseC, strokeC)
+    self:diffuse(diffuseC)
+    self:strokecolor(strokeC)
+    return self
+end
 end
 
 actor_mt.__index = function(actor, name)
