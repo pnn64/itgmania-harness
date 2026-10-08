@@ -1,0 +1,55 @@
+{
+  "reference_file": "vendor/itgmania/Themes/_fallback/Scripts/02 ActorDef.lua",
+  "reference_sha256": "e146db352c0328d94e5225b4a7705abb4cc7253b81cf217c2bea3f6f7f7cd093",
+  "reference_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+  "matches_workspace_reference": true,
+  "native_executable_sha256": "2d1a94523555ebc1881f11725ff65bb4c93b7002337dac3ee47d0587afc4676b",
+  "native_fixture_sha256": "c56a169a695a174ae6cdd04828562335bf854cb87ab79fcc85c80ae7f10043c6",
+  "native_output_sha256": "75e375eb39a1a41ec7b483042b26f43f070281053fafc39e603c550dec2aa5a0",
+  "warning_sink": "The isolated oracle supplies Warn solely to collect the numeric override warning; it executes the unmodified native fallback MergeTables.",
+  "before": {
+    "harness": {
+      "test": "song_lua_headless::tests::actor_definitions_keep_native_concat_commands",
+      "exit_code": 101,
+      "seconds": 0.9223294998519123,
+      "expected_failure": true,
+      "executable_sha256": "138a8f28b8d885a08d11284b3247d8721004af7675a2d4cc590221440931b752",
+      "log_sha256": "2bfddd1f42c6b61ea31000990fc6eb78abba41b71722ab2bccfed45b5e7cbb5e"
+    },
+    "deadsync": {
+      "test": "tests::compile_song_lua_merges_actor_definitions",
+      "exit_code": 101,
+      "seconds": 1.2680095001123846,
+      "expected_failure": true,
+      "executable_sha256": "08cb8139eab781555383836d8602aa4c34e7aa616255ee47bfa1b0ceaa0d3cad",
+      "log_sha256": "72b3e3d7415216b76009e3a7e1a40e1dbd45d95ce2376929564853440bb133aa"
+    }
+  },
+  "after": {
+    "harness": {
+      "test": "song_lua_headless::tests::actor_definitions_keep_native_concat_commands",
+      "exit_code": 0,
+      "seconds": 0.9519027001224458,
+      "expected_failure": false,
+      "executable_sha256": "df426deddd98df5856a3342ca668aa2467ce364645cb4029504c5c2767210f25",
+      "log_sha256": "ff17f78c0d4db4e7c3242a411bf12923c9958e2bb78d789ede4821ecbe70009a"
+    },
+    "deadsync": {
+      "test": "tests::compile_song_lua_merges_actor_definitions",
+      "exit_code": 0,
+      "seconds": 0.10411040019243956,
+      "expected_failure": false,
+      "executable_sha256": "6d8e2b5b8a89252031b327d5c113d77284b5e6aa673f52401371a07dc90ee931",
+      "log_sha256": "f0793c61e909cd91e707f21ee5bb57c18eee52f7e83e1207ff59cbe4497bc929"
+    }
+  },
+  "validation": {
+    "harness_unit": "148 passed, 2 ignored",
+    "harness_integration_actor": "8 passed",
+    "harness_integration_chart": "15 passed",
+    "harness_integration_diff": "1 passed",
+    "harness_integration_oracle": "13 passed and 3 ignored in broad run; the remaining invalid Quad callback fixture was repaired to ActorFrame and passes separately",
+    "deadsync_song_lua": "490 library, 2 integration and 183 playback tests pass; 3 existing GPU tests ignored"
+  },
+  "scope_note": "No original song Lua was edited. Full ArrowQuest captures and the complete corpus remain pending; this control proves actor definition concatenation only."
+}

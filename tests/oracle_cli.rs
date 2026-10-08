@@ -496,13 +496,15 @@ fn semantic_capture_keeps_last_second_hint() {
     std::fs::write(&simfile, "#TITLE:Outro;\n#BPMS:0=120;\n#LASTSECONDHINT:2.5;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n").unwrap();
     std::fs::write(
         directory.join("mods.lua"),
-        r#"return Def.Quad{
+        r#"return Def.ActorFrame{
         OnCommand=function(self)
             self:SetUpdateFunction(function(actor)
-                if GAMESTATE:GetSongBeat()>6 then actor:diffusealpha(0.25)
-                elseif GAMESTATE:GetSongBeat()>4 then actor:diffusealpha(0.5) end
+                local quad = actor:GetChild('Outro')
+                if GAMESTATE:GetSongBeat()>6 then quad:diffusealpha(0.25)
+                elseif GAMESTATE:GetSongBeat()>4 then quad:diffusealpha(0.5) end
             end)
         end,
+        Def.Quad{Name='Outro'},
     }"#,
     )
     .unwrap();

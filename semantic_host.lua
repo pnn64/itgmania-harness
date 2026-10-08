@@ -383,9 +383,17 @@ local function merge_actor_defs(left, right)
 	local out = {}
 	for key, value in pairs(left or {}) do out[key] = value end
 	for key, value in pairs(right or {}) do
-		if type(key) == "number" then out[#out + 1] = value else out[key] = value end
+		local first = out[key]
+		if type(first) == "function" and type(value) == "function" then
+			local second = value
+			value = function(...)
+				first(...)
+				return second(...)
+			end
+		end
+		out[key] = value
 	end
-	return setmetatable(out, actor_def_mt)
+	return setmetatable(out, getmetatable(left))
 end
 
 actor_def_mt.__concat = merge_actor_defs

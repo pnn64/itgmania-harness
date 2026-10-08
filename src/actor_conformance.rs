@@ -103,6 +103,15 @@ mod tests {
     }
 
     #[test]
+    fn definitions_use_native_fallback_concatenation() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/definition-concat.json");
+        let result = evaluate(&path).expect("native definition concatenation");
+        assert_eq!(result["script_errors"], serde_json::json!([]));
+        assert_eq!(result["diagnostics"], serde_json::json!([]));
+    }
+
+    #[test]
     fn proxy_methods_use_native_userdata() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/proxy-methods.json");
         let result = evaluate(&path).expect("native ActorProxy assertions");
