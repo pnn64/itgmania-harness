@@ -1,6 +1,6 @@
 return Def.ActorFrame{OnCommand=function(self)
 local native_sprite=self:GetChild("Image")
-local fixture_path=GAMESTATE:GetCurrentSong():GetSongDir().."fit-rect.png"
+local fixture_path=GAMESTATE:GetCurrentSong():GetSongDir():gsub("^//%?/", "").."fit-rect.png"
 for _, name in ipairs({"LoadBackground", "LoadBanner"}) do
  assert(native_sprite[name](native_sprite,fixture_path)==fixture_path, name.." returns the top argument, not self")
  assert(native_sprite:GetWidth()==64 and native_sprite:GetHeight()==32, name.." resets source frame size")

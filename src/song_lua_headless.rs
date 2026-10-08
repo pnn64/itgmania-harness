@@ -855,6 +855,12 @@ mod tests {
             .expect("native Sprite semantic control");
             assert_eq!(trace["runtime_errors"], serde_json::json!([]));
             assert_eq!(trace["dropped_events"], 0);
+            if name == "texture-path" {
+                assert!(trace["events"].as_array().expect("events").iter()
+                    .any(|event| event["operation"] == "Sprite.Load"
+                        && event["args"][0] == "song:/./fit-rect.png"),
+                    "record portable asset references without changing native Lua filenames");
+            }
         }
     }
 

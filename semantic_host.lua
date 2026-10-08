@@ -939,6 +939,11 @@ local function actor_call(actor, name, ...)
 	end
 	if name:match("^Is") or name:match("^Has") then return false end
 
+	-- Trace asset references are portable; the Lua call still uses its filename.
+	if actor.class == "Sprite" and type((...)) == "string"
+		and (name == "Load" or name == "LoadBackground" or name == "LoadBanner") then
+		args[1] = source_path((...))
+	end
 	local event = emit("call", actor, event_operation(actor, name), args)
 	if name == "SetUpdateFunction" then
 		actor.update_fn = (...)
