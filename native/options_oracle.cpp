@@ -62,6 +62,10 @@ int update_options(lua_State* L) {
     state->players[player].Assign(ModsLevel_Song, options);
     return 0;
   }
+  // OPTIONAL_RETURN_SELF tests original_top. Index zero is not a valid Lua
+  // argument; use the equivalent explicit-nil native getter to avoid reading
+  // a stale slot outside the argument stack after a successful skin setter.
+  if (method == "NoteSkin" && lua_gettop(L) == 0) lua_pushnil(L);
   return call_option(&state->players[player].GetSong(), L, method, player_methods);
 }
 
@@ -97,6 +101,43 @@ void install_option_queries(lua_State* L) {
   lua_pushvalue(L, -1);
   lua_pushcclosure(L, update_options, 1);
   lua_setglobal(L, "_ITG_OPTIONS_UPDATE");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const int player = static_cast<int>(luaL_checkinteger(L, 1));
+    if (player < 0 || player > 1) return luaL_error(L, "invalid player");
+    std::vector<std::string> parts;
+    split(luaL_checkstring(L, 2), ",", parts, true);
+    lua_newtable(L);
+    int index = 0;
+    for (std::string part : parts) {
+      Trim(part);
+      std::string lower = part;
+      MakeLower(lower);
+      std::vector<std::string> words;
+      split(lower, " ", words, true);
+      if (words.empty()) continue;
+      const std::string& key = words.back();
+      // Unrelated tokens need no skin probe. In particular, do not execute
+      // ChooseRandomModifiers a second time through a query on a copy.
+      const bool named = NOTESKIN->DoesNoteSkinExist(key);
+      if (key == "random" && !named) continue;
+      if (key != "clearall" && key != "noteskin" && !named &&
+          !NOTESKIN->DoesNoteSkinExist(lower)) continue;
+      PlayerOptions probe = state->players[player].GetSong();
+      // A copy with an impossible skin distinguishes the native skin branch
+      // from a same-name numeric modifier without mutating live options.
+      probe.m_sNoteSkin = "\1harness-skin-probe";
+      probe.FromString(part);
+      if (probe.m_sNoteSkin == "\1harness-skin-probe") continue;
+      lua_newtable(L);
+      LuaHelpers::Push(L, part); lua_setfield(L, -2, "part");
+      LuaHelpers::Push(L, probe.m_sNoteSkin); lua_setfield(L, -2, "target");
+      lua_rawseti(L, -2, ++index);
+    }
+    return 1;
+  }, 1);
+  lua_setglobal(L, "_ITG_OPTIONS_SKINS");
   lua_pushvalue(L, -1);
   lua_pushcclosure(L, [](lua_State* L) -> int {
     auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));

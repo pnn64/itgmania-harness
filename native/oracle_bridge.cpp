@@ -6,6 +6,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -14,9 +15,12 @@
 #include <vector>
 
 #include "Font.h"
+#include "CubicSpline.h"
 #include "BackgroundUtil.h"
 #include "Game.h"
+#include "GameState.h"
 #include "GameConstantsAndTypes.h"
+#include "MessageManager.h"
 #include "NoteData.h"
 #include "NoteTypes.h"
 #include "NotesLoaderSM.h"
@@ -56,6 +60,167 @@ constexpr uint8_t kSongLuaMagic[] = {'I', 'T', 'G', 'S', 'L', 'U', 'A', 0};
 constexpr uint32_t kSongLuaWireVersion = 2;
 constexpr uint8_t kSongLuaSemanticMagic[] = {'I', 'T', 'G', 'S', 'E', 'M', 0, 0};
 constexpr uint32_t kSongLuaSemanticWireVersion = 2;
+
+// MessageManager orders its std::set by native subscriber identity, not by
+// actor-tree position. Lua actors live in a separate VM from global LUA, so
+// keep their callbacks and parameter tables in that VM's registry. The linked
+// manager still owns subscription lookup and delivery order.
+class SongLuaMessages {
+ public:
+  explicit SongLuaMessages(lua_State* state) : state_(state) {}
+  ~SongLuaMessages() { Clear(); }
+
+  void Clear() { subscribers_.clear(); }
+
+  void Install() {
+    Closure(Register, "_ITG_MESSAGE_REGISTER");
+    Closure(Subscribe, "_ITG_MESSAGE_SUBSCRIBE");
+    Closure(Check, "_ITG_MESSAGE_CHECK");
+    Closure(Broadcast, "_ITG_MESSAGE_BROADCAST");
+    Closure(Rank, "_ITG_MESSAGE_RANK");
+  }
+
+ private:
+  struct Dispatch {
+    int params;
+    std::string error;
+  };
+
+  class Subscriber : public MessageSubscriber {
+   public:
+    Subscriber(SongLuaMessages& owner, int actor, int callback)
+        : owner_(owner), actor_(actor), callback_(callback) {}
+    ~Subscriber() override {
+      UnsubscribeAll();
+      luaL_unref(owner_.state_, LUA_REGISTRYINDEX, actor_);
+      luaL_unref(owner_.state_, LUA_REGISTRYINDEX, callback_);
+    }
+
+    void HandleMessage(const Message& message) override {
+      lua_State* L = owner_.state_;
+      const int top = lua_gettop(L);
+      lua_rawgeti(L, LUA_REGISTRYINDEX, callback_);
+      lua_rawgeti(L, LUA_REGISTRYINDEX, actor_);
+      const std::string name = message.GetName();
+      lua_pushlstring(L, name.data(), name.size());
+      if (owner_.dispatch_ && owner_.dispatch_->params != LUA_REFNIL) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, owner_.dispatch_->params);
+      } else {
+        lua_pushnil(L);
+      }
+      // Never longjmp out of MessageManager's locked native iteration.
+      if (lua_pcall(L, 3, 0, 0) != 0 && owner_.dispatch_) {
+        const char* error = lua_tostring(L, -1);
+        owner_.dispatch_->error = error ? error : "native message callback failed";
+      }
+      lua_settop(L, top);
+    }
+
+   private:
+    SongLuaMessages& owner_;
+    int actor_, callback_;
+  };
+
+  static SongLuaMessages& Owner(lua_State* L) {
+    return *static_cast<SongLuaMessages*>(lua_touserdata(L, lua_upvalueindex(1)));
+  }
+
+  void Closure(lua_CFunction function, const char* name) {
+    lua_pushlightuserdata(state_, this);
+    lua_pushcclosure(state_, function, 1);
+    lua_setglobal(state_, name);
+  }
+
+  Subscriber& Get(lua_State* L, int index) {
+    const int token = luaL_checkint(L, index);
+    if (token < 1 || static_cast<size_t>(token) > subscribers_.size()) {
+      luaL_error(L, "invalid native message subscriber");
+    }
+    return *subscribers_[static_cast<size_t>(token - 1)];
+  }
+
+  static int Register(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    auto& owner = Owner(L);
+    lua_pushvalue(L, 1);
+    const int actor = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_pushvalue(L, 2);
+    const int callback = luaL_ref(L, LUA_REGISTRYINDEX);
+    owner.subscribers_.push_back(std::make_unique<Subscriber>(owner, actor, callback));
+    lua_pushinteger(L, owner.subscribers_.size());
+    return 1;
+  }
+
+  static int Subscribe(lua_State* L) {
+    auto& subscriber = Owner(L).Get(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    if (!MESSAGEMAN->IsSubscribedToMessage(&subscriber, name)) {
+      subscriber.SubscribeToMessage(name);
+    }
+    return 0;
+  }
+
+  std::string Send(const char* name, int params) {
+    Dispatch current{params, {}};
+    Dispatch* previous = dispatch_;
+    dispatch_ = &current;
+    try {
+      Message message(name);
+      MESSAGEMAN->Broadcast(message);
+    } catch (...) {
+      dispatch_ = previous;
+      luaL_unref(state_, LUA_REGISTRYINDEX, params);
+      throw;
+    }
+    dispatch_ = previous;
+    luaL_unref(state_, LUA_REGISTRYINDEX, params);
+    return current.error;
+  }
+
+  static void CheckArgs(lua_State* L) {
+    if (!lua_istable(L, 2) && !lua_isnoneornil(L, 2)) {
+      luaL_typerror(L, 2, "table or nil");
+    }
+    luaL_checkstring(L, 1);
+  }
+
+  static int Check(lua_State* L) {
+    CheckArgs(L);
+    lua_pushvalue(L, 1);
+    return 1;
+  }
+
+  static int Broadcast(lua_State* L) {
+    CheckArgs(L);
+    const char* name = lua_tostring(L, 1);
+    lua_settop(L, 2);
+    lua_pushvalue(L, 2);
+    const int params = luaL_ref(L, LUA_REGISTRYINDEX);
+    bool failed;
+    {
+      const std::string error = Owner(L).Send(name, params);
+      failed = !error.empty();
+      if (failed) lua_pushlstring(L, error.data(), error.size());
+    }
+    return failed ? lua_error(L) : 0;
+  }
+
+  static int Rank(lua_State* L) {
+    auto& owner = Owner(L);
+    const IMessageSubscriber* subscriber = &owner.Get(L, 1);
+    size_t rank = 1;
+    for (const auto& other : owner.subscribers_) {
+      if (std::less<const IMessageSubscriber*>{}(other.get(), subscriber)) ++rank;
+    }
+    lua_pushinteger(L, rank);
+    return 1;
+  }
+
+  lua_State* state_;
+  std::vector<std::unique_ptr<Subscriber>> subscribers_;
+  Dispatch* dispatch_ = nullptr;
+};
 
 uint32_t wire_len(size_t len, const char* field) {
   if (len > std::numeric_limits<uint32_t>::max()) {
@@ -486,8 +651,18 @@ class CurrentPathGuard {
 
 class NoteSkinGlobalGuard {
  public:
-  explicit NoteSkinGlobalGuard(NoteSkinManager* manager) { NOTESKIN = manager; }
-  ~NoteSkinGlobalGuard() { NOTESKIN = nullptr; }
+  explicit NoteSkinGlobalGuard(NoteSkinManager* manager, const Game* game = nullptr)
+      : previous_skin_(NOTESKIN), previous_game_(GAMESTATE->m_pCurGame.Get()) {
+    NOTESKIN = manager;
+    if (game) GAMESTATE->m_pCurGame.SetWithoutBroadcast(game);
+  }
+  ~NoteSkinGlobalGuard() {
+    NOTESKIN = previous_skin_;
+    GAMESTATE->m_pCurGame.SetWithoutBroadcast(previous_game_);
+  }
+ private:
+  NoteSkinManager* previous_skin_;
+  const Game* previous_game_;
 };
 
 void write_segment(Writer& out, const TimingSegment& segment) {
@@ -933,6 +1108,9 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     size_t host_len) {
   const std::lock_guard<std::mutex> guard(harness_native_mutex());
   lua_State* state = nullptr;
+  std::unique_ptr<SongLuaMessages> messages;
+  // Borrowed Lua handles never outlive their semantic session, including errors.
+  std::vector<std::unique_ptr<CubicSplineN>> splines;
   try {
     if (request_data == nullptr || host == nullptr) {
       return song_lua_semantic_error_buffer(
@@ -952,6 +1130,8 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       return song_lua_semantic_error_buffer("could not create Lua state");
     }
     luaL_openlibs(state);
+    messages = std::make_unique<SongLuaMessages>(state);
+    messages->Install();
     harness_register_lua_globals(state);
     push_song_lua_semantic_request(state, request);
     install_song_io(state, request.song_dir);
@@ -1022,9 +1202,36 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     // PlayerOptions::FromOneModString uses NOTESKIN for clearall and skin
     // validation. Keep its native manager alive for the whole Lua session.
     NoteSkinManager option_skins;
-    NoteSkinGlobalGuard option_skin_global(&option_skins);
+    Game option_game{};
+    option_game.m_szName = "dance";
+    NoteSkinGlobalGuard option_skin_global(&option_skins, &option_game);
+    lua_pushlightuserdata(state, &option_skins);
+    lua_pushcclosure(state, [](lua_State* L) -> int {
+      auto* manager = static_cast<NoteSkinManager*>(lua_touserdata(L, lua_upvalueindex(1)));
+      const std::filesystem::path root = std::filesystem::canonical(luaL_checkstring(L, 1));
+      CurrentPathGuard current_path(root.parent_path());
+      manager->RefreshNoteSkinData(GAMESTATE->m_pCurGame);
+      const std::string skin = luaL_checkstring(L, 2);
+      if (!manager->DoesNoteSkinExist(skin)) return luaL_error(L, "native noteskin unavailable: %s", skin.c_str());
+      manager->SetCurrentNoteSkin(skin);
+      return 0;
+    }, 1);
+    lua_setglobal(state, "_ITG_INIT_NOTESKIN");
     install_option_queries(state);
     install_actor_math(state);
+    lua_pushlightuserdata(state, &splines);
+    lua_pushcclosure(state, [](lua_State* L) -> int {
+      auto& owned = *static_cast<std::vector<std::unique_ptr<CubicSplineN>>*>(
+          lua_touserdata(L, lua_upvalueindex(1)));
+      auto spline = std::make_unique<CubicSplineN>();
+      // NCSplineHandler's constructor initializes three axes and actor ownership.
+      spline->redimension(3);
+      spline->m_owned_by_actor = true;
+      owned.push_back(std::move(spline));
+      owned.back()->PushSelf(L);
+      return 1;
+    }, 1);
+    lua_setglobal(state, "_ITG_SPLINE_NEW");
     // Actor's Lua color methods share this parser, including legacy RGBA
     // arguments, raw table reads and conversion to the engine's float type.
     lua_pushcfunction(state, [](lua_State* L) -> int {
@@ -1178,6 +1385,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
         "@semantic_host.lua");
     if (load_status != 0) {
       const std::string message = lua_error_text(state);
+      messages.reset();
       lua_close(state);
       state = nullptr;
       return song_lua_semantic_error_buffer(message);
@@ -1185,6 +1393,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     const int call_status = lua_pcall(state, 0, 1, 0);
     if (call_status != 0) {
       const std::string message = lua_error_text(state);
+      messages.reset();
       lua_close(state);
       state = nullptr;
       return song_lua_semantic_error_buffer(message);
@@ -1192,6 +1401,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     size_t json_len = 0;
     const char* json = lua_tolstring(state, -1, &json_len);
     if (json == nullptr) {
+      messages.reset();
       lua_close(state);
       state = nullptr;
       return song_lua_semantic_error_buffer(
@@ -1199,6 +1409,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     }
     // Custom hosts may still return their JSON directly.
     if (document.empty()) document.assign(json, json_len);
+    messages.reset();
     lua_close(state);
     state = nullptr;
     Writer out;
@@ -1206,6 +1417,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     out.string(document);
     return out.release();
   } catch (const std::exception& error) {
+    messages.reset();
     if (state != nullptr) lua_close(state);
     try {
       return song_lua_semantic_error_buffer(error.what());
@@ -1213,6 +1425,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       return {nullptr, 0};
     }
   } catch (...) {
+    messages.reset();
     if (state != nullptr) lua_close(state);
     try {
       return song_lua_semantic_error_buffer(
@@ -1382,7 +1595,7 @@ extern "C" ItgOracleBuffer itg_oracle_load_noteskin(
     Game native_game{};
     native_game.m_szName = game_name.c_str();
     NoteSkinManager manager;
-    NoteSkinGlobalGuard global(&manager);
+    NoteSkinGlobalGuard global(&manager, &native_game);
     manager.RefreshNoteSkinData(&native_game);
     const std::vector<std::string> load_diagnostics =
         harness_take_diagnostics();

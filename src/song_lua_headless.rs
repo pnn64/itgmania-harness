@@ -81,7 +81,12 @@ pub struct Context<'a> {
 
 pub fn evaluate(entries: &[Entry], context: &Context<'_>) -> Result<Value, Error> {
     let judgment = std::env::var_os("ITGMANIA_SONG_LUA_JUDGMENT").map(PathBuf::from);
-    evaluate_with_resources(entries, context, reference_noteskin()?, judgment.as_deref())
+    evaluate_with_resources(
+        entries,
+        context,
+        Some(reference_noteskin()?),
+        judgment.as_deref(),
+    )
 }
 
 #[cfg(test)]
@@ -140,7 +145,8 @@ fn evaluate_with_resources(
         use std::fmt::Write;
         let _ = writeln!(
             host,
-            "\n_ITG_SONG_NOTESKIN = {{ skin = {}, metrics = {{",
+            "\n_ITG_SONG_NOTESKIN = {{ root = {}, skin = {}, metrics = {{",
+            lua_quote(&document.noteskins_root),
             lua_quote(&document.skin)
         );
         for metric in &document.metrics {
@@ -303,10 +309,10 @@ fn normalize_noteskin_paths(
     }
 }
 
-fn reference_noteskin() -> Result<Option<crate::noteskin_oracle::Document>, Error> {
-    let Some(root) = std::env::var_os("ITGMANIA_SONG_LUA_NOTESKIN_ROOT") else {
-        return Ok(None);
-    };
+fn reference_noteskin() -> Result<crate::noteskin_oracle::Document, Error> {
+    let root = std::env::var_os("ITGMANIA_SONG_LUA_NOTESKIN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("ITGMANIA_BUILD_ROOT")).join("NoteSkins"));
     let skin = std::env::var("ITGMANIA_SONG_LUA_NOTESKIN").unwrap_or_else(|_| "cyber".into());
     let mut document = crate::noteskin_baseline::probe(Path::new(&root), "dance", &skin)
         .map_err(|error| Error::Request(format!("native song noteskin: {error}")))?;
@@ -324,7 +330,7 @@ fn reference_noteskin() -> Result<Option<crate::noteskin_oracle::Document>, Erro
     )
     .map_err(|error| Error::Request(format!("native song noteskin model: {error}")))?;
     document.paths.extend(model.paths);
-    Ok(Some(document))
+    Ok(document)
 }
 
 fn encode(entries: &[Entry], context: &Context<'_>) -> Result<Vec<u8>, Error> {
@@ -572,6 +578,82 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn broadcasts_use_native_subscribers_and_preserve_params() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("broadcast fixture folder");
+        let entry = song_dir.join("broadcast-subscribers.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Native broadcast subscribers",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.2,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 0.1,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        // Each session must unsubscribe before closing its own Lua VM. Native
+        // allocations can change order between sessions; require the observed
+        // pointer order, never a fixed parent/child result.
+        for _ in 0..4 {
+            let trace = evaluate_with_noteskin(
+                &[Entry {
+                    path: entry.clone(),
+                    layer: "foreground",
+                    index: 0,
+                    start_beat: 0.0,
+                }],
+                &context,
+                None,
+            )
+            .expect("native subscriber capture");
+            assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+            assert_eq!(trace["dropped_events"], 0);
+            assert_eq!(trace["message_dispatch"], "native-subscriber-pointer-order");
+            let actors = trace["runtime_actors"].as_array().expect("actors");
+            let external = trace["external_actors"].as_array().expect("external actors");
+            let rank = |id: &Value| {
+                actors
+                    .iter()
+                    .chain(external)
+                    .find(|actor| actor["id"] == *id)
+                    .expect("subscribed runtime actor")["message_order"]
+                    .as_u64()
+                    .expect("native pointer rank")
+            };
+            let dispatches = trace["message_dispatches"]
+                .as_array()
+                .expect("native dispatches");
+            assert_eq!(dispatches.iter().filter(|dispatch| dispatch["name"] == "Go").count(), 1,
+                "rejected calls must not enter the broadcast trace");
+            let go = dispatches
+                .iter()
+                .find(|dispatch| dispatch["name"] == "Go")
+                .expect("Go broadcast");
+            assert_eq!(go["actor_ids"].as_array().expect("Go subscribers").len(), 2);
+            for dispatch in dispatches {
+                let ids = dispatch["actor_ids"].as_array().expect("subscriber ids");
+                assert!(ids.windows(2).all(|pair| rank(&pair[0]) < rank(&pair[1])));
+                assert!(!ids.iter().any(|id| id == "def-0003"));
+            }
+            for name in ["Dynamic", "Outer", "Inner", "External", "Queued"] {
+                let dispatch = dispatches
+                    .iter()
+                    .find(|dispatch| dispatch["name"] == name)
+                    .expect("dynamic, nested or queued broadcast");
+                assert_eq!(dispatch["actor_ids"].as_array().expect("subscribers").len(), 1);
+            }
+        }
+    }
 
     #[cfg(itgmania_oracle)]
     #[test]
@@ -1170,6 +1252,46 @@ mod tests {
                 .iter()
                 .any(|actor| actor["name"] == "actor_yp")
         );
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn update_rate_validation() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("headless fixtures");
+        let entry = song_dir.join("update-rate-validation.lua");
+        let bpms = [BpmSegment {
+            beat: 0.0,
+            bpm: 60.0,
+        }];
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "update rate validation",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.5,
+            bpm: 60.0,
+            bpm_segments: &bpms,
+            beat_step: 0.25,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("native update rate validation");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
     }
 
     #[cfg(itgmania_oracle)]
@@ -1813,6 +1935,31 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn spline_storage_uses_native_bounds_and_values() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+        let entry = song_dir.join("spline-storage.lua");
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Native spline storage",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 1.0, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+            max_events: 10000, random_seed: 1,
+        };
+        let trace = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).unwrap();
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        assert_eq!(trace["capabilities"]["native_column_splines"], true);
+        let writes = trace["events"].as_array().expect("native setter events");
+        for (operation, value) in [("ActorFrame.x", -2), ("ActorFrame.y", 8)] {
+            assert!(writes.iter().any(|event| event["operation"] == operation
+                && event["args"] == serde_json::json!([value])));
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn position_splines_record_native_updates() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
@@ -2076,7 +2223,7 @@ mod tests {
                 start_beat: 0.0,
             }],
             &context,
-            reference_noteskin().expect("local reference noteskin"),
+            Some(reference_noteskin().expect("local reference noteskin")),
             Some(&graphic),
         )
         .expect("native Mawaru 9 opening");
@@ -2488,7 +2635,7 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
-    fn projected_alpha_keeps_nonfinite_kind() {
+    fn render_alpha_keeps_nonfinite_kind() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
             .canonicalize()
@@ -2528,6 +2675,18 @@ mod tests {
             .expect("projected tracks");
         assert_eq!(tracks.len(), 3);
         for (track, kind) in tracks.iter().zip(["infinity", "-infinity", "nan"]) {
+            let actor = document["runtime_actors"]
+                .as_array()
+                .expect("runtime actors")
+                .iter()
+                .find(|actor| actor["id"] == track["actor"])
+                .expect("native actor for projected track");
+            let alpha = serde_json::json!({"type": "number", "value": kind});
+            assert_eq!(actor["final_render_state"]["alpha"], alpha);
+            assert_eq!(
+                actor["render_state_samples"],
+                serde_json::json!([[0, alpha, true]])
+            );
             assert_eq!(
                 track["samples"][0][3],
                 serde_json::json!({"type": "number", "value": kind})
@@ -2604,6 +2763,50 @@ mod tests {
             2,
             "numeric setters retain their existing cadence"
         );
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn noteskin_writes_use_native_strings_on_every_frame() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("headless fixtures");
+        let entry = song_dir.join("noteskin-options.lua");
+        let bpms = [BpmSegment { beat: 0.0, bpm: 120.0 }];
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "noteskin option capture",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single",
+            description: "", max_beat: 0.25, bpm: 120.0, bpm_segments: &bpms,
+            beat_step: 0.5, max_events: 1500, random_seed: 1,
+        };
+        let trace = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).expect("native noteskin strings");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let frames = trace["update_frames"].as_array().expect("native frames");
+        assert_eq!(frames.len(), 9);
+        let writes = trace["events"].as_array().expect("native events").iter()
+            .filter(|event| event["detail"]["noteskin_option"].is_object())
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 2 + 4 * frames.len(), "retain startup and unsampled calls");
+        assert_eq!(writes[0]["detail"]["noteskin_option"]["previous"], "cyber");
+        assert_eq!(writes[0]["detail"]["noteskin_option"]["current"], "default");
+        assert_eq!(writes[1]["detail"]["noteskin_option"]["current"], "cel");
+        for (index, frame) in frames.iter().enumerate() {
+            let writes = &writes[2 + 4 * index..6 + 4 * index];
+            for write in writes {
+                assert_eq!(write["beat"], frame[0]);
+                assert_eq!(write["seconds"], frame[1]);
+            }
+            assert_eq!(writes[0]["detail"]["noteskin_option"]["previous"],
+                if index == 0 { "cel" } else { "CYBER" });
+            assert_eq!(writes[0]["detail"]["noteskin_option"]["parts"],
+                serde_json::json!([{ "part": "50% default", "target": "default" }]));
+            assert_eq!(writes[1]["detail"]["noteskin_option"]["current"], "cyber");
+            assert_eq!(writes[2]["detail"]["noteskin_option"]["current"], "CYBER");
+            assert_eq!(writes[3]["detail"]["noteskin_option"]["current"], "CYBER");
+        }
     }
 
     #[cfg(itgmania_oracle)]
@@ -2855,12 +3058,6 @@ mod tests {
     #[test]
     fn native_noteskin_templates_and_metrics_are_captured() {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let root = Path::new(env!("ITGMANIA_BUILD_ROOT"))
-            .join("NoteSkins")
-            .canonicalize()
-            .expect("bundled skins");
-        let noteskin =
-            crate::noteskin_baseline::probe(&root, "dance", "cyber").expect("native metrics");
         let song_dir = workspace
             .join("tests/fixtures/song-lua-headless")
             .canonicalize()
@@ -2884,7 +3081,7 @@ mod tests {
             max_events: 2000,
             random_seed: 1,
         };
-        let document = evaluate_with_noteskin(
+        let document = evaluate(
             &[Entry {
                 path: entry.clone(),
                 layer: "foreground",
@@ -2892,7 +3089,6 @@ mod tests {
                 start_beat: 0.0,
             }],
             &context,
-            Some(noteskin),
         )
         .expect("native noteskin trace");
         assert_eq!(document["runtime_errors"], serde_json::json!([]));
@@ -2930,6 +3126,19 @@ mod tests {
                 .iter()
                 .any(|file| file["path"] == "dance/cyber/Fallback Explosion.lua"
                     && file["sha256"].as_str().is_some_and(|hash| hash.len() == 64))
+        );
+        let missing = evaluate_with_noteskin(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+            None,
+        );
+        assert!(
+            matches!(missing, Err(Error::Native(message)) if message.contains("native noteskin resources unavailable"))
         );
     }
 

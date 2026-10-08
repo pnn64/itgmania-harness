@@ -224,6 +224,19 @@ in the fixture. Regenerate and compare the JSON oracle output from a native
 DeadSync test to isolate primitive-level parity failures before using song-wide
 traces.
 
+`broadcast-subscriber-order.json` uses native `MessageManager` dispatch with
+two subscribers writing the same child. Its final child x is exactly 1 or 2:
+ITGmania stores subscribers in a pointer-ordered set, so allocation can change
+which handler runs last. An unsubscribed actor receives no broadcast. This
+input intentionally has no single golden output. The song Lua semantic host
+uses the linked native manager with one subscriber identity per Lua actor.
+`message_order` records each identity's pointer rank, and `message_dispatches`
+records the delivered actor IDs for every broadcast, including unsampled
+updates. Parameter tables stay in the song VM so shared table identity and
+nested broadcasts survive the bridge. Allocation order is capture context,
+not a guaranteed parent/child rule. Older tree-order captures cannot establish
+parity for handlers that share mutable state.
+
 ## Font probes
 
 `font` loads a theme bitmap font through ITGmania's `Font::Load` and reports
@@ -454,6 +467,14 @@ so finite 60 Hz bookkeeping does not exhaust a whole-song quota. A runaway
 callback is terminated and recorded as a runtime error with its song beat.
 Exhaustion outside a protected callback still fails capture.
 
+Column spline objects use the linked ITGmania `CubicSplineN` implementation
+and its Lua bindings, including bounds checks, vector copies, resize defaults,
+solving, getters and evaluation. Session-owned native objects use the three
+dimensions and actor ownership set by `NCSplineHandler`; the wrapper maps
+camel aliases as `_fallback/Scripts/01 alias.lua` does. Setter traces retain
+the existing sampling cadence. This does not replace the surrounding
+headless NoteColumn actor scaffolding.
+
 The current 43-simfile corpus completes with no partial or failed entries. Each
 compact fixture contains:
 
@@ -495,7 +516,11 @@ Actor color arguments use ITGmania's `RageColor::FromStackCompat` directly.
 Legacy `diffuse(r,g,b,a)` and color tables both update one RGBA tween state;
 `diffusealpha` replaces its alpha, and `diffusecolor` changes RGB while retaining
 alpha. `GetDiffuseAlpha` reads the tween destination; projected samples read
-the current color, including ancestor alpha. Background brightness uses the
+the current color, including ancestor alpha. Harness 0.1.8 preserves NaN and
+both infinities in render-state alpha with typed number tags instead of
+JSON null. Compression compares the raw values before serialization; repeated
+NaNs do not create a spurious sample on every frame. Older captures containing
+null alpha need regeneration for exact nonfinite comparison. Background brightness uses the
 numeric 0.7 default from `Background.cpp`. Regenerate semantic fixtures after
 changing this model: previous captures discarded numeric color arguments and
 could retain stale alpha after later `diffuse` calls. Run native headless tests
@@ -844,9 +869,10 @@ diagnostics share process state. Difficulty conversion comes from ITGmania's
 `Difficulty.cpp`, including its aliases and enum strings.
 
 The minimal runtime scaffolding is owned by this project. It supplies singleton
-and unrelated link symbols only; it is not invoked as an oracle. Further
-pruning is covered by the integration corpus so unused game-application surface
-can be removed safely.
+services and application context for the linked native classes. That context
+is part of the capture contract: defaults must match the checked-out engine
+and theme before native results can establish parity. The native classes
+compute the measured behavior; unsupported services remain coverage gaps.
 
 Real simfiles use native `TimingData` for the song clock, including charts
 with only BPM segments. This matches `SongPosition` float arithmetic and
@@ -855,3 +881,38 @@ keeps global song timing separate from chart timing. These captures report
 continuous BPM fallback. Captures made before harness 0.1.5 can retain a
 double-precision clock for simple charts and should be regenerated when
 strict beat boundaries are relevant.
+
+`ActorFrame:SetUpdateRate` follows both parts of the native API: the Lua
+binding requires a numeric argument and raises for nonpositive native floats;
+the C++ setter stores only strictly positive rates. Harness 0.1.9 therefore
+preserves the existing rate for NaN, including its zero-delta startup update.
+Earlier NaN-rate captures need regeneration.
+
+Song Lua captures load the bundled Cyber noteskin through native
+`NoteSkinManager` by default. `ITGMANIA_SONG_LUA_NOTESKIN_ROOT` and
+`ITGMANIA_SONG_LUA_NOTESKIN` override its root and name. The trace pins the
+resolved metrics, Lua templates, and resource hashes. Harness 0.1.10 removes
+the placeholder sprites and zero metrics previously used when no noteskin
+root was supplied; captures that used those substitutes need regeneration.
+Missing noteskin resources produce a diagnostic error.
+Both native players select that skin through the actual `PlayerOptions`
+binding before song Lua runs. When comparing against another runtime, set
+the root to the exact resource copy that runtime consumes; optimized PNGs
+can have different hashes despite sharing Lua templates and dimensions.
+For DeadSync captures in this workspace:
+
+```powershell
+$env:ITGMANIA_SONG_LUA_NOTESKIN_ROOT = "C:/GitHub/deadsync/assets/noteskins"
+```
+
+Harness 0.1.13 retains `noteskin_option` details for `FromString`,
+`PlayerState.SetPlayerOptions`, and direct `NoteSkin` writes on every frame,
+including unsampled calls. Previous/current values come from the linked native
+getter. A copy of the native parser identifies the exact string parts that
+select skins without mutating live options or rerunning random modifiers.
+These are string settings, separate from numeric modifier targets. The native
+Common default metric and Lua theme query both use `cel` from Simply Love's
+`metrics.ini`; the initially selected profile skin can still be Cyber.
+An explicit-nil native getter avoids the optional-chaining macro's invalid
+zero argument index after setters. Older captures lack this string evidence
+and need recapture to audit noteskin changes independently.

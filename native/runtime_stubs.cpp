@@ -1570,13 +1570,25 @@ void ThemeManager::Unsubscribe(IThemeMetric* metric) {
 	metrics.erase(std::remove(metrics.begin(), metrics.end(), metric), metrics.end());
 }
 void ThemeManager::PushMetric(Lua*, const RString&, const RString&) {}
-RString ThemeManager::GetMetric(const RString&, const RString&) { return ""; }
+RString ThemeManager::GetMetric(const RString& group, const RString& name) {
+	// Simply Love/metrics.ini [Common]; this is a string metric, not an expression.
+	return group == "Common" && name == "DefaultNoteSkinName" ? "cel" : "";
+}
 int ThemeManager::GetMetricI(const RString&, const RString&) { return 0; }
 float ThemeManager::GetMetricF(const RString&, const RString&) { return 0.0f; }
 bool ThemeManager::GetMetricB(const RString&, const RString&) { return false; }
 RageColor ThemeManager::GetMetricC(const RString&, const RString&) { return RageColor(); }
 LuaReference ThemeManager::GetMetricR(const RString&, const RString&) { return LuaReference(); }
-void ThemeManager::GetMetric(const RString&, const RString&, LuaReference& out) { out.SetFromNil(); }
+void ThemeManager::GetMetric(const RString& group, const RString& name, LuaReference& out) {
+	if (group == "Common" && name == "DefaultNoteSkinName") {
+		Lua* state = LUA->Get();
+		LuaHelpers::Push(state, GetMetric(group, name));
+		out.SetFromStack(state); // luaL_ref consumes the pushed string.
+		LUA->Release(state);
+	} else {
+		out.SetFromNil();
+	}
+}
 bool ThemeManager::HasString(const RString&, const RString&) { return false; }
 RString ThemeManager::GetString(const RString&, const RString&) { return ""; }
 void ThemeManager::FilterFileLanguages(std::vector<RString>&) {}

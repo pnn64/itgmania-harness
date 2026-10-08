@@ -1,4 +1,4 @@
--- Deterministic, headless song-Lua host for the native reference harness.
+-- Headless song-Lua host for the native reference harness.
 -- The chunk is parsed and executed by ITGmania's bundled Lua 5.1 runtime.
 
 local harness = assert(_HARNESS, "missing native harness context")
@@ -34,7 +34,7 @@ local current_beat, current_seconds = 0, 0
 local current_bps, current_freeze, current_delay = harness.bpm / 60, false, false
 local capture_operations = true
 local sequence, emitted_events, dropped_events = 0, 0, 0
-local scheduled_beats, manual = {}, { frames = {}, stack = {}, actors = {} }
+local scheduled_beats, manual = {}, { frames = {}, stack = {}, actors = {}, message_dispatches = {} }
 local external_count, command_count = 0, 0
 local projected_vertex_tracks, projected_track_by_actor, projected_signature_by_actor = {}, {}, {}
 local update_frames = {}
@@ -56,6 +56,13 @@ end
 
 local song_dir = normalize(harness.song_dir)
 local reference_skin = _ITG_SONG_NOTESKIN
+if reference_skin then
+	_ITG_INIT_NOTESKIN(reference_skin.root, reference_skin.skin)
+	for player = 0, 1 do
+		local _, valid = _ITG_OPTIONS_UPDATE(player, "NoteSkin", reference_skin.skin)
+		assert(valid, "native player noteskin initialization failed")
+	end
+end
 
 local function source_path(path)
 	path = normalize(path):gsub("^@", "")
@@ -236,7 +243,7 @@ local function emit(kind, actor, operation, args, detail)
 		and operation ~= "Sprite.Load"
 		-- Boolean getter/return audits compare every write, including repeated
 		-- values. Their sequence must not use the setter sampling cadence.
-		and not (detail and detail.boolean_option)
+		and not (detail and (detail.boolean_option or detail.noteskin_option))
 		and (active_context.command == "UpdateCommand" or active_context.callback == "SetUpdateFunction"
 			or active_context.callback == "SetDrawFunction" or active_context.recurring) then
 		return
@@ -433,7 +440,7 @@ function LoadActorWithParams(path, params) return LoadActor(path, params) end
 function LoadFont(path) return Def.BitmapText { Font = tostring(path) } end
 function LoadActorForNoteSkin(button, element)
 	if reference_skin then return NOTESKIN:LoadActor(button, element) end
-	return Def.Sprite { NoteSkinButton = tostring(button), NoteSkinElement = tostring(element) }
+	error("native noteskin resources unavailable", 0)
 end
 
 local function color_component(hex, offset)
@@ -547,6 +554,7 @@ local function external_actor(path, class)
 	external_actors[#external_actors + 1] = {
 		id = actor.id, path = actor.path, name = actor.name, class = actor.class,
 	}
+	actor_by_id[actor.id] = actor
 	return setmetatable(actor, actor_mt)
 end
 
@@ -703,7 +711,7 @@ local function advance_tween(actor, delta)
 			apply_tween(actor, tween.start, tween.state, tween_percent(tween.easing, percent))
 		end
 		if beginning and tween.command then
-            if tween.command:sub(1, 1) == "!" then broadcast(tween.command:sub(2))
+            if tween.command:sub(1, 1) == "!" then broadcast(tween.command:sub(2), {})
             else run_command_tree(actor, tween.command) end
         end
 	end
@@ -728,6 +736,7 @@ local function typed_child(actor, name, class)
 	actor.children_by_name = actor.children_by_name or {}
 	local child = external_actor(actor.path .. "/" .. tostring(name), class or "ActorFrame")
 	child.parent = actor
+	if class == "Spline" and name == "GetSpline" then child.native_spline = _ITG_SPLINE_NEW() end
 	actor.children_by_name[name] = { child }
 	actor.children[#actor.children + 1] = child
 	return child
@@ -753,6 +762,16 @@ local function actor_size(actor)
 end
 
 local function actor_call(actor, name, ...)
+    if rawget(actor, "native_spline") then
+        -- _fallback's camel aliases point at these linked LunaCubicSplineN methods.
+        local native_name = name:gsub("%u", function(char) return "_" .. char:lower() end):gsub("^_", "")
+        local result = {actor.native_spline[native_name](actor.native_spline, ...)}
+        if native_name:match("^set_") or native_name == "solve" then
+            emit("call", actor, event_operation(actor, name), safe_args(...))
+            return actor
+        end
+        return unpack(result)
+    end
 	local args = safe_args(...)
 	if name == "GetName" then return actor.name or "" end
 	if name == "GetWidth" or name == "GetHeight" then
@@ -963,6 +982,8 @@ local function actor_call(actor, name, ...)
 	elseif name == "addcommand" or name == "AddCommand" then
 		local command, fn = ...
 		actor[tostring(command) .. "Command"] = fn
+		local message = tostring(command):match("^(.*)Message$")
+		if message then _ITG_MESSAGE_SUBSCRIBE(manual.ensure_message_subscriber(actor), message) end
 	elseif name == "removecommand" or name == "RemoveCommand" then
 		actor[tostring((...)) .. "Command"] = nil
 	elseif name == "stoptweening" or name == "StopTweening" then
@@ -981,9 +1002,15 @@ local function actor_call(actor, name, ...)
 	elseif name == "hibernate" then
 		actor.hibernate_seconds = _ITG_FLOAT(tonumber((...)) or 0)
 	elseif name == "SetUpdateRate" then
-		local rate = _ITG_FLOAT(tonumber((...)) or 0)
-		if rate <= 0 then error("ActorFrame:SetUpdateRate: update rate must be greater than 0") end
-		actor.update_rate = rate
+		local number = tonumber((...))
+		if number == nil then error("ActorFrame:SetUpdateRate: number expected") end
+		local rate = _ITG_FLOAT(number)
+		if rate <= 0 then
+			error(string.format("ActorFrame:SetUpdateRate(%f) Update rate must be greater than 0.", rate))
+		end
+		-- The Lua binding rejects nonpositive floats; the C++ setter stores
+		-- only rate > 0, so NaN returns without changing the existing rate.
+		if rate > 0 then actor.update_rate = rate end
 	elseif name == "linear" or name == "accelerate" or name == "decelerate" or name == "smooth" or name == "spring" then
 		begin_tween(actor, (...), name)
 	elseif name == "bouncebegin" or name == "bounceend" then
@@ -1199,6 +1226,23 @@ run_command = function(actor, name, params)
 	active_context = prior
 end
 
+function manual.dispatch_subscriber(actor, name, params)
+	if manual.active_message_dispatch then
+		local ids = manual.active_message_dispatch.actor_ids
+		ids[#ids + 1] = actor.id
+	end
+	run_command(actor, name .. "Message", params)
+end
+
+manual.ensure_message_subscriber = function(actor)
+	local subscriber = rawget(actor, "native_subscriber")
+	if not subscriber then
+		subscriber = _ITG_MESSAGE_REGISTER(actor, manual.dispatch_subscriber)
+		actor.native_subscriber = subscriber
+	end
+	return subscriber
+end
+
 run_command_tree = function(actor, name, params)
 	run_command(actor, name, params)
 	for _, child in ipairs(actor.children or {}) do
@@ -1294,6 +1338,11 @@ local function instantiate(definition, parent)
 	record.runtime_actors[#record.runtime_actors + 1] = actor.id
 	actor_by_id[actor.id] = actor
 	runtime_actors[#runtime_actors + 1] = { id = actor.id, path = actor.path, name = actor.name, definition_id = record.id, parent_id = parent and parent.id or nil }
+	local subscriber = manual.ensure_message_subscriber(actor)
+	for _, command in ipairs(record.commands) do
+		local message = command.name:match("^(.*)MessageCommand$")
+		if message then _ITG_MESSAGE_SUBSCRIBE(subscriber, message) end
+	end
 	for _, child_definition in ipairs(definition_children(definition)) do
 		if type(child_definition) == "table" then
 			local child = instantiate(child_definition, actor)
@@ -1312,11 +1361,25 @@ local function visit(actor, fn)
 end
 
 broadcast = function(name, params)
+	if type(params) == "table" and getmetatable(params) == actor_mt then
+		error("bad argument #2 to 'Broadcast' (table or nil expected, got userdata)", 0)
+	end
+	name = _ITG_MESSAGE_CHECK(name, params)
 	emit("message", nil, "MessageManager.Broadcast", safe_args(name, params))
-	for _, root in ipairs(roots) do visit(root.actor, function(actor) run_command(actor, tostring(name) .. "Message", params) end) end
+	local dispatch = { name = tostring(name), beat = current_beat, seconds = current_seconds, actor_ids = {} }
+	if #manual.message_dispatches < harness.max_events then
+		manual.message_dispatches[#manual.message_dispatches + 1] = dispatch
+	else
+		dropped_events = dropped_events + 1
+	end
+	local previous = manual.active_message_dispatch
+	manual.active_message_dispatch = dispatch
+	local ok, message = pcall(_ITG_MESSAGE_BROADCAST, name, params)
+	manual.active_message_dispatch = previous
+	if not ok then error(message, 0) end
 end
 
-MESSAGEMAN = { Broadcast = function(_, name, params) broadcast(name, params) end }
+MESSAGEMAN = { Broadcast = function(self, name, params) broadcast(name, params); return self end }
 
 local option_query_error
 local function update_native_options(options, name, ...)
@@ -1371,13 +1434,16 @@ player_options_mt.__index = function(options, name)
 			local bool_option = _ITG_PLAYER_OPTION_BOOLS[name] and name ~= "Overhead"
 			local bool_write = bool_option and count > 0 and type(select(1, ...)) == "boolean"
 			local previous = bool_write and _ITG_OPTIONS_UPDATE(self.native_index, name) or nil
+			local skin_write = name == "NoteSkin" and count > 0
+				and (type(select(1, ...)) == "string" or type(select(1, ...)) == "number")
+			local skin_before = skin_write and _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin") or nil
 			local event
 			-- A nil enum argument only queries; it may request chaining as well.
 			-- BOOL_INTERFACE only writes when its first argument is a boolean.
 			if count > 0 and select(1, ...) ~= nil and (not bool_option or type(select(1, ...)) == "boolean")
 				and (name ~= "ModTimerSetting" or select(1, ...) ~= nil) then
 				event = emit("modifier", self, self.kind .. "." .. name, safe_args(...),
-					bool_write and { boolean_option = {} } or nil)
+					bool_write and { boolean_option = {} } or skin_write and { noteskin_option = {} } or nil)
 			end
 			-- Native getters return amounts and speeds (or inactive alias nils).
 			-- Setters return previous values unless the last boolean requests chaining.
@@ -1389,6 +1455,12 @@ player_options_mt.__index = function(options, name)
 					chained = count >= 2 and type(select(2, ...)) == "boolean",
 				} }
 			end
+			if skin_write and event then
+				event.detail = { noteskin_option = {
+					previous = skin_before,
+					current = _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin"),
+				} }
+			end
 			if bool_option then
 				if count >= 2 and type(select(2, ...)) == "boolean" then return self end
 			elseif count > 0 and type(select(count, ...)) == "boolean" and select(count, ...) then return self end
@@ -1397,17 +1469,26 @@ player_options_mt.__index = function(options, name)
 		if name:match("^Get") or select("#", ...) == 0 then
 			local value = self.values[name]
 			if value ~= nil then return value end
-			if name == "NoteSkin" and reference_skin then return reference_skin.skin end
 			if self.kind == "PlayerOptions" and _ITG_PLAYER_OPTION_BOOLS[name] then return false end
 			if name == "XMod" or self.kind == "SongOptions" and name == "MusicRate" then return 1 end
 			if name == "CMod" or name == "MMod" then return nil end
 			return 0
 		end
-		local event = emit("modifier", self, self.kind .. "." .. name, safe_args(...))
+		local skin_before = self.kind == "PlayerOptions" and name == "FromString"
+			and _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin") or nil
+		local event = emit("modifier", self, self.kind .. "." .. name, safe_args(...),
+			skin_before and { noteskin_option = {} } or nil)
 		update_native_options(self, name, ...)
 		if self.kind == "PlayerOptions" and name == "FromString" then
 			local noops = indexed_option_noops(self, (...))
-			if noops and event then event.detail = { indexed_noops = noops } end
+			if event then event.detail = {
+				indexed_noops = noops,
+				noteskin_option = {
+					previous = skin_before,
+					current = _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin"),
+					parts = _ITG_OPTIONS_SKINS(self.native_index, (...)),
+				},
+			} end
 		end
 		self.values[name] = (...)
 		return self
@@ -1431,9 +1512,16 @@ player_state_mt.__index = function(state, name)
 		return _ITG_OPTIONS_UPDATE(player_options[self.player].native_index, "GetString")
 	end end
 	if name == "SetPlayerOptions" then return function(self, level, value)
-		emit("modifier", self, "PlayerState.SetPlayerOptions", safe_args(level, value))
+		local options = player_options[self.player]
+		local before = _ITG_OPTIONS_UPDATE(options.native_index, "NoteSkin")
+		local event = emit("modifier", self, "PlayerState.SetPlayerOptions", safe_args(level, value), { noteskin_option = {} })
 		player_options[self.player].values = {}
 		update_native_options(player_options[self.player], "SetPlayerOptions", value)
+		if event then event.detail = { noteskin_option = {
+			previous = before,
+			current = _ITG_OPTIONS_UPDATE(options.native_index, "NoteSkin"),
+			parts = _ITG_OPTIONS_SKINS(options.native_index, value),
+		} } end
 		return self
 	end end
 	return function(self) return self end
@@ -1654,6 +1742,7 @@ DISPLAY = {
 -- receptor Y -125/145, draw distances _screen.h*1.5/-130.
 local function theme_metric(group, name)
     if group == "Common" and name == "ScreenHeight" then return harness.screen_height end
+    if group == "Common" and name == "DefaultNoteSkinName" then return "cel" end
     if group == "ScreenGameplay" then
         -- Simply-Love-SM5/metrics.ini keeps single fields a quarter of the
         -- clamped logical width from center; double/shared fields are centered.
@@ -1746,8 +1835,8 @@ SOUND = {
 }
 NOTESKIN = {
 	LoadActorForNoteSkin = function(_, button, element) return LoadActorForNoteSkin(button, element) end,
-	GetMetricFForNoteSkin = function() return 0 end,
-	GetMetricBForNoteSkin = function() return false end,
+	GetMetricFForNoteSkin = function() error("native noteskin resources unavailable", 0) end,
+	GetMetricBForNoteSkin = function() error("native noteskin resources unavailable", 0) end,
 }
 if reference_skin then
 	local function check_skin(skin)
@@ -2751,11 +2840,22 @@ capture_operations = true
 for _, record in ipairs(runtime_actors) do
 	local actor = actor_by_id[record.id]
 	if actor then
+		record.message_order = _ITG_MESSAGE_RANK(rawget(actor, "native_subscriber"))
+		-- Keep raw floats while comparing successive frames, then encode the
+		-- native nonfinite kind before JSON would replace it with null.
+		for _, sample in ipairs(record.render_state_samples or {}) do
+			sample[2] = safe_value(sample[2], 0, {})
+		end
 		record.final_render_state = {
-			alpha = state_value(actor.state, "diffuse")[4],
+			alpha = safe_value(state_value(actor.state, "diffuse")[4], 0, {}),
 			visible = actor.state.visible ~= false,
 		}
 	end
+end
+
+for _, record in ipairs(external_actors) do
+	local subscriber = rawget(actor_by_id[record.id], "native_subscriber")
+	if subscriber then record.message_order = _ITG_MESSAGE_RANK(subscriber) end
 end
 
 local root_ids = {}
@@ -2782,6 +2882,7 @@ return json_encode({
 	oracle = "itgmania_song_lua_headless_semantic_trace",
 	arrow_timing = _ITG_TIMING_Y_OFFSET and "native" or "linear",
 	song_clock = _ITG_SONG_POSITION and "native-song-timing" or "continuous-bpm",
+	message_dispatch = "native-subscriber-pointer-order",
 	random_seed = random_seed,
 	random_generator = "ITGmania MersenneTwister",
     random_reseeds = _ITG_RANDOM_RESEEDS,
@@ -2808,6 +2909,7 @@ return json_encode({
     trace_until_seconds = end_seconds,
     calendar = { year=2026, month=10, day=1, hour=12, minute=0, second=0 },
 	update_frames = update_frames,
+	message_dispatches = manual.message_dispatches,
 	capabilities = {
 		actor_definitions = true, child_layer_order = true, command_execution = true,
 		actor_method_calls = true, callback_calls = true, message_broadcasts = true,
@@ -2819,6 +2921,7 @@ return json_encode({
 		external_actor_paths = true, player_render_samples = true,
 		projected_vertex_samples = true, projected_draw_color_samples = true,
 		manual_draw_frames = true, native_multi_vertex_primitives = true,
+        native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
 		sprite_shadow_samples = true,

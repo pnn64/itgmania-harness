@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "name": "queued-message-zero-update",
+  "bpm": 60,
+  "samples": [
+    0,
+    0.016666666666666666,
+    0.03333333333333333,
+    0.05,
+    0.06666666666666667
+  ],
+  "root": {
+    "kind": "frame",
+    "name": "Scene",
+    "children": [
+      {
+        "kind": "sprite",
+        "name": "Probe",
+        "size": [
+          1,
+          1
+        ],
+        "subscriptions": [
+          "Startup",
+          "Later"
+        ],
+        "commands": {
+          "Startup": {
+            "state": {
+              "position": [
+                7,
+                0,
+                0
+              ]
+            }
+          },
+          "Later": {
+            "state": {
+              "position": [
+                13,
+                0,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "tweens": [
+      {
+        "queuemessage": "Startup"
+      },
+      {
+        "type": "sleep",
+        "duration": 0.05
+      },
+      {
+        "queuemessage": "Later"
+      }
+    ]
+  }
+}
