@@ -18,6 +18,7 @@ const ITG_SOURCES: &[&str] = &[
     "src/NoteData.cpp",
     "src/NoteDataUtil.cpp",
     "src/TimingData.cpp",
+    "src/SongPosition.cpp",
     "src/TimingSegments.cpp",
     "src/Steps.cpp",
     "src/StepParityGenerator.cpp",

@@ -1552,6 +1552,30 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn public_music_seconds_matches_native_binding() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("native music clock fixtures");
+        for name in ["song-position-positive", "song-position-negative"] {
+            let simfile = song_dir.join(format!("{name}.sm"));
+            let context = Context {
+                simfile: &simfile, song_dir: &song_dir, title: name,
+                difficulty: "Difficulty_Challenge", steps_type: "dance-single",
+                description: "clock", max_beat: 2.0, bpm: 60.0,
+                bpm_segments: &[], beat_step: 0.25, max_events: 10000, random_seed: 1,
+            };
+            let trace = evaluate_with_noteskin(&[Entry {
+                path: song_dir.join(format!("{name}.lua")), layer: "foreground",
+                index: 0, start_beat: 0.0,
+            }], &context, None).expect("native SongPosition capture");
+            assert_eq!(trace["runtime_errors"], serde_json::json!([]), "{name}");
+            assert_eq!(trace["dropped_events"], 0);
+            assert_eq!(trace["update_frames"].as_array().expect("native frames").len(), 121);
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn song_clock_uses_global_pauses() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

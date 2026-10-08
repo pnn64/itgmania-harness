@@ -882,6 +882,15 @@ continuous BPM fallback. Captures made before harness 0.1.5 can retain a
 double-precision clock for simple charts and should be regenerated when
 strict beat boundaries are relevant.
 
+Harness 0.1.17 also compiles `SongPosition.cpp` and calls its actual Lua
+binding for `GetMusicSeconds`, `GetMusicSecondsVisible`, and
+`GAMESTATE:GetCurMusicSeconds`. These APIs return the native float song music
+timestamp, including its beat-zero offset, while trace timestamps remain
+relative to beat zero. Native captures report
+`song_position: native-music-seconds`. Older captures used trace elapsed time
+for these getters and must be regenerated to verify their behavior. Synthetic
+actor-only captures explicitly report `synthetic-music-seconds`.
+
 `ActorFrame:SetUpdateRate` follows both parts of the native API: the Lua
 binding requires a numeric argument and raises for nonpositive native floats;
 the C++ setter stores only strictly positive rates. Harness 0.1.9 therefore

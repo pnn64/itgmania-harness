@@ -34,6 +34,7 @@
 #include "RageSoundReader_Vorbisfile.h"
 #include <cstdlib>
 #include "Song.h"
+#include "SongPosition.h"
 #include "Steps.h"
 #include "TimingData.h"
 #include "TimingSegments.h"
@@ -1111,6 +1112,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
   std::unique_ptr<SongLuaMessages> messages;
   // Borrowed Lua handles never outlive their semantic session, including errors.
   std::vector<std::unique_ptr<CubicSplineN>> splines;
+  SongPosition native_position;
   try {
     if (request_data == nullptr || host == nullptr) {
       return song_lua_semantic_error_buffer(
@@ -1336,6 +1338,18 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
         return 4;
       }, 1);
       lua_setglobal(state, "_ITG_SONG_POSITION");
+      lua_pushlightuserdata(state, song_timing);
+      lua_pushlightuserdata(state, &native_position);
+      lua_pushcclosure(state, [](lua_State* L) -> int {
+        auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));
+        auto* position = static_cast<SongPosition*>(lua_touserdata(L, lua_upvalueindex(2)));
+        const float music_seconds = static_cast<float>(luaL_checknumber(L, 1)) +
+                                    timing->GetElapsedTimeFromBeat(0.0f);
+        position->UpdateSongPosition(music_seconds, *timing);
+        position->PushSelf(L);
+        return 1;
+      }, 2);
+      lua_setglobal(state, "_ITG_NATIVE_SONG_POSITION");
       lua_pushlightuserdata(state, song_timing);
       lua_pushcclosure(state, [](lua_State* L) -> int {
         auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));

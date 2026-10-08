@@ -39,6 +39,10 @@ extern "C" {
 #include "GameLoop.h"
 #include "ImageCache.h"
 #include "LightsManager.h"
+
+// LightsManager.cpp defaults to 0.05 seconds. SongPosition itself remains
+// compiled from the reference implementation.
+Preference<float> g_fLightsAheadSeconds("LightsAheadSeconds", 0.05f);
 #include "Sprite.h"
 #include "LocalizedString.h"
 #include "TechCounts.h"

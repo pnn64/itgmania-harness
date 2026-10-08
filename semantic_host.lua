@@ -1540,15 +1540,26 @@ local player_states = {
 	PLAYER_2 = setmetatable({ id = "player-state:PLAYER_2", path = "player-state:PLAYER_2", player = "PLAYER_2" }, player_state_mt),
 }
 
+do
+local function music_seconds(visible)
+    -- Call the compiled SongPosition Lua binding. Trace timestamps remain
+    -- relative to beat zero; this public API uses the native music timestamp.
+    if not _ITG_NATIVE_SONG_POSITION then return _ITG_FLOAT(current_seconds) end
+    local native = _ITG_NATIVE_SONG_POSITION(current_seconds)
+    if visible then return native:GetMusicSecondsVisible() end
+    return native:GetMusicSeconds()
+end
+
 song_position = {
 	GetSongBeat = function() return _ITG_FLOAT(current_beat) end,
 	GetSongBeatVisible = function() return _ITG_FLOAT(current_beat) end,
-	GetMusicSeconds = function() return current_seconds end,
-	GetMusicSecondsVisible = function() return current_seconds end,
+	GetMusicSeconds = function() return music_seconds(false) end,
+	GetMusicSecondsVisible = function() return music_seconds(true) end,
 	GetCurBPS = function() return current_bps end,
 	GetFreeze = function() return current_freeze end,
 	GetDelay = function() return current_delay end,
 }
+end
 
 local timing_data = {
 	GetBeatFromElapsedTime = function(_, seconds) return seconds * harness.bpm / 60 end,
@@ -1657,7 +1668,7 @@ GAMESTATE = {
 		return _ITG_USING_MODIFIER(player_key(player) == "PLAYER_2" and 1 or 0, modifier)
 	end,
 	GetSongBeat = function() return song_position:GetSongBeat() end,
-	GetCurMusicSeconds = function() return current_seconds end,
+	GetCurMusicSeconds = function() return song_position:GetMusicSeconds() end,
 	GetSongPosition = function() return song_position end,
 	GetSongBPS = function() return current_bps end,
 	GetCurBPS = function() return current_bps end,
@@ -2898,6 +2909,7 @@ return json_encode({
 	oracle = "itgmania_song_lua_headless_semantic_trace",
 	arrow_timing = _ITG_TIMING_Y_OFFSET and "native" or "linear",
 	song_clock = _ITG_SONG_POSITION and "native-song-timing" or "continuous-bpm",
+	song_position = _ITG_NATIVE_SONG_POSITION and "native-music-seconds" or "synthetic-music-seconds",
 	message_dispatch = "native-subscriber-pointer-order",
 	wrapper_effects = "native-draw-stack",
 	random_seed = random_seed,
