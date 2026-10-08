@@ -544,10 +544,12 @@ local actor_mt = { classes = {
     native = {
         Actor = Actor, ActorFrame = ActorFrame, ActorFrameTexture = ActorFrameTexture,
         ActorMultiVertex = ActorMultiVertex, Sprite = Sprite,
+        ActorProxy = ActorProxy,
     },
     bases = {
         ActorFrame = "Actor", ActorFrameTexture = "ActorFrame",
         ActorMultiVertex = "Actor", Sprite = "Actor",
+        ActorProxy = "Actor",
     },
 } }
 
@@ -792,6 +794,13 @@ local function actor_call(actor, name, ...)
         return unpack(result)
     end
 	local args = safe_args(...)
+	if name == "GetTarget" and actor.class == "ActorProxy" then return actor.state.target end
+	if name == "SetTarget" and actor.class == "ActorProxy" then
+		local target = (...)
+		if type(target) ~= "table" or not rawget(target, "__actor") then
+			error("ActorProxy.SetTarget requires an Actor")
+		end
+	end
 	if name == "GetName" then return actor.name or "" end
 	if name == "GetWidth" or name == "GetHeight" then
 		local width, height = actor_size(actor)

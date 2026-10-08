@@ -772,6 +772,35 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn proxy_methods_match_native() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("native proxy fixtures");
+        let entry = song_dir.join("proxy-methods.lua");
+        let native_input: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("fixtures/actors/proxy-methods.json"))
+                .expect("native proxy input"),
+        ).expect("native proxy JSON");
+        assert_eq!(std::fs::read_to_string(&entry).expect("semantic proxy assertions").replace("\r\n", "\n"),
+            native_input["lua_assertions"].as_str().expect("native proxy assertions"));
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Native proxy methods",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 4.0, bpm: 120.0, bpm_segments: &[], beat_step: 0.25,
+            max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context, None).expect("native proxy semantic control");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/proxy-methods.json"))
+            .expect("same assertions on native userdata");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn loads_relative_actor_from_queued_command() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
