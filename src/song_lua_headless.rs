@@ -46,6 +46,12 @@ const THEME_HELPERS: &[(&str, &str)] = &[
 ];
 #[cfg(not(itgmania_oracle))]
 const THEME_HELPERS: &[(&str, &str)] = &[];
+#[cfg(itgmania_oracle)]
+const ACTOR_HELPERS: &str = include_str!(concat!(
+    env!("ITGMANIA_BUILD_ROOT"), "/Themes/_fallback/Scripts/02 Actor.lua"
+));
+#[cfg(not(itgmania_oracle))]
+const ACTOR_HELPERS: &str = "";
 const PLAYER_OPTION_METHODS: &str =
     include_str!(concat!(env!("OUT_DIR"), "/player_option_methods.lua"));
 
@@ -187,6 +193,15 @@ fn evaluate_with_resources(
         ));
     }
     host.push_str("}\n");
+    // Keep only declared fallback helper names; arbitrary probes must be nil.
+    host.push_str("\n_ITG_ACTOR_HELPERS = {}\n");
+    for line in ACTOR_HELPERS.lines().map(str::trim) {
+        let Some((name, _)) = line.strip_prefix("function ").and_then(|line| line.split_once('(')) else { continue };
+        let Some((class, method)) = name.split_once(':') else { continue };
+        let class = crate::song_lua_runtime::lua_quote(class);
+        let method = crate::song_lua_runtime::lua_quote(method);
+        host.push_str(&format!("_ITG_ACTOR_HELPERS[{class}] = _ITG_ACTOR_HELPERS[{class}] or {{}}\n_ITG_ACTOR_HELPERS[{class}][{method}] = true\n"));
+    }
     host.push_str(HOST);
     let response = native_eval(&request, host.as_bytes())?;
     let mut input = Reader::new(&response);
@@ -1161,7 +1176,8 @@ mod tests {
             errors[0]["message"]
                 .as_str()
                 .expect("instruction error")
-                .contains("instruction budget exhausted at beat 1")
+                .contains("instruction budget exhausted at beat 1"),
+            "{errors:?}"
         );
         assert_eq!(runaway["capabilities"]["runtime_complete"], false);
     }
@@ -1395,12 +1411,14 @@ mod tests {
         )
         .expect("native final-state trace");
         assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        let target = trace["runtime_actors"].as_array().expect("runtime actors")
+            .iter().find(|actor| actor["name"] == "FinalState").expect("final-state Quad");
         assert_eq!(
-            trace["runtime_actors"][0]["final_render_state"],
+            target["final_render_state"],
             serde_json::json!({ "alpha": 0, "visible": false })
         );
         assert_eq!(
-            trace["runtime_actors"][0]["render_state_samples"],
+            target["render_state_samples"],
             serde_json::json!([[0, 1, true], [17, 0, false]])
         );
         assert_eq!(trace["update_frames"].as_array().unwrap().len(), 19);
@@ -1932,14 +1950,14 @@ mod tests {
         assert_eq!(trace["dropped_events"], 0);
         let mut checks = 0;
         for track in trace["callback_operation_tracks"].as_array().unwrap() {
-            if !matches!(track["operation"].as_str(), Some("Quad.x" | "Quad.y")) {
+            if !matches!(track["operation"].as_str(), Some("ActorFrame.x" | "ActorFrame.y")) {
                 continue;
             }
             for sample in track["samples"].as_array().unwrap() {
                 let beat = sample[1].as_f64().unwrap();
                 let expected = if beat < 1.0 {
                     0.0
-                } else if track["operation"] == "Quad.y" {
+                } else if track["operation"] == "ActorFrame.y" {
                     ((beat.min(3.0) - 1.0) * 60.0).round() + 1.0
                 } else {
                     let (from, to) = if track["actor"] == "def-0002" {
@@ -2420,7 +2438,7 @@ mod tests {
         for (call, expected) in alphas.iter().zip([0.4, 0.8]) {
             assert!((call["args"][0].as_f64().unwrap() - expected).abs() < 1e-6);
         }
-        for (operation, expected) in [("ActorFrame.skewx", 0.25), ("Quad.rotationz", 15.0)] {
+        for (operation, expected) in [("Player.skewx", 0.25), ("Quad.rotationz", 15.0)] {
             let writes = calls
                 .iter()
                 .filter(|event| {
@@ -5919,6 +5937,28 @@ fn actor_lookup_matches_itg() {
     assert_eq!(trace["dropped_events"], 0);
     assert_eq!(trace["runtime_actors"].as_array().expect("song actors").len(), 5);
     assert!(trace.to_string().contains("ActorFrame.aux"));
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn actor_methods_match_itg() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/method-probes.json"))
+        .expect("actual native actor method feature probes");
+    assert_eq!(native["script_errors"], serde_json::json!([]));
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize()
+        .expect("method probe fixture folder");
+    let entry = song_dir.join("method-probes.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native method probes",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 0.25, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate(&[Entry {path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0}], &context)
+        .expect("actor method probe capture");
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
 }
 
 #[cfg(all(test, itgmania_oracle))]

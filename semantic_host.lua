@@ -538,7 +538,18 @@ lua = {
 math.mod = math.mod or math.fmod
 math.atan2 = math.atan2 or function(y, x) return math.atan(y / x) end
 
-local actor_mt = {}
+-- Keep native prototypes inside the actor metatable: Lua 5.1 limits each
+-- function to 200 locals, and the whole-song host already reaches that limit.
+local actor_mt = { classes = {
+    native = {
+        Actor = Actor, ActorFrame = ActorFrame, ActorFrameTexture = ActorFrameTexture,
+        ActorMultiVertex = ActorMultiVertex, Sprite = Sprite,
+    },
+    bases = {
+        ActorFrame = "Actor", ActorFrameTexture = "ActorFrame",
+        ActorMultiVertex = "Actor", Sprite = "Actor",
+    },
+} }
 
 local function external_actor(path, class)
 	external_count = external_count + 1
@@ -812,7 +823,6 @@ local function actor_call(actor, name, ...)
 	end
     if name == "getrotation" then return state_value(dest_state(actor), "rotationx"), state_value(dest_state(actor), "rotationy"), state_value(dest_state(actor), "rotationz") end
     if name == "GetParent" then return actor.parent end
-    if name == "GetChildAt" then return actor.children[math.floor(tonumber((...)) or 0) + 1] end
     if name == "get" and actor.class == "Sound" then return typed_child(actor, "Sound", "RageSound") end
     if name == "GetPlayerInfo" and actor.class == "Screen" then
         local player = tonumber((...)) or ((...) == "PlayerNumber_P2" and 1 or 0)
@@ -860,7 +870,7 @@ local function actor_call(actor, name, ...)
 	end
 	if name == "GetColumnActors" or name == "get_column_actors" then
 		local out = {}
-		for index = 1, column_count do out[index] = actor_child(actor, "Column" .. index) end
+		for index = 1, column_count do out[index] = typed_child(actor, "Column" .. index, "NoteColumnRenderer") end
 		return out
 	end
 	if name == "GetTexture" then
@@ -1205,8 +1215,35 @@ local function actor_call(actor, name, ...)
 	return actor
 end
 
+-- Class and instance lookups must make the same feature decision. Native C
+-- methods expect real userdata, so forward valid methods to semantic actors.
+do
+local actor_classes = actor_mt.classes
+for class, native in pairs(actor_classes.native) do
+    local methods = {}
+    actor_classes[class] = methods
+    _G[class] = methods
+    setmetatable(methods, { __index = function(_, name)
+        local base = actor_classes.bases[class]
+        local inherited = base and actor_classes[base] and actor_classes[base][name]
+        if type(inherited) == "function" then return inherited end
+        if type(native[name]) == "function" or (_ITG_ACTOR_HELPERS[class] or {})[name] then
+            local method = function(self, ...) return actor_call(self, name, ...) end
+            rawset(methods, name, method)
+            return method
+        end
+    end })
+end
+-- Quad has Sprite's Lua type (Quad.h), without a separate Lua method table.
+actor_classes.Quad = actor_classes.Sprite
+end
+
 actor_mt.__index = function(actor, name)
     if name == "Name" then return nil end
+    local methods = actor_mt.classes[actor.class]
+    if methods then return methods[name] end
+    -- Unlinked class adapters still need a source-backed registration audit.
+    if name == "GetChildAt" then return nil end
     -- These classes inherit LunaBitmapText; native ActorFrames have no GetText.
     if name == "GetText" and not (actor.class == "BitmapText" or actor.class == "RollingNumbers"
         or actor.class == "BPMDisplay" or actor.class == "HelpDisplay" or actor.class == "ActiveAttackList"
@@ -1719,7 +1756,9 @@ GAMESTATE = {
 }
 
 local top_screen = external_actor("ScreenGameplay", "Screen")
-for _, name in ipairs({ "PlayerP1", "PlayerP2", "Overlay", "Underlay", "SongBackground", "SongForeground", "In" }) do actor_child(top_screen, name) end
+for _, name in ipairs({ "PlayerP1", "PlayerP2", "Overlay", "Underlay", "SongBackground", "SongForeground", "In" }) do
+    typed_child(top_screen, name, name:match("^PlayerP[12]$") and "Player" or "ActorFrame")
+end
 -- ScreenWithMenuElements keeps In as a separate Transition child. Simply
 -- Love's in/default.lua retains its Stage/Event text after the visual lead-in
 -- ends, so explicitly drawing In during a song is not an empty operation.
@@ -1738,7 +1777,7 @@ for index, player in ipairs(tracked_players) do
 	player.state.x = is_double and harness.screen_width / 2 or fallback_player_x[index]
 	player.state.y = harness.screen_height / 2
 	if is_double and index == 2 then player.state.visible = false end
-	actor_child(player, "NoteField").state.y = 10
+	typed_child(player, "NoteField", "NoteField").state.y = 10
     -- Player::Init renames the Simply Love frame Judgment; its graphic is a
     -- Sprite named JudgmentWithOffsets. Unknown children must stay absent.
     local judgment = actor_child(player, "Judgment")
@@ -1920,7 +1959,6 @@ left, center, right = "HorizAlign_Left", "HorizAlign_Center", "HorizAlign_Right"
 top, middle, bottom = "VertAlign_Top", "VertAlign_Middle", "VertAlign_Bottom"
 align_left, align_center, align_right, align_top, align_middle, align_bottom = 0, 0.5, 1, 0, 0.5, 1
 PlayerOptions = _ITG_PLAYER_OPTION_METHODS
-ActorFrame = setmetatable({ GetChildAt = function(actor, index) return actor.children[index + 1] end }, { __index = function() return true end })
 -- Feature probes must reflect the native class bindings. In particular,
 -- ITGmania has neither SM5.2's NoteField.set_skin nor Player.SetNoteData.
 NoteField = {
@@ -2045,7 +2083,7 @@ _G.type = function(value)
     if type(value) == "table" and getmetatable(value) == actor_mt then return "userdata" end
     return type(value)
 end
-ThemeManager, GameState, Sprite = THEME, GAMESTATE, {}
+ThemeManager, GameState = THEME, GAMESTATE
 for _, helper in ipairs(_ITG_THEME_HELPERS or {}) do
     assert(loadstring(helper.source, "@theme:/_fallback/Scripts/" .. helper.name))()
 end

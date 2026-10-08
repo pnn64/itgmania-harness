@@ -25,7 +25,7 @@ local function localReader()
             values.calls = values.calls + 1
         end},
     }
-    return Def.Quad{
+    return Def.ActorFrame{
         Name = "LocalEaseTable",
         InitCommand = function(self)
             self:zoomto(10, 10)
@@ -37,7 +37,7 @@ local function localReader()
 end
 
 return Def.ActorFrame{
-    Def.Quad{
+    Def.ActorFrame{
         Name = "GlobalEaseTable",
         InitCommand = function(self)
             self:zoomto(10, 10)

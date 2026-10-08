@@ -1,5 +1,5 @@
 local ticks = 0
-return Def.Quad {
+return Def.ActorFrame {
     InitCommand = function(self) self:zoomto(10, 10) end,
     OnCommand = function(self)
         self:queuecommand("Tick")

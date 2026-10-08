@@ -9,7 +9,8 @@ return Def.ActorFrame {
     Name = "HostBindings",
     InitCommand = function(self)
         assert(child_ready)
-        assert(self:GetChildAt(0) == self:GetChild("Child"))
+        assert(self.GetChildAt == nil and ActorFrame.GetChildAt == nil)
+        assert(self:GetChild("Child"):GetName() == "Child")
         root_ready = true
     end,
     BeginCommand = function(self)

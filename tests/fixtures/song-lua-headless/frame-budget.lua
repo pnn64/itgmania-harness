@@ -1,4 +1,4 @@
-return Def.Actor {
+return Def.ActorFrame {
     OnCommand = function(self)
         self:SetUpdateFunction(function(actor)
             local total = 0
