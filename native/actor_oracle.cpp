@@ -1166,6 +1166,7 @@ Json::Value evaluate(const Json::Value& request) {
   const uint32_t seed = request.get("random_seed", 1).asUInt();
   g_RandomNumberGenerator.seed(seed);
   const float bpm = field_number(request, "bpm", 120, "fixture");
+  const float music_origin = field_number(request, "music_origin", 0, "fixture");
   Json::Value result(Json::objectValue);
   result["schema_version"] = 1;
   result["oracle"] = "itgmania_native_actor_conformance";
@@ -1181,7 +1182,10 @@ Json::Value evaluate(const Json::Value& request) {
     const float delta = sample_time - elapsed;
     elapsed = sample_time;
     const float beat = sample_time * bpm / 60.0f;
-    Actor::SetBGMTime(sample_time, beat, sample_time, beat);
+    // GameState supplies the music timestamp, while Actor::Update receives
+    // elapsed wall time. The song offset must not change timer-clock deltas.
+    const float music_seconds = sample_time + music_origin;
+    Actor::SetBGMTime(music_seconds, beat, music_seconds, beat);
     Actor::SetPlayerBGMBeat(PLAYER_1, beat, beat);
     Actor::SetPlayerBGMBeat(PLAYER_2, beat, beat);
     root->Update(delta);
@@ -1275,6 +1279,13 @@ class HibernateStep final : public Actor {
 
 class EffectMath final : public Actor {
  public:
+  float spin_delta(float delta) {
+    // A global music clock can produce a negative effect delta on its first
+    // update. It is not a negative wall-time delta for Actor::Update.
+    Actor::UpdateInternal(delta);
+    return GetRotationZ();
+  }
+
   TweenState sample_state(float units) {
     m_fSecsIntoEffect = units;
     PreDraw();
@@ -1536,11 +1547,10 @@ void install_actor_math(lua_State* state) {
   }));
   lua_setglobal(state, "_ITG_ACTOR_COLORS");
   lua_pushcfunction(state, ([](lua_State* L) -> int {
-    Actor actor;
+    EffectMath actor;
     actor.SetRotationZ(static_cast<float>(luaL_checknumber(L, 1)));
     actor.SetEffectSpin(RageVector3(0, 0, static_cast<float>(luaL_checknumber(L, 2))));
-    actor.Update(static_cast<float>(luaL_checknumber(L, 3)));
-    lua_pushnumber(L, actor.GetRotationZ());
+    lua_pushnumber(L, actor.spin_delta(static_cast<float>(luaL_checknumber(L, 3))));
     return 1;
   }));
   lua_setglobal(state, "_ITG_SPIN_ROTATION");

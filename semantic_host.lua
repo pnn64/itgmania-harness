@@ -2101,7 +2101,11 @@ local function advance_actor(actor, delta)
 		local period = tonumber(actor.state.effectperiod) or 1
 		if units > period then units = _ITG_FLOAT(units - period) end
 	else
-		units = _ITG_FLOAT((clock == "bgm" or clock:find("beat", 1, true)) and current_beat or current_seconds)
+		-- GameState::UpdateSongPosition passes raw/visible music timestamps
+		-- to Actor::SetBGMTime, independently of the elapsed update delta.
+		if clock == "music" then units = song_position:GetMusicSecondsVisible()
+		elseif clock == "musicnooffset" then units = song_position:GetMusicSeconds()
+		else units = _ITG_FLOAT((clock == "bgm" or clock:find("beat", 1, true)) and current_beat or current_seconds) end
 		elapsed = _ITG_FLOAT(units - previous)
 	end
 	actor.state.spinclock = units
@@ -2910,6 +2914,7 @@ return json_encode({
 	arrow_timing = _ITG_TIMING_Y_OFFSET and "native" or "linear",
 	song_clock = _ITG_SONG_POSITION and "native-song-timing" or "continuous-bpm",
 	song_position = _ITG_NATIVE_SONG_POSITION and "native-music-seconds" or "synthetic-music-seconds",
+	music_effect_clock = _ITG_NATIVE_SONG_POSITION and "native-music-seconds" or "synthetic-music-seconds",
 	message_dispatch = "native-subscriber-pointer-order",
 	wrapper_effects = "native-draw-stack",
 	random_seed = random_seed,

@@ -5523,6 +5523,93 @@ fn effect_clock_getters_match_native() {
 }
 
 #[cfg(all(test, itgmania_oracle))]
+fn check_music_effect_clock(label: &str) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("music-effect-clock.lua");
+    let simfile = song_dir.join(format!("music-effect-{label}.sm"));
+    let bpms = [BpmSegment { beat: 0.0, bpm: 120.0 }];
+    let context = Context {
+        simfile: &simfile, song_dir: &song_dir, title: "Music Effect Clock",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "clock",
+        max_beat: 6.0, bpm: 120.0, bpm_segments: &bpms,
+        beat_step: 1.0 / 60.0, max_events: 10_000, random_seed: 1,
+    };
+    let trace = evaluate(&[Entry {
+        path: entry, layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    // This oracle calls the compiled Actor::Update implementation; it does not
+    // use semantic_host.lua to calculate effect time or spin rotation.
+    let native = crate::actor_conformance::evaluate(
+        &root.join(format!("fixtures/actors/music-effect-{label}.json")),
+    ).unwrap();
+    let mut checks = 0;
+    for track in trace["callback_operation_tracks"].as_array().unwrap().iter()
+        .filter(|track| track["operation"] == "Quad.xy" || track["operation"] == "Quad.z")
+    {
+        let definition = trace["actor_definitions"].as_array().unwrap().iter()
+            .find(|definition| definition["id"] == track["actor"]).unwrap();
+        for event in track["samples"].as_array().unwrap() {
+            let second = event[2].as_f64().unwrap() as f32;
+            let sample = native["samples"].as_array().unwrap().iter()
+                .find(|sample| sample["time"].as_f64().unwrap() as f32 == second).unwrap();
+            let actor = sample["actors"].as_array().unwrap().iter()
+                .find(|actor| actor["name"] == definition["name"]).unwrap();
+            let fields = if track["operation"] == "Quad.xy" {
+                vec![&actor["effect"]["seconds"], &actor["effect"]["delta"]]
+            } else {
+                vec![&actor["current"]["rotation"][2]]
+            };
+            for (index, expected) in fields.into_iter().enumerate() {
+                assert_eq!(event[3][index].as_f64(), expected.as_f64(),
+                    "{label} {} field {index} at {second}", definition["name"]);
+                checks += 1;
+            }
+        }
+    }
+    assert_eq!(checks, 1629, "retain all three fields on all 181 frames");
+    let mut vertices = 0;
+    for track in trace["projected_vertex_tracks"].as_array().unwrap() {
+        let definition = trace["actor_definitions"].as_array().unwrap().iter()
+            .find(|definition| definition["id"] == track["actor"]).unwrap();
+        if !definition["name"].as_str().unwrap_or("").starts_with("Pulse") { continue; }
+        for sample in native["samples"].as_array().unwrap() {
+            let time = sample["time"].as_f64().unwrap();
+            let actual = track["samples"].as_array().unwrap().iter()
+                .rfind(|row| row[1].as_f64().unwrap() <= time + 0.000001).unwrap();
+            let actor = sample["actors"].as_array().unwrap().iter()
+                .find(|actor| actor["name"] == definition["name"]).unwrap();
+            for corner in 0..4 {
+                for axis in 0..2 {
+                    let expected = actor["draws"][0]["vertices"][[0, 3, 2, 1][corner]]["screen"][axis]
+                        .as_f64().unwrap();
+                    let actual = actual[6][corner][axis].as_f64().unwrap();
+                    assert!((expected - actual).abs() < 0.002,
+                        "{label} {} vertex {corner}/{axis} at {time}: {expected} vs {actual}",
+                        definition["name"]);
+                    vertices += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(vertices, 4344, "retain every timer and music pulse vertex");
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn positive_music_effect_clock_matches_native() {
+    check_music_effect_clock("positive");
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn negative_music_effect_clock_matches_native() {
+    check_music_effect_clock("negative");
+}
+
+#[cfg(all(test, itgmania_oracle))]
 #[test]
 fn late_pulse_matches_native() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

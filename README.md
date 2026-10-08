@@ -933,3 +933,11 @@ BeginDraw. The trace reports wrapper_effects = native-draw-stack. Older
 captures omit these entries and must be regenerated when wrapper vibration
 is audited. The native Actor drawing regression verifies the same vibration
 envelope independently of the headless trace.
+
+Music effect clocks (`music` and `musicnooffset`) also use these native
+timestamps. Timer clocks continue to accumulate `Actor::Update` deltas.
+Captures expose `music_effect_clock: native-music-seconds`; positive and
+negative song-offset controls compare effect getters, spin rotation, and
+pulse vertices with the separately compiled `Actor::Update` oracle.
+Actor-conformance fixtures can set `music_origin` independently of elapsed
+sample time to exercise this contract.
