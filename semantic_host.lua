@@ -1237,15 +1237,21 @@ for class, native in pairs(actor_classes.native) do
     local methods = {}
     actor_classes[class] = methods
     _G[class] = methods
+    -- Luna registers own methods eagerly; they shadow inherited methods even
+    -- when the base class is overridden later by Lua.
+    for name, method in pairs(native) do
+        if type(method) == "function" then
+            methods[name] = function(self, ...) return actor_call(self, name, ...) end
+        end
+    end
+    for name in pairs(_ITG_ACTOR_HELPERS[class] or {}) do
+        if methods[name] == nil then
+            methods[name] = function(self, ...) return actor_call(self, name, ...) end
+        end
+    end
     setmetatable(methods, { __index = function(_, name)
         local base = actor_classes.bases[class]
-        local inherited = base and actor_classes[base] and actor_classes[base][name]
-        if type(inherited) == "function" then return inherited end
-        if type(native[name]) == "function" or (_ITG_ACTOR_HELPERS[class] or {})[name] then
-            local method = function(self, ...) return actor_call(self, name, ...) end
-            rawset(methods, name, method)
-            return method
-        end
+        if base then return actor_classes[base][name] end
     end })
 end
 -- Quad has Sprite's Lua type (Quad.h), without a separate Lua method table.

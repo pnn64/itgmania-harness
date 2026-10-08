@@ -834,6 +834,69 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn runtime_class_methods_match_native() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("native runtime class fixtures");
+        let entry = song_dir.join("bitmap-runtime-methods.lua");
+        let input = root.join("fixtures/actors/bitmap-runtime-methods.json");
+        let native_input: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&input).expect("native runtime class input"),
+        ).expect("native runtime class JSON");
+        let script = std::fs::read_to_string(&entry).expect("runtime class assertions")
+            .replace("\r\n", "\n");
+        let body = script.strip_suffix("\nreturn Def.ActorFrame{}\n")
+            .expect("runtime class assertion boundary");
+        assert!(native_input["lua_assertions"].as_str()
+            .expect("native runtime class assertions").ends_with(body));
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Native runtime class methods",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 4.0, bpm: 120.0, bpm_segments: &[], beat_step: 0.25,
+            max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context, None).expect("native runtime class semantic control");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let native = crate::actor_conformance::evaluate(&input)
+            .expect("runtime class assertions on native method tables");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn inherited_class_values_match_native() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("native class value fixtures");
+        let entry = song_dir.join("actor-class-values.lua");
+        let input = root.join("fixtures/actors/actor-class-values.json");
+        let native_input: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&input).expect("native class value input"),
+        ).expect("native class value JSON");
+        let body = native_input["lua_assertions"].as_str().expect("native class value assertions");
+        assert_eq!(std::fs::read_to_string(&entry).expect("semantic class value assertions")
+            .replace("\r\n", "\n"), format!("{body}\nreturn Def.ActorFrame{{}}\n"));
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Native inherited class values",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 4.0, bpm: 120.0, bpm_segments: &[], beat_step: 0.25,
+            max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context, None).expect("native inherited class value control");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let native = crate::actor_conformance::evaluate(&input)
+            .expect("same assertions on native class tables");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn loads_relative_actor_from_queued_command() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
