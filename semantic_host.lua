@@ -1207,9 +1207,11 @@ end
 
 actor_mt.__index = function(actor, name)
     if name == "Name" then return nil end
-    -- GetText belongs to LunaBitmapText and its RollingNumbers subclass.
-    -- Native Actor/ActorFrame instances do not expose the method at all.
-    if name == "GetText" and actor.class ~= "BitmapText" and actor.class ~= "RollingNumbers" then return nil end
+    -- These classes inherit LunaBitmapText; native ActorFrames have no GetText.
+    if name == "GetText" and not (actor.class == "BitmapText" or actor.class == "RollingNumbers"
+        or actor.class == "BPMDisplay" or actor.class == "HelpDisplay" or actor.class == "ActiveAttackList"
+        or actor.class == "ScoreDisplayAliveTime" or actor.class == "ScoreDisplayCalories"
+        or actor.class == "DeviceList" or actor.class == "InputList") then return nil end
 	return function(self, ...) return actor_call(self, name, ...) end
 end
 actor_mt.__tostring = function(actor) return actor.class .. ": " .. actor.path end

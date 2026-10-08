@@ -95,5 +95,60 @@
     "vendor/itgmania/src/RollingNumbers.h:11",
     "vendor/itgmania/src/LuaBinding.cpp:67-140"
   ],
-  "limits": "External screen/theme child context and generic unknown-method lookup still require separate source-based work. This control does not establish full-corpus parity."
+  "limits": "External screen/theme child context and generic unknown-method lookup still require separate source-based work. This control does not establish full-corpus parity.",
+  "bitmap_subclass_validation": {
+    "harness_version": "0.1.20",
+    "tests": {
+      "path": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass52-actor-lookup-v2.exe",
+      "sha256": "ecfd59086c107b39df6b690390ff613746376c59eb34767c07303af3f2bf95c1",
+      "results": [
+        {
+          "test": "song_lua_headless::actor_lookup_matches_itg",
+          "exit_code": 0,
+          "seconds": 1.3827674388885498,
+          "result": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 1.08s"
+          ],
+          "log_sha256": "9d941ce6dcc2a51574b9205db925851c5c73ea42bd0f121134b176226a78d253"
+        },
+        {
+          "test": "song_lua_headless::child_tables_follow_native_insertion_and_group_rules",
+          "exit_code": 0,
+          "seconds": 1.1198828220367432,
+          "result": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 1.08s"
+          ],
+          "log_sha256": "7fa36dd5467ec00601e0163b5d7f660d4cd738ac2b9fdf89b605ec40ce5df3c9"
+        },
+        {
+          "test": "actor_conformance::tests::aft_creation_uses_native_allocation_and_lua_methods",
+          "exit_code": 0,
+          "seconds": 0.0502161979675293,
+          "result": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.01s"
+          ],
+          "log_sha256": "a6ed6f9e0cf627a97846fb147d2d7e96a86ac5b1803d7a78e327f9abb2bbae3c"
+        }
+      ]
+    },
+    "sources": [
+      "vendor/itgmania/src/BPMDisplay.h:18",
+      "vendor/itgmania/src/BPMDisplay.cpp:344",
+      "vendor/itgmania/src/HelpDisplay.h:11",
+      "vendor/itgmania/src/ActiveAttackList.h:8",
+      "vendor/itgmania/src/ScoreDisplayAliveTime.h:14",
+      "vendor/itgmania/src/ScoreDisplayCalories.h:12",
+      "vendor/itgmania/src/ScreenTestInput.cpp:22-39"
+    ],
+    "positive_cases": [
+      "BitmapText",
+      "BPMDisplay",
+      "DeviceList"
+    ],
+    "negative_cases": [
+      "ActorFrame",
+      "ActorFrame child"
+    ],
+    "note": "Preserve GetText for native BitmapText subclasses; the original two lookup assertions remain unchanged."
+  }
 }

@@ -5917,7 +5917,7 @@ fn actor_lookup_matches_itg() {
         .expect("song ActorFrame lookup capture");
     assert_eq!(trace["runtime_errors"], serde_json::json!([]));
     assert_eq!(trace["dropped_events"], 0);
-    assert_eq!(trace["runtime_actors"].as_array().expect("song actors").len(), 3);
+    assert_eq!(trace["runtime_actors"].as_array().expect("song actors").len(), 5);
     assert!(trace.to_string().contains("ActorFrame.aux"));
 }
 
