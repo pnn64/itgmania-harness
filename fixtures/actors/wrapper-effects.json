@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "name": "wrapper-effects",
+  "screen": {
+    "width": 854,
+    "height": 480
+  },
+  "random_seed": 1,
+  "samples": [
+    0,
+    0.25,
+    0.5,
+    1
+  ],
+  "root": {
+    "kind": "frame",
+    "name": "Root",
+    "state": {
+      "position": [
+        100,
+        80,
+        0
+      ]
+    },
+    "effect": {
+      "type": "vibrate",
+      "magnitude": [
+        1,
+        2,
+        0
+      ]
+    },
+    "children": [
+      {
+        "kind": "sprite",
+        "name": "Wrapped",
+        "size": [
+          40,
+          20
+        ],
+        "state": {
+          "position": [
+            10,
+            5,
+            0
+          ]
+        },
+        "wrappers": [
+          {
+            "name": "Inner",
+            "effect": {
+              "type": "vibrate",
+              "magnitude": [
+                5,
+                7,
+                0
+              ]
+            }
+          },
+          {
+            "name": "Outer",
+            "effect": {
+              "type": "vibrate",
+              "magnitude": [
+                19,
+                23,
+                0
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

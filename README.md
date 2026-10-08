@@ -916,3 +916,11 @@ Common default metric and Lua theme query both use `cel` from Simply Love's
 An explicit-nil native getter avoids the optional-chaining macro's invalid
 zero argument index after setters. Older captures lack this string evidence
 and need recapture to audit noteskin changes independently.
+
+
+Harness 0.1.15 records effects from each direct wrapper in the projected
+effect chain, as Actor::Draw applies its wrapper stack through PreDraw and
+BeginDraw. The trace reports wrapper_effects = native-draw-stack. Older
+captures omit these entries and must be regenerated when wrapper vibration
+is audited. The native Actor drawing regression verifies the same vibration
+envelope independently of the headless trace.

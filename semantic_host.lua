@@ -2462,24 +2462,32 @@ local function same_sample(left, right)
 end
 
 local function actor_effect_chain(actor)
-	local effects, current = {}, actor
-	while current do
-		if current.class == "ActorFrameTexture" then break end
-		local effect = current.state.effect
-		if effect ~= nil then
-			local magnitude = current.state.effectmagnitude or { 0, 0, 0 }
-			effects[#effects + 1] = {
-				actor = current.id, mode = effect,
-				magnitude = {
-					tonumber(magnitude[1]) or 0,
-					tonumber(magnitude[2]) or 0,
-					tonumber(magnitude[3]) or 0,
-				},
-			}
-		end
-		current = rawget(current, "parent")
-	end
-	return effects
+    local effects, current = {}, actor
+    local function append_effect(state)
+        local effect = state.state.effect
+        if effect == nil then return end
+        local magnitude = state.state.effectmagnitude or { 0, 0, 0 }
+        effects[#effects + 1] = {
+            actor = state.id, mode = effect,
+            magnitude = {
+                tonumber(magnitude[1]) or 0,
+                tonumber(magnitude[2]) or 0,
+                tonumber(magnitude[3]) or 0,
+            },
+        }
+    end
+    while current do
+        if current.class == "ActorFrameTexture" then break end
+        append_effect(current)
+        -- Actor::Draw applies direct wrappers with PreDraw/BeginDraw, highest
+        -- index first. This leaf-to-root chain records that stack in reverse;
+        -- a wrapper's own wrappers are not entered by BeginDraw.
+        for _, wrapper in ipairs(rawget(current, "wrappers") or {}) do
+            append_effect(wrapper)
+        end
+        current = rawget(current, "parent")
+    end
+    return effects
 end
 
 local function sample_signature(visible, alpha, vertices, camera, effects, diffuse, glow)
@@ -2883,6 +2891,7 @@ return json_encode({
 	arrow_timing = _ITG_TIMING_Y_OFFSET and "native" or "linear",
 	song_clock = _ITG_SONG_POSITION and "native-song-timing" or "continuous-bpm",
 	message_dispatch = "native-subscriber-pointer-order",
+	wrapper_effects = "native-draw-stack",
 	random_seed = random_seed,
 	random_generator = "ITGmania MersenneTwister",
     random_reseeds = _ITG_RANDOM_RESEEDS,

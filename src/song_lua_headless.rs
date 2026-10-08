@@ -5214,6 +5214,100 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn wrapper_effects_follow_native_draw() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("headless fixtures");
+        let entry = song_dir.join("wrapper-effects.lua");
+        let bpms = [BpmSegment {
+            beat: 0.0,
+            bpm: 60.0,
+        }];
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Wrapper effects",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 1.0,
+            bpm: 60.0,
+            bpm_segments: &bpms,
+            beat_step: 0.25,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        // The real C++ Actor::Draw path must move the quad within the same
+        // summed envelope. Headless corners intentionally omit random draws.
+        let native =
+            crate::actor_conformance::evaluate(&root.join("fixtures/actors/wrapper-effects.json"))
+                .expect("linked native wrapper drawing");
+        let mut moved = false;
+        for sample in native["samples"].as_array().expect("native draw frames") {
+            let actor = sample["actors"]
+                .as_array()
+                .expect("native actors")
+                .iter()
+                .find(|actor| actor["name"] == "Wrapped")
+                .expect("wrapped native sprite");
+            let vertices = actor["draws"][0]["vertices"]
+                .as_array()
+                .expect("native quad vertices");
+            let center = vertices.iter().fold([0.0; 2], |mut center, vertex| {
+                for axis in 0..2 {
+                    center[axis] += vertex["world"][axis]
+                        .as_f64()
+                        .expect("native world coordinate")
+                        / vertices.len() as f64;
+                }
+                center
+            });
+            let offset = [center[0] - 110.0, center[1] - 85.0];
+            assert!(
+                offset[0].abs() <= 25.001 && offset[1].abs() <= 32.001,
+                "native wrapper envelope: {offset:?}"
+            );
+            moved |= offset.iter().any(|axis| axis.abs() > 0.001);
+        }
+        assert!(moved, "native PreDraw must apply wrapper vibration");
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("wrapper effect capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let tracks = trace["projected_vertex_tracks"]
+            .as_array()
+            .expect("projected actors");
+        assert_eq!(tracks.len(), 1);
+        for sample in tracks[0]["samples"].as_array().expect("projected samples") {
+            let effects = sample[8].as_array().expect("native draw effect chain");
+            let magnitudes = effects
+                .iter()
+                .filter(|effect| effect["mode"] == "vibrate")
+                .map(|effect| effect["magnitude"].clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                magnitudes,
+                vec![
+                    serde_json::json!([5, 7, 0]),
+                    serde_json::json!([19, 23, 0]),
+                    serde_json::json!([1, 2, 0])
+                ],
+                "Actor::Draw applies each direct wrapper before drawing its owner"
+            );
+        }
+    }
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn records_orthographic_geometry_and_ancestor_vibration() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
