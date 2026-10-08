@@ -1,6 +1,6 @@
 [package]
 name = "itgmania-harness-rs"
-version = "0.1.30"
+version = "0.1.31"
 edition = "2024"
 description = "Rust CLI for generating reference values with ITGmania internals"
 license = "MIT"

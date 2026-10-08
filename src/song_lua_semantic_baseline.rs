@@ -330,6 +330,12 @@ fn generate_one(
     } else {
         note_end_beat
     };
+    let last_beat = discovery.last_beat.get();
+    let max_beat = if last_beat.is_finite() {
+        max_beat.max(last_beat)
+    } else {
+        max_beat
+    };
     let max_beat = until_beat.map_or(max_beat, |minimum| max_beat.max(minimum));
     let bpm = chart.bpm.actual_max.get();
     let bpm = if bpm.is_finite() && bpm > 0.0 {
@@ -430,6 +436,8 @@ fn generate_one(
         "note_end_beat": note_end_beat,
         "specified_last_second": discovery.specified_last_second,
         "specified_last_beat": discovery.specified_last_beat,
+        "last_second": discovery.last_second,
+        "last_beat": discovery.last_beat,
         "bpm": bpm,
         "bpm_segments": bpm_segments
             .iter()

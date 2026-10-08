@@ -58,7 +58,7 @@ constexpr uint32_t kFontWireVersion = 1;
 constexpr uint8_t kNoteSkinMagic[] = {'I', 'T', 'G', 'N', 'S', 'K', 'N', 0};
 constexpr uint32_t kNoteSkinWireVersion = 1;
 constexpr uint8_t kSongLuaMagic[] = {'I', 'T', 'G', 'S', 'L', 'U', 'A', 0};
-constexpr uint32_t kSongLuaWireVersion = 2;
+constexpr uint32_t kSongLuaWireVersion = 3;
 constexpr uint8_t kSongLuaSemanticMagic[] = {'I', 'T', 'G', 'S', 'E', 'M', 0, 0};
 constexpr uint32_t kSongLuaSemanticWireVersion = 2;
 
@@ -1073,8 +1073,12 @@ extern "C" ItgOracleBuffer itg_oracle_load_song_lua(const uint8_t* path,
     out.string(song.GetSongDir());
     out.string(song.m_sMainTitle);
     song.m_SongTiming.TidyUpData(false);
+    for (Steps* steps : song.GetAllSteps()) steps->GetTimingData()->TidyUpData(false);
+    song.ReCalculateStepStatsAndLastSecond(false, false);
     out.f32(song.GetSpecifiedLastSecond());
     out.f32(song.GetSpecifiedLastBeat());
+    out.f32(song.GetLastSecond());
+    out.f32(song.GetLastBeat());
     out.u32(wire_len(change_count, "song Lua change count"));
     for (size_t index = 0; index < background_1.size(); ++index) {
       write_song_lua_change(out, 0, wire_len(index, "background index"),
@@ -1322,6 +1326,22 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       TimingData* song_timing = &timing_song.m_SongTiming;
       song_timing->TidyUpData(false);
       song_timing->PrepareLookup();
+      // Song and ScreenGameplay retain the raw second endpoint, including
+      // LASTSECONDHINT and notes from other charts. Beat/time conversion can
+      // round below it. Reach a native float timestamp at or beyond that time.
+      const float origin = song_timing->GetElapsedTimeFromBeat(0.0f);
+      const float last_second = timing_song.GetLastSecond();
+      float end_seconds = last_second - origin;
+      if (end_seconds + origin < last_second) {
+        end_seconds = std::nextafter(end_seconds, std::numeric_limits<float>::infinity());
+      }
+      lua_getglobal(state, "_HARNESS");
+      lua_newtable(state);
+      lua_field(state, "music_seconds", last_second);
+      lua_field(state, "beat", timing_song.GetLastBeat());
+      lua_field(state, "seconds", end_seconds);
+      lua_setfield(state, -2, "native_song_end");
+      lua_pop(state, 1);
       lua_pushlightuserdata(state, song_timing);
       lua_pushcclosure(state, [](lua_State* L) -> int {
         auto* timing = static_cast<TimingData*>(lua_touserdata(L, lua_upvalueindex(1)));

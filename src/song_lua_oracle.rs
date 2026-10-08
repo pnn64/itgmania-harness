@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 const MAGIC: &[u8; 8] = b"ITGSLUA\0";
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize)]
 pub struct Document {
@@ -14,6 +14,8 @@ pub struct Document {
     pub title: String,
     pub specified_last_second: RawF32,
     pub specified_last_beat: RawF32,
+    pub last_second: RawF32,
+    pub last_beat: RawF32,
     pub changes: Vec<Change>,
 }
 
@@ -89,6 +91,8 @@ fn decode(bytes: &[u8]) -> Result<Document, Error> {
     let title = input.string()?;
     let specified_last_second = input.raw_f32()?;
     let specified_last_beat = input.raw_f32()?;
+    let last_second = input.raw_f32()?;
+    let last_beat = input.raw_f32()?;
     let count = input.len()?;
     let mut changes = Vec::with_capacity(count);
     for _ in 0..count {
@@ -121,6 +125,8 @@ fn decode(bytes: &[u8]) -> Result<Document, Error> {
         title,
         specified_last_second,
         specified_last_beat,
+        last_second,
+        last_beat,
         changes,
     })
 }

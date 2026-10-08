@@ -2954,6 +2954,9 @@ end
 local beat_step = harness.beat_step
 local previous_beat, previous_seconds, sample_beat, frame = 0, 0, 0, 0
 local end_seconds = seconds_for_beat(harness.max_beat)
+if harness.native_song_end and harness.max_beat >= harness.native_song_end.beat then
+	end_seconds = math.max(end_seconds, harness.native_song_end.seconds)
+end
 while true do
 	current_seconds = math.min(frame / UPDATE_FPS, end_seconds)
 	if _ITG_SONG_POSITION then
@@ -3083,7 +3086,9 @@ return json_encode({
 	trace_until_beat = harness.max_beat,
 	update_fps = UPDATE_FPS,
 	bpm_segments = bpm_segments,
-	end_position = { beat = current_beat, seconds = current_seconds },
+	end_position = { beat = current_beat, seconds = current_seconds,
+		music_seconds = GAMESTATE:GetSongPosition():GetMusicSeconds() },
+    native_song_end = harness.native_song_end,
     trace_until_seconds = end_seconds,
     calendar = { year=2026, month=10, day=1, hour=12, minute=0, second=0 },
 	update_frames = update_frames,

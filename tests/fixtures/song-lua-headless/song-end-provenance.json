@@ -1,0 +1,236 @@
+{
+  "reference_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+  "reference_sha256": {
+    "src/Song.cpp": "2fa0405d315ae467c49e138819552c4785f0e7f44b0211f39c2aa5422723d592",
+    "src/TimingData.cpp": "e93614b8d5c4904ed97b71b8316f64c2fefd5296fb986276b8a1225adb2738b1",
+    "src/ScreenGameplay.cpp": "45ef96f5c1a4e9aa641139704f97c7749e061d9664a9bc42bd0cd6c84f58264b",
+    "src/SongPosition.cpp": "d1b5b42d441c830c96029118d7736217134c66fb2087931e056a69814852ee78"
+  },
+  "matches_workspace_reference": true,
+  "before_executable_sha256": "6f46b9d642d5130547200143429b8c588d1c600e13c7e035b26e5774fa43636c",
+  "after_executable_sha256": "270242a70deefed1200d0c0177c2b16a9ae4209b3084a05a16a8297c361e5424",
+  "cases": [
+    {
+      "offset": 0,
+      "later_chart": false,
+      "sources_sha256": {
+        "end.ssc": "83347eb772cc4a11b12c9fad853215f45f036b13ac4b36ce1e354df6fa00b009",
+        "mods.lua": "0e72aea34c11459ae3a5a60975b09cb47779a3fcdbc8b159fafa7e83b7eff2d8"
+      },
+      "captures": {
+        "before": {
+          "trace_sha256": "ec3501507f1732613dc8524ae2734eaac61050184d4b599f9a5556cdeae6fbb5",
+          "end_position": {
+            "beat": 5,
+            "seconds": 2.5
+          },
+          "native_song_end": null,
+          "end_callback_executed": false,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\before-0\\end.ssc.semantic.json"
+        },
+        "after": {
+          "trace_sha256": "c7418ef41cc606466314bb52c07cf546579a1ebcf86dde35c16289ad73b31a22",
+          "end_position": {
+            "beat": 5.000199794769287,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.5000998973846436
+          },
+          "native_song_end": {
+            "beat": 5.000199794769287,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.5000998973846436
+          },
+          "end_callback_executed": true,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\after-0\\end.ssc.semantic.json"
+        }
+      },
+      "sources": {
+        "end.ssc": "#TITLE:Raw end;\n#BPMS:0=120;\n#OFFSET:0;\n#LASTSECONDHINT:2.5001;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n",
+        "mods.lua": "return Def.ActorFrame{\n    OnCommand=function(self)\n        self:SetUpdateFunction(function(actor)\n            if GAMESTATE:GetSongPosition():GetMusicSeconds() >= GAMESTATE:GetCurrentSong():GetLastSecond() then\n                actor:GetChild('End'):diffusealpha(0.25)\n            end\n        end)\n    end,\n    Def.Quad{Name='End'},\n}"
+      }
+    },
+    {
+      "offset": 0.125,
+      "later_chart": false,
+      "sources_sha256": {
+        "end.ssc": "ea27e01c4f9b25a19a51c05ce741dbb725134758e40df6f57f3847cc69137d49",
+        "mods.lua": "0e72aea34c11459ae3a5a60975b09cb47779a3fcdbc8b159fafa7e83b7eff2d8"
+      },
+      "captures": {
+        "before": {
+          "trace_sha256": "64fe94d8a82a9a5229f5ea1e1ed73105e4200fce40bef42a861ecf1d1b1d16d7",
+          "end_position": {
+            "beat": 5.25,
+            "seconds": 2.625
+          },
+          "native_song_end": null,
+          "end_callback_executed": false,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\before-1\\end.ssc.semantic.json"
+        },
+        "after": {
+          "trace_sha256": "a5ac9c337fc84fe372a9a7346c16950ca72b45a1b57d0f48387796718270b283",
+          "end_position": {
+            "beat": 5.250199794769287,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.6250998973846436
+          },
+          "native_song_end": {
+            "beat": 5.250199794769287,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.6250998973846436
+          },
+          "end_callback_executed": true,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\after-1\\end.ssc.semantic.json"
+        }
+      },
+      "sources": {
+        "end.ssc": "#TITLE:Raw end;\n#BPMS:0=120;\n#OFFSET:0.125;\n#LASTSECONDHINT:2.5001;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n",
+        "mods.lua": "return Def.ActorFrame{\n    OnCommand=function(self)\n        self:SetUpdateFunction(function(actor)\n            if GAMESTATE:GetSongPosition():GetMusicSeconds() >= GAMESTATE:GetCurrentSong():GetLastSecond() then\n                actor:GetChild('End'):diffusealpha(0.25)\n            end\n        end)\n    end,\n    Def.Quad{Name='End'},\n}"
+      }
+    },
+    {
+      "offset": -0.125,
+      "later_chart": false,
+      "sources_sha256": {
+        "end.ssc": "410bbf10e98c81c93e215fcad58d3393de4ad56cecf2491fd3594752d8051237",
+        "mods.lua": "0e72aea34c11459ae3a5a60975b09cb47779a3fcdbc8b159fafa7e83b7eff2d8"
+      },
+      "captures": {
+        "before": {
+          "trace_sha256": "77ef107456f50dc780a731a4fc914539d3f9385a81a80c09da7aeb860036f10e",
+          "end_position": {
+            "beat": 4.75,
+            "seconds": 2.375
+          },
+          "native_song_end": null,
+          "end_callback_executed": false,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\before-2\\end.ssc.semantic.json"
+        },
+        "after": {
+          "trace_sha256": "9e4dba0a69b9afdd90da369e90589f5b9aef9d8bcef17a30e973cb832fbd151d",
+          "end_position": {
+            "beat": 4.750199794769287,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.3750998973846436
+          },
+          "native_song_end": {
+            "beat": 4.750199794769287,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.3750998973846436
+          },
+          "end_callback_executed": true,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\after-2\\end.ssc.semantic.json"
+        }
+      },
+      "sources": {
+        "end.ssc": "#TITLE:Raw end;\n#BPMS:0=120;\n#OFFSET:-0.125;\n#LASTSECONDHINT:2.5001;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n",
+        "mods.lua": "return Def.ActorFrame{\n    OnCommand=function(self)\n        self:SetUpdateFunction(function(actor)\n            if GAMESTATE:GetSongPosition():GetMusicSeconds() >= GAMESTATE:GetCurrentSong():GetLastSecond() then\n                actor:GetChild('End'):diffusealpha(0.25)\n            end\n        end)\n    end,\n    Def.Quad{Name='End'},\n}"
+      }
+    },
+    {
+      "offset": 0.3,
+      "later_chart": false,
+      "sources_sha256": {
+        "end.ssc": "46ffaf028d30895160aaf5283ad7d47183856486a4004e6d0eb76e9cd7bbdbc9",
+        "mods.lua": "0e72aea34c11459ae3a5a60975b09cb47779a3fcdbc8b159fafa7e83b7eff2d8"
+      },
+      "captures": {
+        "before": {
+          "trace_sha256": "2a75a2712e305ee007cc3ae278094029d1a3650b9ec22bb976b19d2d226cb92b",
+          "end_position": {
+            "beat": 5.604166507720947,
+            "seconds": 2.8020832538604736
+          },
+          "native_song_end": null,
+          "end_callback_executed": true,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\before-3\\end.ssc.semantic.json"
+        },
+        "after": {
+          "trace_sha256": "fbebbc09945f68f58571fc70c99aa5c86686634f68a6b410fc5be8238c25d4b5",
+          "end_position": {
+            "beat": 5.604166507720947,
+            "music_seconds": 2.5020833015441895,
+            "seconds": 2.8020832538604736
+          },
+          "native_song_end": {
+            "beat": 5.6001996994018555,
+            "music_seconds": 2.5000998973846436,
+            "seconds": 2.8000998497009277
+          },
+          "end_callback_executed": true,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\after-3\\end.ssc.semantic.json"
+        }
+      },
+      "sources": {
+        "end.ssc": "#TITLE:Raw end;\n#BPMS:0=120;\n#OFFSET:0.3;\n#LASTSECONDHINT:2.5001;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n",
+        "mods.lua": "return Def.ActorFrame{\n    OnCommand=function(self)\n        self:SetUpdateFunction(function(actor)\n            if GAMESTATE:GetSongPosition():GetMusicSeconds() >= GAMESTATE:GetCurrentSong():GetLastSecond() then\n                actor:GetChild('End'):diffusealpha(0.25)\n            end\n        end)\n    end,\n    Def.Quad{Name='End'},\n}"
+      }
+    },
+    {
+      "offset": 0,
+      "later_chart": true,
+      "sources_sha256": {
+        "end.ssc": "27c6c73f40728c2a3963370fcb74f54625161dad3691d34e3d7e4ea3bb6c4d5f",
+        "mods.lua": "0e72aea34c11459ae3a5a60975b09cb47779a3fcdbc8b159fafa7e83b7eff2d8"
+      },
+      "captures": {
+        "before": {
+          "trace_sha256": "ec3501507f1732613dc8524ae2734eaac61050184d4b599f9a5556cdeae6fbb5",
+          "end_position": {
+            "beat": 5,
+            "seconds": 2.5
+          },
+          "native_song_end": null,
+          "end_callback_executed": false,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\before-4\\end.ssc.semantic.json"
+        },
+        "after": {
+          "trace_sha256": "fdebc644ed0eb1919afc92266efbed5511a4f870cdf4326942182cb3bebcd6c0",
+          "end_position": {
+            "beat": 8,
+            "music_seconds": 4,
+            "seconds": 4
+          },
+          "native_song_end": {
+            "beat": 8,
+            "music_seconds": 4,
+            "seconds": 4
+          },
+          "end_callback_executed": true,
+          "runtime_errors": 0,
+          "dropped_events": 0,
+          "trace": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass72-native-end-controls\\after-4\\end.ssc.semantic.json"
+        }
+      },
+      "sources": {
+        "end.ssc": "#TITLE:Raw end;\n#BPMS:0=120;\n#OFFSET:0;\n#LASTSECONDHINT:2.5001;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Easy;\n#METER:1;\n#NOTES:0000\n0000\n0000\n0000\n,\n0000\n0000\n0000\n0000\n,\n1000\n0000\n0000\n0000\n;\n",
+        "mods.lua": "return Def.ActorFrame{\n    OnCommand=function(self)\n        self:SetUpdateFunction(function(actor)\n            if GAMESTATE:GetSongPosition():GetMusicSeconds() >= GAMESTATE:GetCurrentSong():GetLastSecond() then\n                actor:GetChild('End'):diffusealpha(0.25)\n            end\n        end)\n    end,\n    Def.Quad{Name='End'},\n}"
+      }
+    }
+  ],
+  "scope_note": "Compiled native Song recalculation and SongPosition supply the raw endpoint and music clock. Four original .30 controls miss the raw end callback; the non-dyadic positive offset rounds above it and already reaches it. Every corrected control reaches it. Original corpus and native sources unmodified.",
+  "validation": {
+    "harness_unit": "150 pass, 2 existing ignores",
+    "harness_integration": "39 pass, 3 existing ignores",
+    "deadsync_guard": "native positive control and six negative mutations pass",
+    "full_corpus": "not yet complete"
+  }
+}

@@ -489,6 +489,39 @@ fn exports_itgmania_song_lua_layers() {
 }
 
 #[test]
+fn semantic_capture_reaches_raw_native_song_end() {
+    let directory = temp_dir("raw-song-end");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("mods.lua"), r#"return Def.ActorFrame{
+        OnCommand=function(self)
+            self:SetUpdateFunction(function(actor)
+                if GAMESTATE:GetSongPosition():GetMusicSeconds() >= GAMESTATE:GetCurrentSong():GetLastSecond() then
+                    actor:GetChild('End'):diffusealpha(0.25)
+                end
+            end)
+        end,
+        Def.Quad{Name='End'},
+    }"#).unwrap();
+    for (index, offset, later_chart) in [(0, 0.0, false), (1, 0.125, false), (2, -0.125, false), (3, 0.3, false), (4, 0.0, true)] {
+        let other = if later_chart { "#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Easy;\n#METER:1;\n#NOTES:0000\n0000\n0000\n0000\n,\n0000\n0000\n0000\n0000\n,\n1000\n0000\n0000\n0000\n;\n" } else { "" };
+        let simfile = directory.join("end.ssc");
+        std::fs::write(&simfile, format!("#TITLE:Raw end;\n#BPMS:0=120;\n#OFFSET:{offset};\n#LASTSECONDHINT:2.5001;\n#FGCHANGES:0=mods.lua=1=0=0=1=====;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Challenge;\n#METER:1;\n#NOTES:1000\n0000\n0000\n0000\n;\n{other}")).unwrap();
+        let output_dir = directory.join(format!("capture-{index}"));
+        let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+            "--simfile", "end.ssc", "--out", output_dir.to_str().unwrap()]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let trace: Value = serde_json::from_slice(&std::fs::read(output_dir.join("end.ssc.semantic.json")).unwrap()).unwrap();
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        assert!(trace["runtime_actors"].as_array().unwrap().iter()
+            .any(|actor| actor["final_render_state"]["alpha"] == 0.25),
+            "native song end callback must execute: offset {offset}, later chart {later_chart}");
+        assert!(trace["end_position"]["music_seconds"].as_f64().unwrap()
+            >= trace["native_song_end"]["music_seconds"].as_f64().unwrap());
+    }
+}
+
+#[test]
 fn semantic_capture_keeps_last_second_hint() {
     let directory = temp_dir("song-lua-outro");
     std::fs::create_dir_all(&directory).unwrap();
