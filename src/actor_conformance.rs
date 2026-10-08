@@ -81,6 +81,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sprite_load_uses_native() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/sprite-load.json");
+        let result = evaluate(&path).expect("native Sprite loading assertions");
+        for key in ["script_errors", "diagnostics", "allocations"] {
+            assert_eq!(result[key], serde_json::json!([]), "{key}");
+        }
+    }
+
+    #[test]
     fn bitmap_methods_use_native_userdata() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-methods.json");
         let result = evaluate(&path).expect("native BitmapText assertions");

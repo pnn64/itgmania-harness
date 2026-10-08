@@ -1096,10 +1096,11 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
     Actor target;
     ActorProxy proxy;
     BitmapText label;
+    Sprite sprite;
     for (auto [name, actor] : {
         std::pair<const char*, Actor*>{"frozen", &frozen}, {"collision", &collision},
         {"unused", &unused}, {"native_target", &target}, {"native_proxy", &proxy},
-        {"native_label", &label}}) {
+        {"native_label", &label}, {"native_sprite", &sprite}}) {
       actor->PushSelf(state);
       lua_setglobal(state, name);
     }
@@ -1108,7 +1109,7 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
         lua_pcall(state, 0, 0, 0) != 0;
     const bool balanced = lua_gettop(state) == stack;
     const std::string error = failed ? lua_tostring(state, -1) : "";
-    for (const char* name : {"frozen", "collision", "unused", "native_target", "native_proxy", "native_label"}) {
+    for (const char* name : {"frozen", "collision", "unused", "native_target", "native_proxy", "native_label", "native_sprite"}) {
       lua_pushnil(state);
       lua_setglobal(state, name);
     }
