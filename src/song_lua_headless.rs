@@ -618,6 +618,43 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn value_iterator_keeps_native_lookup() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("value iterator fixture folder");
+        let entry = song_dir.join("value-iterator.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Native value iterator",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.2,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 0.1,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+            None,
+        )
+        .expect("value iterator capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn broadcasts_use_native_subscribers_and_preserve_params() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

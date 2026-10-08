@@ -1,0 +1,10 @@
+{
+  "reference_file": "vendor/itgmania/Themes/_fallback/Scripts/01 base.lua",
+  "reference_sha256": "4fc3049a12693dffcbf192dfc6abfaf325742ebf5bf5056c4065ae4cd8002a94",
+  "reference_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+  "matches_workspace_reference": true,
+  "shared_control_sha256": "2caf29f9917a9b8c4a20e7721fbb5808a755b43be67558bb648a802b7d30dcfd",
+  "native_executable_sha256": "6f46b9d642d5130547200143429b8c588d1c600e13c7e035b26e5774fa43636c",
+  "native_output_sha256": "8b210dac62a0f430c5890f04523bd0e0fde171619e2b528defb8b60a07c4c221",
+  "scope_note": "Proves native live table lookup, metamethods, one closure, ignored iterator args and delayed input failure. Original songs and native sources unmodified. Full Igaku and corpus parity remain pending."
+}

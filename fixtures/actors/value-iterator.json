@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "name": "native fallback value iterator",
+  "lua_assertions": "local file=assert(io.open('vendor/itgmania/Themes/_fallback/Scripts/01 base.lua','rb'))\nlocal source=file:read('*a'); file:close()\nlocal first=assert(source:find('function ivalues(t)',1,true))\nlocal last=assert(source:find(string.char(10)..'end',first,true))+3\nassert(loadstring(source:sub(first,last),'@native-fallback-ivalues'))()\ndofile('tests/fixtures/song-lua-headless/value-iterator.lua')\n"
+}

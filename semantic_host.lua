@@ -483,6 +483,14 @@ function join(separator, ...)
 	if #values == 1 and type(values[1]) == "table" then values = values[1] end
 	return table.concat(values, separator)
 end
+-- _fallback/Scripts/01 base.lua: honor indexed lookups and live table changes.
+function ivalues(t)
+	local n = 0
+	return function()
+		n = n + 1
+		return t[n]
+	end
+end
 function ipairs_o(values) return ivalues(values) end
 function ToEnumShortString(value) return tostring(value):match("[^_]+$") or tostring(value) end
 function ProductVersion() return harness.itgmania_version end
