@@ -4897,6 +4897,48 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn message_queue_offsets_match_native() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+        let entry = song_dir.join("queue-backlog.lua");
+        let bpms = [BpmSegment { beat: 0.0, bpm: 60.0 }];
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Queue backlog",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 3.0, bpm: 60.0, bpm_segments: &bpms, beat_step: 0.25,
+            max_events: 5000, random_seed: 1,
+        };
+        let mut document = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).unwrap();
+        assert_eq!(document["runtime_errors"], serde_json::json!([]));
+        assert_eq!(document["dropped_events"], 0);
+        crate::song_lua_semantics::enrich(&mut document).unwrap();
+        let native = crate::actor_conformance::evaluate(
+            &root.join("fixtures/actors/queue-backlog.json"),
+        ).unwrap();
+        let backlog = native["samples"][1]["actors"][1]["tween_time_left"].as_f64().unwrap();
+        assert!((backlog - 0.76).abs() < 0.00001);
+        let queue = native["samples"][2]["actors"][1]["tween_queue"].as_array().unwrap();
+        assert_eq!(queue.len(), 4, "native dispatch retains the preceding tween");
+        let segments = document["tween_segments"].as_array().unwrap().iter()
+            .filter(|segment| segment["command"] == "AppendCommand")
+            .collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3);
+        let mut start = backlog;
+        for (segment, tween) in segments.iter().zip(&queue[1..]) {
+            assert!((segment["queue_start_seconds"].as_f64().unwrap() - start).abs() < 0.002);
+            let duration = tween["duration"].as_f64().unwrap();
+            assert!((segment["duration"].as_f64().unwrap() - duration).abs() < 0.00001);
+            start += duration;
+        }
+        let sleep = document["tween_segments"].as_array().unwrap().iter()
+            .find(|segment| segment["implicit"] == true).unwrap();
+        assert_eq!(sleep["queue_start_seconds"], 2.0);
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn pulse_geometry_matches_native() {
         assert_eq!(effect_geometry_matches_native("pulse-body"), 800);
     }

@@ -653,7 +653,15 @@ local function tween_time_left(actor)
 	return total
 end
 
-local function begin_tween(actor, duration, easing, command)
+local function begin_tween(actor, duration, easing, command, event)
+	if event then
+		-- Actor::GetTweenTimeLeft sums own hibernation and queue floats.
+		-- ActorFrame's child maximum must not delay its own new tween.
+		local start = tonumber(rawget(actor, "hibernate_seconds")) or 0
+		for _, tween in ipairs(actor.tweens or {}) do start = _ITG_FLOAT(start + tween.time_left) end
+		event.detail = event.detail or {}
+		event.detail.queue_start_seconds = start
+	end
 	actor.tweens = actor.tweens or {}
 	local source = #actor.tweens > 0 and actor.tweens[#actor.tweens].state or actor.state
 	duration = _ITG_FLOAT(math.max(0, tonumber(duration) or 0))
@@ -974,11 +982,11 @@ local function actor_call(actor, name, ...)
             actor.recurring_commands = rawget(actor, "recurring_commands") or {}
             actor.recurring_commands[command] = true
         end
-        begin_tween(actor, 0, "linear", command)
+        begin_tween(actor, 0, "linear", command, event)
     elseif name == "queuemessage" or name == "QueueMessage" then
         -- Actor::QueueMessage uses the same native queue item as QueueCommand,
         -- with a ! marker consumed by UpdateTweening at dispatch.
-        begin_tween(actor, 0, "linear", "!" .. tostring((...)))
+        begin_tween(actor, 0, "linear", "!" .. tostring((...)), event)
 	elseif name == "addcommand" or name == "AddCommand" then
 		local command, fn = ...
 		actor[tostring(command) .. "Command"] = fn
@@ -997,7 +1005,7 @@ local function actor_call(actor, name, ...)
 			tween.duration, tween.time_left = tween.duration * factor, tween.time_left * factor
 		end
 	elseif name == "sleep" then
-		begin_tween(actor, (...), "linear")
+		begin_tween(actor, (...), "linear", nil, event)
 		begin_tween(actor, 0, "linear")
 	elseif name == "hibernate" then
 		actor.hibernate_seconds = _ITG_FLOAT(tonumber((...)) or 0)
@@ -1012,19 +1020,19 @@ local function actor_call(actor, name, ...)
 		-- only rate > 0, so NaN returns without changing the existing rate.
 		if rate > 0 then actor.update_rate = rate end
 	elseif name == "linear" or name == "accelerate" or name == "decelerate" or name == "smooth" or name == "spring" then
-		begin_tween(actor, (...), name)
+		begin_tween(actor, (...), name, nil, event)
 	elseif name == "bouncebegin" or name == "bounceend" then
 		-- _fallback/Scripts/02 Actor.lua defines these aliases as Bezier tweens.
 		local controls = name == "bouncebegin" and { 0,0, 0.42,-0.42, 2/3,0.3, 1,1 }
 			or { 0,0, 1/3,0.7, 0.58,1.42, 1,1 }
-		begin_tween(actor, (...), controls)
+		begin_tween(actor, (...), controls, nil, event)
 	elseif name == "tween" then
 		local duration, easing, controls = ...
 		easing = tostring(easing or "linear"):lower()
 		begin_tween(actor, duration, easing:match("bezier") and controls
 			or easing:match("accelerate") and "accelerate"
 			or easing:match("decelerate") and "decelerate"
-			or easing:match("spring") and "spring" or "linear")
+			or easing:match("spring") and "spring" or "linear", nil, event)
 	elseif name == "AddWrapperState" then
 		local wrappers = rawget(actor, "wrappers") or {}
 		rawset(actor, "wrappers", wrappers)

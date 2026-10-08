@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "name": "queue-backlog",
+  "samples": [
+    0,
+    2,
+    2.1,
+    5
+  ],
+  "root": {
+    "kind": "frame",
+    "name": "Root",
+    "children": [
+      {
+        "kind": "sprite",
+        "name": "Append",
+        "tweens": [
+          {
+            "duration": 2,
+            "curve": "sleep"
+          },
+          {
+            "queuecommand": "Append"
+          },
+          {
+            "duration": 0.76,
+            "state": {
+              "position": [
+                0,
+                -200,
+                0
+              ]
+            }
+          }
+        ],
+        "commands": {
+          "Append": {
+            "tweens": [
+              {
+                "duration": 0.25,
+                "curve": "accelerate",
+                "state": {
+                  "position": [
+                    0,
+                    150,
+                    0
+                  ]
+                }
+              },
+              {
+                "duration": 1.5,
+                "curve": "decelerate",
+                "state": {
+                  "position": [
+                    0,
+                    -350,
+                    0
+                  ]
+                }
+              },
+              {
+                "duration": 0.01,
+                "state": {
+                  "position": [
+                    0,
+                    -150,
+                    0
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

@@ -214,3 +214,15 @@ ITGmania itself is a separate work with its own license in `vendor/itgmania`.
 Simply Love is pinned separately in
 `vendor/simply-love` and retains its own license. See the source pins and update
 workflow in the project README.
+
+Harness 0.1.16 preserves each newly enqueued segment's `queue_start_seconds`.
+The semantic host sums only the actor's own pending native float durations
+and hibernation before appending, following `Actor::BeginTweening` and
+`Actor::GetTweenTimeLeft`; ActorFrame's child maximum is not its own queue.
+The value is source-derived headless timing, not native queue memory. The
+`message_queue_offsets_match_native` regression independently runs linked C++
+Actor queues, dispatches a command while an earlier tween remains queued,
+and compares all three appended segment offsets and durations. Sleep's
+implicit zero-duration tail retains the offset after the sleep. Older
+captures lack these offsets and must be recaptured to audit messages that
+append to an existing queue.

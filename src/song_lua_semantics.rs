@@ -192,6 +192,8 @@ struct TweenSegment {
     native_tween_time_left: Option<Value>,
     #[serde(skip)]
     observed_tween_time_left: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_start_seconds: Option<f64>,
     #[serde(skip_serializing_if = "is_false")]
     implicit: bool,
     operations: Vec<TweenOperation>,
@@ -632,6 +634,9 @@ fn segment(
         line: event.line,
         native_tween_time_left: native_time(event),
         observed_tween_time_left: observed_tween_time(event),
+        queue_start_seconds: event.detail.as_ref()
+            .and_then(|detail| detail.get("queue_start_seconds"))
+            .and_then(Value::as_f64),
         implicit: false,
         operations: Vec::new(),
     }
@@ -721,6 +726,8 @@ fn build_tweens(events: &[Event]) -> (Vec<TweenSegment>, Vec<TweenControl>, bool
             );
             let mut boundary = segment(event, "tween", 0.0, Some("linear"));
             boundary.implicit = true;
+            boundary.queue_start_seconds = boundary.queue_start_seconds
+                .map(|start| f64::from((start as f32) + (arg_f64(event, 0) as f32)));
             push_active(&mut segments, &mut active, actor, boundary);
         } else if matches!(method.as_str(), "queuecommand" | "queuemessage") {
             let kind = if method == "queuecommand" {
