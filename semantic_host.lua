@@ -1193,6 +1193,9 @@ local function actor_call(actor, name, ...)
 		elseif name == "basezoomx" or name == "basezoomy" or name == "basezoomz" then
 			-- Actor's base scale is immediate and independent of its tween scale.
 			actor.state[name] = first
+		elseif name == "baserotationx" or name == "baserotationy" or name == "baserotationz" then
+			-- Actor::SetBaseRotation replaces an immediate field outside TweenState.
+			actor.state[name] = _ITG_FLOAT(tonumber(first) or 0)
 		elseif name == "zoomto" then
 			-- Actor::ZoomTo writes destination scale, preserving intrinsic size.
 			local width, height = actor_size(actor)
@@ -2380,6 +2383,10 @@ local function actor_local_matrix(actor, width, height, parent_world)
 			state.effectcolor2 or { 1, 1, 1, 1 }, state.effecttiming or { 1, 0, 1, 0, 0 },
 			tonumber(state.effectoffset) or 0)
 	end
+	-- Actor::BeginDraw adds base rotation to the effect-applied tween rotation.
+	for index, axis in ipairs({"x", "y", "z"}) do
+		rotation[index] = _ITG_FLOAT(rotation[index] + (tonumber(state["baserotation" .. axis]) or 0))
+	end
 	local sx = _ITG_FLOAT(axes[1] * (tonumber(state.basezoomx) or 1))
 	local sy = _ITG_FLOAT(axes[2] * (tonumber(state.basezoomy) or 1))
 	local sz = _ITG_FLOAT(axes[3] * (tonumber(state.basezoomz) or 1))
@@ -3259,6 +3266,7 @@ return json_encode({
 		projected_vertex_samples = true, projected_draw_color_samples = true,
 		manual_draw_frames = true, native_multi_vertex_primitives = true,
 		native_model_primitives = true, native_model_geometry_buffers = true,
+        actor_base_rotation = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,

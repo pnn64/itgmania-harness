@@ -199,6 +199,14 @@ positions together with raw/transformed UVs and exact 8-bit vertex colors.
 The fixture output also records child order before and after native stable
 `SortByDrawOrder` processing.
 
+Song draw captures preserve immediate Actor base rotations independently of
+queued tween rotations. As in `Actor::BeginDraw`, base rotation is added after
+the effect-applied rotation, including for parent frames and Models. Harness
+0.1.38 records `capabilities.actor_base_rotation`; older song captures omit
+these transforms and must be recaptured when they affect the chart. The
+`model-base-rotation` control compares the song host with an independent native
+actor tree across all three axes, queued rotations and replacement base values.
+
 The checked-in micro-fixtures under `fixtures/actors` cover actor behaviors independently:
 
 - `tween-queue.json`: queued interpolation, sleep, targets, and queue removal;

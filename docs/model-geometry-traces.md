@@ -46,3 +46,17 @@ bytes, hits, and saturated misses. This is a storage change, not a change to
 the native loader, update, draw, projection, or comparison tolerances.
 Whole-song completeness still requires actual production comparisons of
 every supported Model observation.
+
+Harness 0.1.38 adds `capabilities.actor_base_rotation`. The song host applies
+each actor's immediate base X/Y/Z rotation after its effect-applied tween
+rotation, as `Actor::BeginDraw` does. Parent frames and Models both contribute
+these rotations to world matrices. Earlier song captures omitted base rotation;
+retain their actual provenance and recapture affected charts rather than
+treating their orientation discrepancies as production renderer bugs.
+
+The `model-base-rotation` song fixture is checked against an independently
+constructed native actor tree. Its 30 draws cover parent and child rotations
+on all axes, a base setter after a queued sleep, replacement base values and
+ordinary rotation tweening. World/view/clip/NDC/screen coordinates retain the
+existing 0.0001 tolerance. The capability is a required support declaration,
+not proof that a complete chart matches another implementation.

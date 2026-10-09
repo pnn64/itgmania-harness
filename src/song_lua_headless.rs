@@ -6548,28 +6548,71 @@ fn model_song_meshes_match_native() {
             .find(|row| (row[1].as_f64().unwrap()-time).abs() < 0.00001).expect("matching sample");
         let expected = sample["actors"][1]["draws"].as_array().unwrap();
         let actual = model_expand_draws(&trace, &captured[3]);
-        assert_eq!(expected.len(), actual.len());
-        for (actual, expected) in actual.iter().zip(expected) {
-            for field in ["primitive", "texture_mode", "blend_mode", "model_mesh_name",
-                "normals", "texture_matrix_scale", "texture_matrix", "material", "lighting",
-                "lights", "cull_mode", "z_write", "z_test"] {
+        check_model_draws(&actual, expected, time);
+    }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+fn check_model_draws(actual: &[Value], expected: &[Value], time: f64) {
+    assert_eq!(expected.len(), actual.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        for field in ["primitive", "texture_mode", "blend_mode", "model_mesh_name",
+            "normals", "texture_matrix_scale", "texture_matrix", "material", "lighting",
+            "lights", "cull_mode", "z_write", "z_test"] {
+            assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
+        }
+        assert_eq!(actual["vertices"].as_array().unwrap().len(), expected["vertices"].as_array().unwrap().len());
+        for (actual, expected) in actual["vertices"].as_array().unwrap().iter()
+            .zip(expected["vertices"].as_array().unwrap()) {
+            for field in ["local", "uv", "transformed_uv", "color"] {
                 assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
             }
-            assert_eq!(actual["vertices"].as_array().unwrap().len(), expected["vertices"].as_array().unwrap().len());
-            for (actual, expected) in actual["vertices"].as_array().unwrap().iter()
-                .zip(expected["vertices"].as_array().unwrap()) {
-                for field in ["local", "uv", "transformed_uv", "color"] {
-                    assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
-                }
-                for field in ["world", "view", "clip", "ndc", "screen"] {
-                    assert_eq!(actual[field].as_array().unwrap().len(), expected[field].as_array().unwrap().len());
-                    for (a,b) in actual[field].as_array().unwrap().iter().zip(expected[field].as_array().unwrap()) {
-                        assert!((a.as_f64().unwrap()-b.as_f64().unwrap()).abs() < 0.0001, "{field} at {time}: {a} != {b}");
-                    }
+            for field in ["world", "view", "clip", "ndc", "screen"] {
+                assert_eq!(actual[field].as_array().unwrap().len(), expected[field].as_array().unwrap().len());
+                for (a,b) in actual[field].as_array().unwrap().iter().zip(expected[field].as_array().unwrap()) {
+                    assert!((a.as_f64().unwrap()-b.as_f64().unwrap()).abs() < 0.0001, "{field} at {time}: {a} != {b}");
                 }
             }
         }
     }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn model_song_base_rotation_matches_native() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-base-rotation.json"))
+        .expect("native Actor base rotation control");
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-base-rotation.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native Model base rotations",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 1.0, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).expect("song Model base rotations");
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    let tracks = trace["model_geometry_tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 3);
+    assert_eq!(trace["update_frames"].as_array().unwrap().len(), 61);
+    let mut passes = 0;
+    for (index, track) in tracks.iter().enumerate() {
+        assert_eq!(track["samples"].as_array().unwrap().len(), 61);
+        for sample in native["samples"].as_array().unwrap() {
+            let time = sample["time"].as_f64().unwrap();
+            let captured = track["samples"].as_array().unwrap().iter()
+                .find(|row| (row[1].as_f64().unwrap()-time).abs() < 0.00001).expect("matching native clock");
+            let expected = sample["actors"][index+1]["draws"].as_array().unwrap();
+            let actual = model_expand_draws(&trace, &captured[3]);
+            check_model_draws(&actual, expected, time);
+            passes += actual.len();
+        }
+    }
+    assert_eq!(passes, 30);
 }
 
 #[cfg(all(test, itgmania_oracle))]
