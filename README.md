@@ -216,6 +216,15 @@ it retains the second mesh and draws those faces again. The
 the compiled native loader. Older captures used the software mesh path and
 must be regenerated when this merge condition applies.
 
+Harness 0.1.41 runs Model actor commands before updating native bones and
+material textures, matching `Model::Update`. It retains the incoming material
+delta during the Model's own hibernation; parent hibernation prevents the child
+update, and a parent's update rate scales that child's incoming delta. The
+`model-texture-order.json` control compares the song host with a native actor
+tree over 121 updates, including queued `setstate` and both sleep cases. Song
+captures record `capabilities.model_update_order`; older captures must be
+regenerated when queued commands change Model materials or animation.
+
 The checked-in micro-fixtures under `fixtures/actors` cover actor behaviors independently:
 
 - `tween-queue.json`: queued interpolation, sleep, targets, and queue removal;

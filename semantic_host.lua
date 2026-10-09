@@ -2269,16 +2269,22 @@ local function run_callback(actor, kind, fn, delta)
 	active_context = prior
 end
 
+function manual.models.update(model, delta)
+	if not model then return end
+	local ok, message = _ITG_MODEL_UPDATE(model, delta)
+	if not ok then error(message, 0) end
+end
+
 local function advance_actor(actor, delta)
-	if rawget(actor, "native_model") then
-		-- Model::Update advances bones/materials with the original delta even
-		-- when Actor::Update returns early during hibernation.
-		local ok, message = _ITG_MODEL_UPDATE(actor.native_model, delta)
-		if not ok then error(message, 0) end
-	end
+	local model_delta = delta
 	if (rawget(actor, "hibernate_seconds") or 0) > 0 then
 		actor.hibernate_seconds, delta = _ITG_HIBERNATE_STEP(actor.hibernate_seconds, delta)
-		if delta == nil then return end
+		if delta == nil then
+			-- Model::Update still advances its materials when its Actor::Update
+			-- returns early. A sleeping parent never calls this child update.
+			manual.models.update(rawget(actor, "native_model"), model_delta)
+			return
+		end
 	end
 	for _, wrapper in ipairs(actor.wrappers or {}) do advance_actor(wrapper, delta) end
 	-- ActorFrame::UpdateInternal multiplies its delta after Actor::Update has
@@ -2312,6 +2318,9 @@ local function advance_actor(actor, delta)
 		end
 	end
 	advance_tween(actor, delta)
+	-- Native Model::Update runs Actor commands before bones and materials,
+	-- retaining the incoming delta even when its own hibernation shortens it.
+	manual.models.update(rawget(actor, "native_model"), model_delta)
 	for _, child in ipairs(actor.children or {}) do advance_actor(child, delta) end
 	-- ActorFrame::UpdateInternal calls its callback after its own children,
 	-- before later siblings consume this frame's delta.
@@ -3269,6 +3278,7 @@ return json_encode({
         actor_base_rotation = true,
         model_texture_matrix_scale = true,
         model_hardware_mesh_path = true,
+        model_update_order = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,

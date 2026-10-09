@@ -842,6 +842,21 @@ void apply_state(Actor& actor, const Json::Value& state,
     actor.SetGlow(RageColor(v[0], v[1], v[2], v[3]));
   }
   if (state.isMember("aux")) actor.SetAux(number(state["aux"], path + ".aux"));
+  if (state.isMember("model_state")) {
+    auto* model = dynamic_cast<Model*>(&actor);
+    if (!model || !state["model_state"].isInt())
+      throw std::runtime_error(path + ".model_state requires a Model and integer state");
+    model->SetState(state["model_state"].asInt());
+  }
+  if (state.isMember("hibernate"))
+    actor.SetHibernate(number(state["hibernate"], path + ".hibernate"));
+  if (state.isMember("update_rate")) {
+    auto* frame = dynamic_cast<ActorFrame*>(&actor);
+    const float rate = number(state["update_rate"], path + ".update_rate");
+    if (!frame || rate <= 0)
+      throw std::runtime_error(path + ".update_rate requires an ActorFrame and positive rate");
+    frame->SetUpdateRate(rate);
+  }
 }
 
 void apply_common(Actor& actor, const Json::Value& spec,

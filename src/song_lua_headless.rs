@@ -6617,6 +6617,43 @@ fn model_song_base_rotation_matches_native() {
 
 #[cfg(all(test, itgmania_oracle))]
 #[test]
+fn model_song_texture_commands_match_native() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-texture-order.json"))
+        .expect("native queued Model states and parent clocks");
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-texture-order.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native Model texture command order",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 2.0, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).expect("song Model texture command capture");
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    let tracks = trace["model_geometry_tracks"].as_array().unwrap();
+    let frames = native["samples"].as_array().unwrap();
+    assert_eq!(frames.len(), 121);
+    assert_eq!(tracks.len(), 4);
+    for (track, name) in tracks.iter().zip(["Queued", "Sleeping", "SleepingChild", "FastChild"]) {
+        let captures = track["samples"].as_array().unwrap();
+        assert_eq!(captures.len(), frames.len());
+        for (captured, sample) in captures.iter().zip(frames) {
+            let time = sample["time"].as_f64().unwrap();
+            assert!((captured[1].as_f64().unwrap() - time).abs() < 0.000_001);
+            let actor = sample["actors"].as_array().unwrap().iter()
+                .find(|actor| actor["name"] == name).expect("native Model actor");
+            let actual = model_expand_draws(&trace, &captured[3]);
+            check_model_draws(&actual, actor["draws"].as_array().unwrap(), time);
+        }
+    }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
 fn model_song_manual_draws_keep_native_passes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-geometry.json")).unwrap();
