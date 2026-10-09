@@ -1028,10 +1028,10 @@ are explicit: manager constructor defaults are 16-bit/1024; normal
 `PrefsManager` game defaults are 32-bit/2048. The high-resolution boolean is
 already resolved; theme/display-dependent Auto selection is outside this oracle.
 
-Output includes exact decoded RGBA pixels and Model upload pixels. Sprite
-uploads expose dimensions and format/flags but omit pixel data: native Blit
-only initializes one padding border beyond the image, so the remaining POT
-allocation cannot be used as deterministic pixel evidence. Native input/output
+Output includes exact decoded RGBA pixels and fully initialized Model and
+Sprite upload pixels. Sprite allocations with unused padding expose dimensions
+and format/flags but omit pixel data: native Blit only initializes one padding
+border beyond the image. Native input/output
 pixel budgets bound these trusted controls. Upload format requests do not prove
 GPU conversion, generated mip pixels or framebuffer output. Regular song actor
 captures retain the metadata adapter until those paths have separate evidence.
@@ -1059,3 +1059,13 @@ probes. First-frame GIF dimensions, OS/2 BMP headers and native format
 rejections now come from the pinned loader. texture_headers controls and
 a regular GIF Model verify the same source dimensions as RageBitmapTexture.
 Native GIF/BMP loaders decode pixels even when header-only is requested.
+
+Harness 0.1.50 captures Sprite pixels according to actual native image dimensions
+inside a Reload upload callback, replacing the source power-of-two heuristic.
+Tiny, explicitly stretched, capped and low-resolution sources can fill their
+allocations too. Ten varied-color and alpha controls verify this preparation;
+nine retain complete upload pixels and the padded 7x9 input remains excluded.
+The prior harness produces identical metadata for all ten inputs and identical
+pixels for its one captured input. Prepared pixel coverage expands from one
+image to nine. This is CPU upload evidence; native GPU framebuffer parity and
+DeadSync's physical tiny Sprite preparation remain open.
