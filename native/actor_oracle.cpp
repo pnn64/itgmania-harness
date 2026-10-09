@@ -1190,9 +1190,10 @@ Json::Value evaluate_surface(const Json::Value& request) {
   result["fixture"] = request["name"];
   result["framebuffer_verified"] = false;
   result["cases"] = Json::Value(Json::arrayValue);
+  unsigned remaining_pixels = 262144;
   for (const auto& spec : cases) {
-    const unsigned width = surface_integer(spec["width"], 256, "width");
-    const unsigned height = surface_integer(spec["height"], 256, "height");
+    const unsigned width = surface_integer(spec["width"], 4096, "width");
+    const unsigned height = surface_integer(spec["height"], 4096, "height");
     if (!width || !height) throw std::runtime_error("surface dimensions must be positive");
     const std::string format = field_string(spec, "format", "rgba", "surface");
     if (format != "rgba" && format != "rgb" && format != "palette")
@@ -1200,6 +1201,9 @@ Json::Value evaluate_surface(const Json::Value& request) {
     const auto& pixels = spec["pixels"];
     if (!pixels.isArray() || pixels.size() != width * height)
       throw std::runtime_error("surface pixel count differs from dimensions");
+    if (width * height > remaining_pixels)
+      throw std::runtime_error("surface fixture exceeds its pixel budget");
+    remaining_pixels -= width * height;
     RageSurface* image = CreateSurface(width, height,
         format == "palette" ? 8 : format == "rgb" ? 24 : 32,
         format == "palette" ? 0 : 0x000000FF,
@@ -1241,10 +1245,17 @@ Json::Value evaluate_surface(const Json::Value& request) {
         const auto& destination = spec["destination"];
         if (!destination.isArray() || destination.size() != 2)
           throw std::runtime_error("destination must contain width and height");
-        const unsigned w = surface_integer(destination[0], 256, "destination width");
-        const unsigned h = surface_integer(destination[1], 256, "destination height");
+        const unsigned w = surface_integer(destination[0], 4096, "destination width");
+        const unsigned h = surface_integer(destination[1], 4096, "destination height");
         if (!w || !h) throw std::runtime_error("destination dimensions must be positive");
+        if (w * h > remaining_pixels)
+          throw std::runtime_error("surface fixture exceeds its pixel budget");
+        remaining_pixels -= w * h;
         RageSurfaceUtils::Zoom(image, w, h);
+      } else {
+        if (width * height > remaining_pixels)
+          throw std::runtime_error("surface fixture exceeds its pixel budget");
+        remaining_pixels -= width * height;
       }
       if (field_bool(spec, "fix_hidden_alpha", true, "surface"))
         RageSurfaceUtils::FixHiddenAlpha(image);

@@ -268,3 +268,8 @@ These controls verify the native surface subroutines. They do not load
 images through RageBitmapTexture, generate GPU mips or establish native
 framebuffer parity. Destination dimensions are explicit test inputs; the
 separate Model request control verifies the native stretch dimensions.
+
+Harness 0.1.45 allows surface dimensions up to 4096 so native Model
+2048-size caps can be exercised. A combined input/output budget of
+262144 pixels replaces independent small dimension limits. Oversized
+requests fail before resizing; native surface algorithms are unchanged.

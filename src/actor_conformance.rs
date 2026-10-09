@@ -203,6 +203,7 @@ mod tests {
             ("pixels", serde_json::json!([])),
             ("destination", serde_json::json!([0, 8])),
             ("destination", serde_json::json!([8])),
+            ("destination", serde_json::json!([4096, 4096])),
             ("hot_pink_color_key", serde_json::json!(1)),
         ] {
             let mut case = valid.clone();
