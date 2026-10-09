@@ -389,6 +389,32 @@ fn compile_image_deps(root: &Path, out: &Path, target_os: &str) {
 }
 
 fn prepare_texture_sources(root: &Path, out: &Path) {
+    let path = root.join("src/PrefsManager.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native game texture defaults");
+    let mut defaults = String::new();
+    for (field, name) in [
+        ("m_iTextureColorDepth", "game_texture_depth"),
+        ("m_iMovieColorDepth", "game_movie_depth"),
+        ("m_iMaxTextureResolution", "game_max_tex_size"),
+    ] {
+        let (_, initializer) = source
+            .split_once(&format!("{field}(\""))
+            .expect("native preference initializer");
+        let (_, value) = initializer
+            .split_once(',')
+            .expect("native preference value");
+        let (value, _) = value
+            .split_once(')')
+            .expect("end of native preference value");
+        let value: u32 = value
+            .trim()
+            .parse()
+            .expect("integer native texture default");
+        defaults.push_str(&format!("constexpr int {name} = {value};\n"));
+    }
+    fs::write(out.join("texture_game_defaults.inc"), defaults)
+        .expect("write native game texture defaults");
     let path = root.join("src/RageTextureManager.cpp");
     println!("cargo:rerun-if-changed={}", path.display());
     let source = fs::read_to_string(path).expect("read native texture preferences");

@@ -403,10 +403,17 @@ void ShowWarningOrTrace(const char*, int, const char*, bool) {}
 
 // ---------------------------------------------------------------------------
 // Headless texture metadata used by ITGmania's FontPage calculations.
+#include "texture_game_defaults.inc"
 RageTextureManager::RageTextureManager()
 	: m_Prefs(),
 	  m_iNoWarnAboutOddDimensions(0),
-	  m_TexturePolicy(RageTextureID::TEX_DEFAULT) {}
+	  m_TexturePolicy(RageTextureID::TEX_DEFAULT) {
+	// The embedding applies PrefsManager game defaults at startup. Bitmap
+	// controls still select constructor defaults as an explicit test profile.
+	m_Prefs.m_iTextureColorDepth = game_texture_depth;
+	m_Prefs.m_iMovieColorDepth = game_movie_depth;
+	m_Prefs.m_iMaxTextureResolution = game_max_tex_size;
+}
 RageTextureManager::~RageTextureManager() = default;
 void RageTextureManager::Update(float) {}
 // Texture registry owned by the serialized native harness. Live source

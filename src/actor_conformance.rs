@@ -126,6 +126,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normal_model_texture_profile_matches_native_bitmap() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors");
+        let actor = evaluate(&root.join("model-game-texture-profile.json"))
+            .expect("native Model with a texture above the constructor cap");
+        let bitmap = evaluate(&root.join("bitmap-loader.json")).expect("native bitmap profiles");
+        let file = bitmap["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "model-game-default-cap")
+            .unwrap();
+        assert_eq!(file["profile"]["color_depth"], 32);
+        assert_eq!(file["profile"]["max_size"], 2048);
+        assert_eq!(file["dimensions"]["image"], serde_json::json!([2048, 8]));
+        let draws = actor["samples"][0]["actors"][1]["draws"]
+            .as_array()
+            .unwrap();
+        assert_eq!(draws.len(), 3);
+        for draw in draws {
+            assert_eq!(draw["texture_dimensions"], file["dimensions"]);
+        }
+    }
+
+    #[test]
     fn bitmap_loader_decodes_native_files() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-loader.json");
         let result = evaluate(&path).expect("native bitmap file decoding");

@@ -1035,3 +1035,12 @@ allocation cannot be used as deterministic pixel evidence. Native input/output
 pixel budgets bound these trusted controls. Upload format requests do not prove
 GPU conversion, generated mip pixels or framebuffer output. Regular song actor
 captures retain the metadata adapter until those paths have separate evidence.
+
+Harness 0.1.47 initializes regular actor and song texture contexts from
+the texture depth, movie depth and maximum size defaults extracted from the
+pinned `PrefsManager.cpp`. The constructor-only 16-bit/1024 profile remains
+available in bitmap controls. `model-game-texture-profile.json` verifies that
+a 2051x3 Model source uses the same 2048x8 image/allocation as actual
+RageBitmapTexture with the game profile. The resolved high-resolution setting
+remains enabled in the capture context; Auto resolution selection is still
+outside this headless profile.
