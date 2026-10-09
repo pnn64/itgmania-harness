@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "native-model-texture-scale",
+  "samples": [0, 0.5],
+  "root": {
+    "kind": "frame",
+    "name": "Root",
+    "children": [{
+      "kind": "model",
+      "name": "Model",
+      "model_paths": ["model-triangle.txt", "model-triangle.txt", "model-triangle.txt"],
+      "texture_translate": [0.125, 0.25],
+      "state": {"position": [100, 200, 0], "glow": [1, 0, 0, 0.25]}
+    }]
+  }
+}

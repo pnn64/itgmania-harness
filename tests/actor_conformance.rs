@@ -39,12 +39,35 @@ fn captures_native_tween_queue_and_projected_geometry() {
 }
 
 #[test]
+fn model_uvs_honor_native_vertex_texture_flags() {
+    let output = run_fixture("model-texture-scale.json");
+    for sample in output["samples"].as_array().unwrap() {
+        let draws = sample["actors"][1]["draws"].as_array().unwrap();
+        assert_eq!(draws.len(), 2, "diffuse and glow draws");
+        for draw in draws {
+            assert_eq!(
+                draw["texture_matrix_scale"],
+                serde_json::json!([[1.0, 1.0], [0.0, 1.0], [1.0, 0.0]])
+            );
+            // Texture matrix scaling.vert blends transformed and raw UVs.
+            // Vertex flags disable each axis independently, including glow.
+            for (vertex, expected) in draw["vertices"].as_array().unwrap().iter().zip([
+                [0.125, 0.25],
+                [1.0, 0.25],
+                [0.125, 1.0],
+            ]) {
+                assert_eq!(vertex["transformed_uv"], serde_json::json!(expected));
+            }
+        }
+    }
+}
+
+#[test]
 fn manual_player_poses_match_the_checked_in_native_golden() {
     let output = run_fixture("manual-player-draws.json");
-    let golden: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/manual-player-native.json"
-    ))
-    .expect("checked-in native manual-draw baseline");
+    let golden: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/manual-player-native.json"))
+            .expect("checked-in native manual-draw baseline");
     // The original provenance identifies the old workspace commit. Compare the
     // captured geometry directly; upstream source revisions are pinned by Git.
     let sprites = golden["sprites"].as_object().expect("native sprite map");

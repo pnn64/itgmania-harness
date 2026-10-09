@@ -357,8 +357,10 @@ class HarnessDisplay final : public RageDisplay {
 
   void capture_mesh(const msMesh& mesh, int index) {
     std::vector<RageSpriteVertex> vertices;
+    std::vector<RageVector2> scales;
     Json::Value normals(Json::arrayValue), texture_scale(Json::arrayValue);
     vertices.reserve(mesh.Triangles.size() * 3);
+    scales.reserve(mesh.Triangles.size() * 3);
     for (const auto& triangle : mesh.Triangles) {
       for (const auto vertex_index : triangle.nVertexIndices) {
         const auto& source = mesh.Vertices.at(vertex_index);
@@ -367,11 +369,12 @@ class HarnessDisplay final : public RageDisplay {
         vertex.t = source.t;
         vertex.c.r = vertex.c.g = vertex.c.b = vertex.c.a = 255;
         vertices.push_back(vertex);
+        scales.push_back(source.TextureMatrixScale);
         normals.append(vector3_json(source.n));
         texture_scale.append(vector2_json(source.TextureMatrixScale));
       }
     }
-    capture("triangles", vertices.data(), static_cast<int>(vertices.size()));
+    capture("triangles", vertices.data(), static_cast<int>(vertices.size()), scales.data());
     if (current_actor_ >= 0 && actors_ != nullptr) {
       auto& draws = (*actors_)[current_actor_]["draws"];
       auto& draw = draws[draws.size() - 1];
@@ -441,7 +444,7 @@ class HarnessDisplay final : public RageDisplay {
   }
 
   void capture(const char* primitive, const RageSpriteVertex vertices[],
-               int count) {
+               int count, const RageVector2* texture_scales = nullptr) {
     if (current_actor_ < 0 || actors_ == nullptr) return;
     const RageMatrix world_matrix = world();
     const RageMatrix view_matrix = view();
@@ -470,6 +473,14 @@ class HarnessDisplay final : public RageDisplay {
       RageVector4 local_uv(vertices[i].t.x, vertices[i].t.y, 0, 1);
       RageVector4 transformed_uv;
       RageVec4TransformCoord(&transformed_uv, &local_uv, &texture_matrix);
+      if (texture_scales != nullptr) {
+        // Match Data/Shaders/GLSL/Texture matrix scaling.vert. Model flags
+        // interpolate the transformed and original coordinate per vertex;
+        // recording only the texture matrix ignores the renderer's shader.
+        const RageVector2& scale = texture_scales[i];
+        transformed_uv.x = transformed_uv.x * scale.x + local_uv.x * (1 - scale.x);
+        transformed_uv.y = transformed_uv.y * scale.y + local_uv.y * (1 - scale.y);
+      }
       Json::Value vertex(Json::objectValue);
       vertex["local"] = vector4_json(local);
       vertex["world"] = vector4_json(world_pos);

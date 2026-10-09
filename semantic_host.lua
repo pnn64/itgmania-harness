@@ -3267,6 +3267,7 @@ return json_encode({
 		manual_draw_frames = true, native_multi_vertex_primitives = true,
 		native_model_primitives = true, native_model_geometry_buffers = true,
         actor_base_rotation = true,
+        model_texture_matrix_scale = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
