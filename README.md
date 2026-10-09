@@ -42,7 +42,7 @@ Initialize the two source submodules before building:
 git clone https://github.com/pnn64/itgmania-harness.git
 cd itgmania-harness
 git submodule update --init
-git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis
+git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis extern/libpng extern/zlib extern/libjpeg-turbo
 cargo build
 cargo run -- doctor
 ```
@@ -63,8 +63,10 @@ nested theme pin is 5.8.0, while the existing harness baselines use 5.9.0.
 The harness uses the engine's checked-in Lua, JSONCPP, PCRE, miniz, noteskins,
 and fallback resources. Native music duration queries also require the pinned
 `extern/ogg` and `extern/vorbis` submodules. Initialize these explicitly with
-`git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis`; the
-remaining nested submodules are unnecessary. Linux/WSL still needs the system packages listed
+`git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis`.
+Native bitmap controls additionally require the pinned `extern/libpng`,
+`extern/zlib` and `extern/libjpeg-turbo` submodules and CMake on PATH. These
+codecs compile locally; system image codecs are not used. Linux/WSL still needs the system packages listed
 below. `ITGMANIA_ROOT` remains available for another engine source checkout;
 set it before invoking Cargo to compile that revision. `doctor --itgmania-root`
 inspects a tree without changing the source compiled into the binary.
@@ -1010,3 +1012,26 @@ These controls verify the native surface subroutines. They do not load
 images through RageBitmapTexture, generate GPU mips or establish native
 framebuffer parity. Destination dimensions are explicit test inputs; the
 separate Model request control verifies the native stretch dimensions.
+
+Harness 0.1.46 adds `bitmap-loader.json`, which executes the pinned native
+PNG/GIF/BMP/JPEG loaders, texture preference adjustment and
+`RageBitmapTexture::Create`. Model inputs use `AnimatedTexture::Load` to obtain
+the native request flags. The 24 controls include 16-bit PNG high-byte stripping,
+duplicate palette entries, Unicode paths, mislabeled extensions, size caps,
+filename hints, grayscale/alpha palettes, dithering and resolved high-resolution
+settings. Requests resolve filenames relative to the control JSON.
+
+The oracle records the manager-adjusted ID separately from the final upload
+format and mipmap request. For example, a Model with `nomipmaps` retains its
+requested mipmap flag in the ID while disabling mipmaps at upload. Profiles
+are explicit: manager constructor defaults are 16-bit/1024; normal
+`PrefsManager` game defaults are 32-bit/2048. The high-resolution boolean is
+already resolved; theme/display-dependent Auto selection is outside this oracle.
+
+Output includes exact decoded RGBA pixels and Model upload pixels. Sprite
+uploads expose dimensions and format/flags but omit pixel data: native Blit
+only initializes one padding border beyond the image, so the remaining POT
+allocation cannot be used as deterministic pixel evidence. Native input/output
+pixel budgets bound these trusted controls. Upload format requests do not prove
+GPU conversion, generated mip pixels or framebuffer output. Regular song actor
+captures retain the metadata adapter until those paths have separate evidence.

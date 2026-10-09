@@ -47,6 +47,13 @@ const ITG_SOURCES: &[&str] = &[
     "src/RageSurface.cpp",
     "src/RageSurfaceUtils.cpp",
     "src/RageSurfaceUtils_Zoom.cpp",
+    "src/RageSurfaceUtils_Dither.cpp",
+    "src/RageSurface_Load.cpp",
+    "src/RageSurface_Load_PNG.cpp",
+    "src/RageSurface_Load_GIF.cpp",
+    "src/RageSurface_Load_BMP.cpp",
+    "src/RageSurface_Load_JPEG.cpp",
+    "src/RageBitmapTexture.cpp",
     "src/Sprite.cpp",
     "src/ModelTypes.cpp",
     "src/ModelManager.cpp",
@@ -198,6 +205,8 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     write_player_option_methods(&root, &out);
     write_song_stats(&root, &out);
+    prepare_texture_sources(&root, &out);
+    compile_image_deps(&root, &out, &target_os);
     write_compat_headers(&out, &target_os);
     if target_os == "windows" {
         prepare_pcre(&root, &out);
@@ -222,6 +231,10 @@ fn main() {
         .include(root.join("extern/miniz"))
         .include(root.join("extern/ogg/include"))
         .include(root.join("extern/vorbis/include"))
+        .include(root.join("extern/libpng"))
+        .include(root.join("extern/zlib"))
+        .include(root.join("extern/libjpeg-turbo/src"))
+        .include(out.join("native-jpeg"))
         .include(&out)
         .file(manifest.join("native/oracle_bridge.cpp"))
         .file(manifest.join("native/chart_theme.cpp"))
@@ -249,6 +262,17 @@ fn main() {
         build.file(root.join(relative));
     }
     build.compile("itgmania_oracle");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=itgmania_png");
+    println!("cargo:rustc-link-lib=static=itgmania_zlib");
+    println!(
+        "cargo:rustc-link-lib=static={}",
+        if target_os == "windows" {
+            "jpeg-static"
+        } else {
+            "jpeg"
+        }
+    );
 
     compile_audio_deps(&root, &out);
     compile_bundled_lua(&root, &target_os);
@@ -262,6 +286,134 @@ fn main() {
         }
     }
     println!("cargo:rustc-cfg=itgmania_oracle");
+}
+
+// Use the pinned codec sources and native methods. Zlib's CMake build renames
+// a source header, so compile it directly to keep the reference tree untouched.
+fn compile_image_deps(root: &Path, out: &Path, target_os: &str) {
+    let png = root.join("extern/libpng");
+    let zlib = root.join("extern/zlib");
+    let jpeg = root.join("extern/libjpeg-turbo");
+    assert!(
+        png.join("pngread.c").is_file()
+            && zlib.join("inflate.c").is_file()
+            && jpeg.join("CMakeLists.txt").is_file(),
+        "initialize pinned image dependencies: git -C vendor/itgmania submodule update --init extern/libpng extern/zlib extern/libjpeg-turbo"
+    );
+    fs::copy(
+        png.join("scripts/pnglibconf.h.prebuilt"),
+        out.join("pnglibconf.h"),
+    )
+    .expect("copy pinned PNG configuration");
+    let mut library = cc::Build::new();
+    library
+        .cargo_metadata(false)
+        .warnings(false)
+        .include(&png)
+        .include(&zlib)
+        .include(out)
+        .define("PNG_INTEL_SSE_OPT", Some("0"))
+        .define("PNG_ARM_NEON_OPT", Some("0"))
+        .define("_CRT_SECURE_NO_WARNINGS", None);
+    for file in [
+        "png", "pngerror", "pngget", "pngmem", "pngpread", "pngread", "pngrio", "pngrtran",
+        "pngrutil", "pngset", "pngtrans", "pngwio", "pngwrite", "pngwtran", "pngwutil",
+    ] {
+        let source = png.join(format!("{file}.c"));
+        println!("cargo:rerun-if-changed={}", source.display());
+        library.file(source);
+    }
+    library.compile("itgmania_png");
+    let mut library = cc::Build::new();
+    library
+        .cargo_metadata(false)
+        .warnings(false)
+        .include(&zlib)
+        .define("_CRT_SECURE_NO_WARNINGS", None);
+    for file in [
+        "adler32", "compress", "crc32", "deflate", "gzclose", "gzlib", "gzread", "gzwrite",
+        "inflate", "infback", "inftrees", "inffast", "trees", "uncompr", "zutil",
+    ] {
+        let source = zlib.join(format!("{file}.c"));
+        println!("cargo:rerun-if-changed={}", source.display());
+        library.file(source);
+    }
+    library.compile("itgmania_zlib");
+    let destination = out.join("native-jpeg");
+    let tool = cc::Build::new().get_compiler();
+    let mut configure = Command::new("cmake");
+    configure
+        .envs(tool.env().iter().cloned())
+        .args(["-S"])
+        .arg(&jpeg)
+        .arg("-B")
+        .arg(&destination)
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg("-DENABLE_SHARED=OFF")
+        .arg("-DENABLE_STATIC=ON")
+        .arg("-DWITH_SIMD=OFF")
+        .arg("-DWITH_TURBOJPEG=OFF")
+        .arg("-DWITH_CRT_DLL=ON");
+    if target_os == "windows" {
+        configure.args(["-G", "NMake Makefiles"]);
+    }
+    assert!(
+        configure
+            .status()
+            .expect("configure native JPEG codec")
+            .success()
+    );
+    assert!(
+        Command::new("cmake")
+            .envs(tool.env().iter().cloned())
+            .arg("--build")
+            .arg(&destination)
+            .args(["--target", "jpeg-static", "--config", "Release"])
+            .status()
+            .expect("build native JPEG codec")
+            .success()
+    );
+    println!("cargo:rustc-link-search=native={}", destination.display());
+    // Emit after the oracle library so Unix static archive ordering resolves
+    // the native loaders' codec references.
+    println!(
+        "cargo:rerun-if-changed={}",
+        jpeg.join("CMakeLists.txt").display()
+    );
+    for item in fs::read_dir(jpeg.join("src")).expect("native JPEG source directory") {
+        let source = item.expect("JPEG source entry").path();
+        if source.is_file() {
+            println!("cargo:rerun-if-changed={}", source.display());
+        }
+    }
+}
+
+fn prepare_texture_sources(root: &Path, out: &Path) {
+    let path = root.join("src/RageTextureManager.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native texture preferences");
+    let start = source
+        .find("void RageTextureManager::AdjustTextureID(")
+        .expect("native texture ID adjustment");
+    let end = start
+        + source[start..]
+            .find("\nbool RageTextureManager::IsTextureRegistered(")
+            .expect("end of native texture ID adjustment");
+    fs::write(out.join("texture_adjust.inc"), &source[start..end])
+        .expect("write native texture ID adjustment");
+    let path = root.join("src/RageDisplay_OGL.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native GL pixel formats");
+    let start = source
+        .find("static RageDisplay::RagePixelFormatDesc PIXEL_FORMAT_DESC")
+        .expect("native GL pixel descriptors");
+    let end = start
+        + source[start..]
+            .find("}};")
+            .expect("end of pixel format descriptors")
+        + 3;
+    fs::write(out.join("texture_formats.inc"), &source[start..end])
+        .expect("write native pixel format descriptors");
 }
 
 // These are the source lists from the pinned Xiph CMakeLists.txt. Decode and

@@ -7,6 +7,19 @@ pub fn evaluate(path: &Path) -> Result<serde_json::Value, Error> {
     if let Some(root) = request.get_mut("root") {
         resolve_model_paths(root, path.parent().unwrap_or(Path::new(".")));
     }
+    if let Some(files) = request
+        .get_mut("texture_files")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        let directory = path.parent().unwrap_or(Path::new("."));
+        for spec in files {
+            if let Some(file) = spec.get_mut("file") {
+                if let Some(relative) = file.as_str().filter(|file| Path::new(file).is_relative()) {
+                    *file = directory.join(relative).to_string_lossy().as_ref().into();
+                }
+            }
+        }
+    }
     let request = serde_json::to_vec(&request).map_err(Error::Json)?;
     let response = native_eval(&request)?;
     let mut document: serde_json::Value = serde_json::from_slice(&response).map_err(Error::Json)?;
@@ -111,6 +124,169 @@ impl fmt::Display for Error {
 #[cfg(all(test, itgmania_oracle))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bitmap_loader_decodes_native_files() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-loader.json");
+        let result = evaluate(&path).expect("native bitmap file decoding");
+        assert_eq!(
+            result,
+            evaluate(&path).expect("repeat native file decoding")
+        );
+        assert_eq!(result["oracle"], "itgmania_native_bitmap_loader");
+        assert_eq!(result["framebuffer_verified"], false);
+        let cases = result["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 24);
+        let case = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+        assert_eq!(
+            case("model-pink")["upload"]["pixels"],
+            serde_json::json!(vec![[0; 4]; 128])
+        );
+        assert_eq!(case("unicode-path")["upload"], case("model-pink")["upload"]);
+        assert_eq!(case("misnamed-png")["upload"], case("model-pink")["upload"]);
+        assert_eq!(
+            case("sprite-pink")["loaded"]["pixels"],
+            serde_json::json!(vec![[255, 0, 255, 255]; 45])
+        );
+        assert_eq!(
+            case("sprite-pink")["dimensions"],
+            serde_json::json!({
+                "source": [5, 9], "image": [5, 9], "texture": [8, 16]
+            })
+        );
+        // Native Blit initializes only one extra border row/column. The rest
+        // of a Sprite's allocation is intentionally excluded from evidence.
+        assert_eq!(case("sprite-pink")["upload"]["pixels_captured"], false);
+        assert!(case("sprite-pink")["upload"].get("pixels").is_none());
+        assert_eq!(case("native-png16")["loaded"]["surface_bit_depth"], 32);
+        assert_eq!(
+            case("native-png16")["loaded"]["pixels"][0],
+            serde_json::json!([18, 128, 254, 255])
+        );
+        for name in ["bmp4-key", "bmp8-key", "gif-key"] {
+            let decoded = case(name);
+            assert_eq!(decoded["loaded"]["surface_bit_depth"], 8);
+            assert_eq!(
+                decoded["loaded"]["pixels"][0],
+                serde_json::json!([255, 0, 255, 255])
+            );
+            let pixels = &decoded["upload"]["pixels"];
+            // The pinned BMP4 loader reads the low nibble first, unlike the
+            // standard. Record that native behavior without rewriting input.
+            let (key, duplicate, red) = if name == "bmp4-key" {
+                (1, 0, 3)
+            } else {
+                (0, 1, 2)
+            };
+            assert_eq!(pixels[key], serde_json::json!([0, 0, 0, 0]));
+            assert_eq!(pixels[duplicate], serde_json::json!([255, 0, 255, 255]));
+            assert_eq!(pixels[red], serde_json::json!([240, 40, 10, 255]));
+        }
+        assert_eq!(case("bmp-pal-supported")["upload"]["surface_bit_depth"], 8);
+        assert_eq!(
+            case("bmp-pal-supported")["upload"]["requested_pixel_format"],
+            "PAL"
+        );
+        assert_eq!(case("native-jpeg")["loaded"]["width"], 8);
+        let jpeg = case("native-jpeg")["loaded"]["pixels"].as_array().unwrap();
+        assert!(jpeg.iter().all(|pixel| pixel == &jpeg[0]));
+        assert_eq!(jpeg[0][3], 255);
+    }
+
+    #[test]
+    fn bitmap_loader_applies_native_preferences_and_hints() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-loader.json");
+        let result = evaluate(&path).expect("native bitmap policy");
+        let cases = result["cases"].as_array().unwrap();
+        let case = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+        let defaults = case("manager-constructor-defaults");
+        assert_eq!(defaults["adjusted_id"]["max_size"], 1024);
+        assert_eq!(defaults["adjusted_id"]["color_depth"], 16);
+        assert_eq!(case("model-pink")["adjusted_id"]["max_size"], 2048);
+        assert_eq!(case("model-pink")["adjusted_id"]["color_depth"], 32);
+        assert_eq!(
+            case("model-game-default-cap")["dimensions"]["texture"],
+            serde_json::json!([2048, 8])
+        );
+        assert_eq!(
+            case("model-constructor-cap")["dimensions"]["texture"],
+            serde_json::json!([1024, 8])
+        );
+        assert_eq!(case("model-id-cap")["adjusted_id"]["max_size"], 2048);
+        assert_eq!(case("model-nomipmaps")["adjusted_id"]["mipmaps"], true);
+        assert_eq!(
+            case("model-nomipmaps")["upload"]["requested_mipmaps"],
+            false
+        );
+        assert_eq!(
+            case("sprite-force-mipmaps")["upload"]["requested_mipmaps"],
+            true
+        );
+        assert_eq!(case("filename-16bpp")["adjusted_id"]["color_depth"], 32);
+        assert_eq!(
+            case("filename-16bpp")["upload"]["requested_pixel_format"],
+            "RGB5A1"
+        );
+        assert_eq!(
+            case("hires-on")["dimensions"]["texture"],
+            serde_json::json!([16, 16])
+        );
+        assert_eq!(
+            case("hires-off")["dimensions"]["texture"],
+            serde_json::json!([8, 8])
+        );
+        for name in ["grayscale-supported", "alphamap-supported"] {
+            assert_eq!(case(name)["upload"]["surface_bit_depth"], 8);
+            assert_eq!(case(name)["upload"]["requested_pixel_format"], "PAL");
+        }
+        assert_eq!(
+            case("grayscale-no-palette")["upload"]["requested_pixel_format"],
+            "RGBA8"
+        );
+        assert_eq!(case("dither16")["upload"]["surface_bit_depth"], 16);
+        assert_eq!(
+            case("dither16")["upload"]["requested_pixel_format"],
+            "RGBA4"
+        );
+        assert_eq!(
+            case("alphamap-supported")["upload"]["pixels"][32],
+            serde_json::json!([255, 255, 255, 136])
+        );
+    }
+
+    #[test]
+    fn bitmap_loader_rejects_invalid_profiles_and_restores_state() {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/bitmap-loader/model-pink-npot.png");
+        for (key, value) in [
+            ("color_depth", serde_json::json!(24)),
+            ("max_size", serde_json::json!(7)),
+            ("max_size", serde_json::json!(9)),
+            ("max_size", serde_json::json!(8192)),
+            ("high_resolution", serde_json::json!(1)),
+            ("kind", serde_json::json!("movie")),
+        ] {
+            let mut case = serde_json::json!({"file": file, "kind": "model"});
+            case[key] = value;
+            let request =
+                serde_json::to_vec(&serde_json::json!({"texture_files": [case]})).unwrap();
+            let result: serde_json::Value =
+                serde_json::from_slice(&native_eval(&request).unwrap()).unwrap();
+            assert!(
+                result["error"].is_string(),
+                "accepted invalid {key}: {result}"
+            );
+        }
+        // Adjusted custom IDs must be removed using their registered pointer.
+        // Repeated AFT creation followed by bitmap mode catches stale entries.
+        let actors =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/aft-creation.json");
+        let files =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-loader.json");
+        evaluate(&actors).expect("native AFT after rejected bitmap input");
+        evaluate(&actors).expect("native AFT registry cleanup");
+        evaluate(&files).expect("bitmap registry is empty after AFT deletion");
+    }
 
     #[test]
     fn texture_surface_uses_native_preprocessing() {

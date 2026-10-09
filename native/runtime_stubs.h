@@ -23,3 +23,5 @@ std::vector<std::string> harness_take_diagnostics();
 // Zero is an unbound texture; unknown nonzero handles are capture errors.
 class RageTexture;
 RageTexture* harness_texture_for_handle(uintptr_t handle);
+// Serialized control scope only; regular actor captures retain metadata loads.
+void harness_native_bitmap_loading(bool enabled);

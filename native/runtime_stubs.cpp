@@ -29,6 +29,7 @@ extern "C" {
 #include "RageTexture.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
+#include "RageBitmapTexture.h"
 #include "ScreenMessage.h"
 #include "Song.h"
 #include "Style.h"
@@ -191,7 +192,7 @@ std::pair<int, int> jpeg_dimensions(std::ifstream& file,
 }
 
 std::pair<int, int> image_dimensions(const std::string& path) {
-	std::ifstream file(path, std::ios::binary);
+	std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
 	std::array<unsigned char, 24> header{};
 	if (!file.read(reinterpret_cast<char*>(header.data()), header.size())) {
 		throw std::runtime_error("could not read font texture " + path);
@@ -303,8 +304,8 @@ ArchHooks* HOOKS = nullptr;
 
 void harness_configure_font_paths(const std::string& theme_fonts,
                                   const std::string& fallback_fonts) {
-	harness_theme_fonts() = std::filesystem::path(theme_fonts);
-	harness_fallback_fonts() = std::filesystem::path(fallback_fonts);
+	harness_theme_fonts() = std::filesystem::u8path(theme_fonts);
+	harness_fallback_fonts() = std::filesystem::u8path(fallback_fonts);
 }
 
 void harness_clear_diagnostics() { harness_diagnostics().clear(); }
@@ -408,12 +409,16 @@ RageTextureManager::RageTextureManager()
 	  m_TexturePolicy(RageTextureID::TEX_DEFAULT) {}
 RageTextureManager::~RageTextureManager() = default;
 void RageTextureManager::Update(float) {}
-// Metadata-only registry owned by the serialized native harness. Live source
+// Texture registry owned by the serialized native harness. Live source
 // and render-target handles share native RageTextureID equality; unloading the
 // last reference removes an entry before its display allocation is destroyed.
-static std::map<RageTextureID, RageTexture*>& harness_textures() {
+// Bitmap controls use an isolated registry: another serialized test may own
+// live metadata actors between calls into the bridge.
+static bool native_bitmap_loading = false;
+static std::map<RageTextureID, RageTexture*>& harness_textures(bool bitmap = native_bitmap_loading) {
 	static std::map<RageTextureID, RageTexture*> textures;
-	return textures;
+	static std::map<RageTextureID, RageTexture*> bitmaps;
+	return bitmap ? bitmaps : textures;
 }
 RageTexture* harness_texture_for_handle(uintptr_t handle) {
 	if (!handle) return nullptr;
@@ -450,20 +455,32 @@ bool RageTextureManager::SetPrefs(RageTextureManagerPrefs prefs) {
 	return true;
 }
 void RageTextureManager::DeleteTexture(RageTexture* texture) {
-	harness_textures().erase(texture->GetID());
+	// Registered render targets may retain their unadjusted object ID. Native
+	// RageTextureManager removes them by the registered pointer-to-ID mapping.
+	auto& textures = harness_textures();
+	const auto entry = std::find_if(textures.begin(), textures.end(),
+	    [texture](const auto& entry) { return entry.second == texture; });
+	if (entry != textures.end()) textures.erase(entry);
 	delete texture;
 }
 void RageTextureManager::GarbageCollect(GCType) {}
+void harness_native_bitmap_loading(bool enabled) {
+	if (enabled && (native_bitmap_loading || !harness_textures(true).empty()))
+		throw std::runtime_error("Native bitmap capture registry is already in use");
+	native_bitmap_loading = enabled;
+}
 RageTexture* RageTextureManager::LoadTextureInternal(RageTextureID id) {
 	AdjustTextureID(id);
 	const auto found = harness_textures().find(id);
 	if (found != harness_textures().end()) return CopyTexture(found->second);
-	auto* texture = new HarnessTexture(id);
+	RageTexture* texture = native_bitmap_loading
+	    ? static_cast<RageTexture*>(new RageBitmapTexture(id))
+	    : static_cast<RageTexture*>(new HarnessTexture(id));
 	RegisterTexture(id, texture);
 	return texture;
 }
 void RageTextureManager::InvalidateTextures() {}
-void RageTextureManager::AdjustTextureID(RageTextureID&) const {}
+#include "texture_adjust.inc"
 void RageTextureManager::DiagnosticOutput() const {}
 RageTextureID RageTextureManager::GetDefaultTextureID() {
 	return RageTextureID("__harness_missing_texture__.png");
@@ -930,7 +947,7 @@ class RageFileStd final : public RageFileObj {
         if (!m_stream) return -1;
         if (m_mode & RageFile::WRITE) m_stream->flush();
         std::error_code error;
-        const auto bytes = std::filesystem::file_size(m_path, error);
+        const auto bytes = std::filesystem::file_size(std::filesystem::u8path(m_path), error);
         if (error || bytes > static_cast<uintmax_t>(std::numeric_limits<int>::max())) return -1;
         return static_cast<int>(bytes);
     }
@@ -942,10 +959,10 @@ class RageFileStd final : public RageFileObj {
         if (mode & RageFile::WRITE) {
             flags |= std::ios::out | std::ios::trunc;
             std::error_code error;
-            const auto parent = std::filesystem::path(path).parent_path();
+            const auto parent = std::filesystem::u8path(path).parent_path();
             if (!parent.empty()) std::filesystem::create_directories(parent, error);
         }
-        m_stream = std::make_unique<std::fstream>(path, flags);
+        m_stream = std::make_unique<std::fstream>(std::filesystem::u8path(path), flags);
         if (!*m_stream) { SetError("open failed"); m_stream.reset(); return false; }
         return true;
     }
@@ -1091,20 +1108,20 @@ void harness_dir_listing(
 	const RString& raw_path, std::vector<RString>& out, bool only_dirs,
 	bool return_path) {
 	out.clear();
-	std::filesystem::path input(raw_path);
+	std::filesystem::path input = std::filesystem::u8path(raw_path);
 	std::error_code ec;
 	if (std::filesystem::is_directory(input, ec)) {
 		input /= "*";
 	}
 	const std::filesystem::path directory =
 		input.parent_path().empty() ? std::filesystem::path(".") : input.parent_path();
-	const std::string pattern = input.filename().string();
+	const std::string pattern = input.filename().u8string();
 	for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
 		if (ec) break;
 		if (only_dirs && !entry.is_directory()) continue;
-		if (!wildcard_match(pattern, entry.path().filename().string())) continue;
-		out.push_back(return_path ? entry.path().generic_string()
-		                          : entry.path().filename().generic_string());
+		if (!wildcard_match(pattern, entry.path().filename().u8string())) continue;
+		out.push_back(return_path ? entry.path().generic_u8string()
+		                          : entry.path().filename().generic_u8string());
 	}
 	std::sort(out.begin(), out.end(), [](const RString& left, const RString& right) {
 		return CompareNoCase(left, right) < 0;
@@ -1131,7 +1148,7 @@ void RageFileManager::GetDirListingWithMultipleExtensions(
 	harness_dir_listing(path, candidates, onlyDirs, true);
 	out.clear();
 	for (const RString& candidate : candidates) {
-		std::string extension = std::filesystem::path(candidate).extension().string();
+		std::string extension = std::filesystem::u8path(candidate).extension().u8string();
 		if (!extension.empty() && extension.front() == '.') extension.erase(0, 1);
 		const bool matches = exts.empty() || std::any_of(
 			exts.begin(), exts.end(), [&](const RString& expected) {
@@ -1140,23 +1157,23 @@ void RageFileManager::GetDirListingWithMultipleExtensions(
 		if (!matches) continue;
 		out.push_back(returnPathToo
 			? candidate
-			: std::filesystem::path(candidate).filename().generic_string());
+			: std::filesystem::u8path(candidate).filename().generic_u8string());
 	}
 }
 bool RageFileManager::Move(const RString&, const RString&) { return false; }
 bool RageFileManager::Copy(const std::string&, const std::string&) { return false; }
 bool RageFileManager::Remove(const RString& path) {
 	std::error_code ec;
-	return std::filesystem::remove(path.c_str(), ec);
+	return std::filesystem::remove(std::filesystem::u8path(path), ec);
 }
 bool RageFileManager::DeleteRecursive(const RString&) { return false; }
 void RageFileManager::CreateDir(const RString& path) {
 	std::error_code ec;
-	std::filesystem::create_directories(path.c_str(), ec);
+	std::filesystem::create_directories(std::filesystem::u8path(path), ec);
 }
 RageFileManager::FileType RageFileManager::GetFileType(const RString& path) {
 	std::error_code ec;
-	auto status = std::filesystem::status(path.c_str(), ec);
+	auto status = std::filesystem::status(std::filesystem::u8path(path), ec);
 	if (ec) return TYPE_NONE;
 	if (std::filesystem::is_directory(status)) return TYPE_DIR;
 	if (std::filesystem::is_regular_file(status)) return TYPE_FILE;
@@ -1167,7 +1184,7 @@ bool RageFileManager::IsADirectory(const RString& path) { return GetFileType(pat
 bool RageFileManager::DoesFileExist(const RString& path) { return IsAFile(path); }
 int RageFileManager::GetFileSizeInBytes(const RString& path) {
 	std::error_code ec;
-	auto sz = std::filesystem::file_size(path.c_str(), ec);
+	auto sz = std::filesystem::file_size(std::filesystem::u8path(path), ec);
 	return ec ? -1 : static_cast<int>(sz);
 }
 int RageFileManager::GetFileHash(const RString&) { return 0; }
@@ -1463,7 +1480,7 @@ bool harness_font_candidate(
 	const std::filesystem::path& fonts_root, const std::string& key,
 	std::filesystem::path& result) {
 	if (fonts_root.empty()) return false;
-	const std::filesystem::path requested = fonts_root / std::filesystem::path(key);
+	const std::filesystem::path requested = fonts_root / std::filesystem::u8path(key);
 	std::error_code ec;
 	if (requested.has_extension() && std::filesystem::is_regular_file(requested, ec)) {
 		result = requested;
@@ -1471,17 +1488,17 @@ bool harness_font_candidate(
 	}
 
 	const std::filesystem::path directory = requested.parent_path();
-	const std::string prefix = requested.filename().string();
+	const std::string prefix = requested.filename().u8string();
 	std::vector<std::filesystem::path> candidates;
 	for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
 		if (ec) break;
 		if (!entry.is_regular_file()) continue;
-		const std::string name = entry.path().filename().string();
+		const std::string name = entry.path().filename().u8string();
 		if (name.size() < prefix.size() ||
 		    CompareNoCase(name.substr(0, prefix.size()), prefix) != 0) {
 			continue;
 		}
-		std::string extension = entry.path().extension().string();
+		std::string extension = entry.path().extension().u8string();
 		MakeLower(extension);
 		if (extension == ".ini" || extension == ".redir") {
 			candidates.push_back(entry.path());
@@ -1491,7 +1508,7 @@ bool harness_font_candidate(
 	if (candidates.empty()) return false;
 	if (candidates.size() > 1) {
 		harness_diagnostics().push_back(
-			"multiple font definitions match " + requested.generic_string());
+			"multiple font definitions match " + requested.generic_u8string());
 	}
 	result = candidates.front();
 	return true;
@@ -1507,13 +1524,13 @@ bool harness_resolve_font(
 	     !harness_font_candidate(harness_fallback_fonts(), key, result))) {
 		return false;
 	}
-	std::string extension = result.extension().string();
+	std::string extension = result.extension().u8string();
 	MakeLower(extension);
 	if (extension != ".redir") return true;
 
 	std::string redirect;
-	if (!GetFileContents(result.generic_string(), redirect, true) || redirect.empty()) {
-		throw std::runtime_error("invalid font redirect " + result.generic_string());
+	if (!GetFileContents(result.generic_u8string(), redirect, true) || redirect.empty()) {
+		throw std::runtime_error("invalid font redirect " + result.generic_u8string());
 	}
 	return harness_resolve_font(redirect, result, depth + 1);
 }
@@ -1551,7 +1568,7 @@ bool ThemeManager::GetPathInfo(
 		: metrics_group + " " + element;
 	std::filesystem::path resolved;
 	if (!harness_resolve_font(key, resolved)) return false;
-	out.sResolvedPath = resolved.generic_string();
+	out.sResolvedPath = resolved.generic_u8string();
 	out.sMatchingMetricsGroup = metrics_group;
 	out.sMatchingElement = element;
 	return true;
@@ -1730,8 +1747,8 @@ RString Song::GetDisplayArtist() const { return m_sArtistTranslit.empty() ? m_sA
 RString Song::GetMainTitle() const { return m_sMainTitle; }
 RString Song::GetSongAssetPath(RString sPath, const RString& sSongPath) {
 	if (sPath.empty()) return sPath;
-	if (std::filesystem::path(sPath.c_str()).is_absolute()) return sPath;
-	return (std::filesystem::path(sSongPath.c_str()) / sPath.c_str()).string().c_str();
+	if (std::filesystem::u8path(sPath).is_absolute()) return sPath;
+	return (std::filesystem::u8path(sSongPath) / std::filesystem::u8path(sPath)).generic_u8string();
 }
 Steps* Song::CreateSteps() { return new Steps(this); }
 void Song::AddSteps(Steps* steps) {
@@ -1784,9 +1801,18 @@ ScreenMessage ScreenMessageHelpers::ToScreenMessage(const RString& name) { retur
 RString ScreenMessageHelpers::ScreenMessageToString(ScreenMessage sm) { return sm; }
 #endif
 
-const std::vector<RString>& ActorUtil::GetTypeExtensionList(FileType) {
+const std::vector<RString>& ActorUtil::GetTypeExtensionList(FileType type) {
+	// Pinned ActorUtil.cpp bitmap extension table used by native LoadFile.
+	static const std::vector<RString> bitmaps = {"bmp", "gif", "jpeg", "jpg", "png"};
+	if (type == FT_Bitmap) return bitmaps;
 	static std::vector<RString> empty;
 	return empty;
+}
+
+namespace StepMania {
+// Bitmap controls provide the resolved ForceOn/ForceOff setting. Automatic
+// theme/display resolution selection is outside this explicit profile oracle.
+bool GetHighResolutionTextures() { return TEXTUREMAN->GetPrefs().m_bHighResolutionTextures; }
 }
 
 const RString RANDOM_BACKGROUND_FILE = "";

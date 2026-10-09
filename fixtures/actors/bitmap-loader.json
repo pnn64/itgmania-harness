@@ -1,0 +1,156 @@
+{
+  "name": "native-bitmap-loader",
+  "texture_files": [
+    {
+      "name": "model-pink",
+      "file": "bitmap-loader/model-pink-npot.png",
+      "kind": "model",
+      "color_depth": 32,
+      "max_size": 2048
+    },
+    {
+      "name": "sprite-pink",
+      "file": "bitmap-loader/model-pink-npot.png",
+      "kind": "sprite",
+      "color_depth": 32,
+      "max_size": 2048
+    },
+    {
+      "name": "manager-constructor-defaults",
+      "file": "bitmap-loader/model-pink-npot.png",
+      "kind": "model"
+    },
+    {
+      "name": "model-nomipmaps",
+      "file": "bitmap-loader/pink (nomipmaps).png",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "filename-16bpp",
+      "file": "bitmap-loader/pink (16bpp).png",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "sprite-force-mipmaps",
+      "file": "bitmap-loader/model-pink-npot.png",
+      "kind": "sprite",
+      "color_depth": 32,
+      "force_mipmaps": true
+    },
+    {
+      "name": "native-png16",
+      "file": "bitmap-loader/rgba16-strip.png",
+      "kind": "sprite",
+      "color_depth": 32,
+      "max_size": 2048
+    },
+    {
+      "name": "packed-png-palette",
+      "file": "bitmap-loader/palette-packed-duplicates.png",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "model-game-default-cap",
+      "file": "bitmap-loader/model-max-size.png",
+      "kind": "model",
+      "color_depth": 32,
+      "max_size": 2048
+    },
+    {
+      "name": "model-constructor-cap",
+      "file": "bitmap-loader/model-max-size.png",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "model-id-cap",
+      "file": "bitmap-loader/model-max-size.png",
+      "kind": "model",
+      "color_depth": 32,
+      "max_size": 4096
+    },
+    {
+      "name": "unicode-path",
+      "file": "bitmap-loader/日本語/ピンク.png",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "misnamed-png",
+      "file": "bitmap-loader/misnamed.bmp",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "bmp4-key",
+      "file": "bitmap-loader/palette-4.bmp",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "bmp8-key",
+      "file": "bitmap-loader/palette-8.bmp",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "gif-key",
+      "file": "bitmap-loader/palette.gif",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "bmp-pal-supported",
+      "file": "bitmap-loader/palette-8.bmp",
+      "kind": "model",
+      "palette_supported": true
+    },
+    {
+      "name": "native-jpeg",
+      "file": "bitmap-loader/uniform.jpg",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "grayscale-supported",
+      "file": "bitmap-loader/gray (grayscale).png",
+      "kind": "model",
+      "palette_supported": true
+    },
+    {
+      "name": "grayscale-no-palette",
+      "file": "bitmap-loader/gray (grayscale).png",
+      "kind": "model",
+      "color_depth": 32
+    },
+    {
+      "name": "alphamap-supported",
+      "file": "bitmap-loader/alpha (alphamap).png",
+      "kind": "model",
+      "palette_supported": true
+    },
+    {
+      "name": "dither16",
+      "file": "bitmap-loader/gradient (dither).png",
+      "kind": "model",
+      "color_depth": 16
+    },
+    {
+      "name": "hires-on",
+      "file": "bitmap-loader/hires (doubleres).png",
+      "kind": "model",
+      "color_depth": 32,
+      "high_resolution": true
+    },
+    {
+      "name": "hires-off",
+      "file": "bitmap-loader/hires (doubleres).png",
+      "kind": "model",
+      "color_depth": 32,
+      "high_resolution": false
+    }
+  ]
+}

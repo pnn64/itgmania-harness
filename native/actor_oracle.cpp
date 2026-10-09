@@ -33,6 +33,7 @@
 #include "RageSurface.h"
 #include "RageSurfaceUtils.h"
 #include "RageSurfaceUtils_Zoom.h"
+#include "RageSurface_Load.h"
 #include "RageTexture.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
@@ -248,6 +249,25 @@ const char* texture_mode_name(TextureMode mode) {
 }
 
 class HarnessDisplay;
+#include "texture_formats.inc"
+Json::Value surface_snapshot(const RageSurface* surface) {
+  Json::Value result(Json::objectValue);
+  result["width"] = surface->w;
+  result["height"] = surface->h;
+  result["surface_bit_depth"] = surface->fmt.BitsPerPixel;
+  result["pixels"] = Json::Value(Json::arrayValue);
+  for (int y = 0; y < surface->h; ++y) {
+    for (int x = 0; x < surface->w; ++x) {
+      uint8_t rgba[4];
+      RageSurfaceUtils::GetRGBAV(surface->pixels + y * surface->pitch +
+          x * surface->fmt.BytesPerPixel, surface, rgba);
+      Json::Value pixel(Json::arrayValue);
+      for (const auto value : rgba) pixel.append(unsigned(value));
+      result["pixels"].append(std::move(pixel));
+    }
+  }
+  return result;
+}
 
 class HarnessGeometry final : public RageCompiledGeometry {
  public:
@@ -265,6 +285,11 @@ class HarnessGeometry final : public RageCompiledGeometry {
 class HarnessDisplay final : public RageDisplay {
  public:
   std::vector<RenderTargetParam> allocations;
+  bool bitmap_capture = false;
+  bool bitmap_palette = false;
+  bool bitmap_pixels = false;
+  unsigned bitmap_remaining_pixels = 262144;
+  Json::Value bitmap_upload;
   explicit HarnessDisplay(int width, int height)
       : params_(true, "harness", width, height, 32, 60, false, false, false,
                 false, false, false, "ITGmania actor harness", "", false,
@@ -275,7 +300,9 @@ class HarnessDisplay final : public RageDisplay {
   std::string Init(const VideoModeParams&, bool) override { return {}; }
   std::string GetApiDescription() const override { return "HarnessCapture"; }
   void GetDisplaySpecs(DisplaySpecs&) const override {}
-  const RagePixelFormatDesc* GetPixelFormatDesc(RagePixelFormat) const override {
+  const RagePixelFormatDesc* GetPixelFormatDesc(RagePixelFormat format) const override {
+    // Dithering uses the native GL 16-bit descriptors unchanged.
+    if (bitmap_capture) return &PIXEL_FORMAT_DESC[format];
     static const RagePixelFormatDesc desc = {32, {0xff000000, 0x00ff0000,
                                                   0x0000ff00, 0x000000ff}};
     return &desc;
@@ -284,11 +311,31 @@ class HarnessDisplay final : public RageDisplay {
     return ActualVideoModeParams(params_);
   }
   void SetBlendMode(BlendMode mode) override { blend_mode_ = mode; }
-  bool SupportsTextureFormat(RagePixelFormat, bool) override { return true; }
+  bool SupportsTextureFormat(RagePixelFormat format, bool) override {
+    return !bitmap_capture || format != RagePixelFormat_PAL || bitmap_palette;
+  }
   // Capture the shader-capable GL/GLES2 geometry path. Texture matrix scaling
   // is emulated below, including the native same-name two-mesh merge.
   bool SupportsPerVertexMatrixScale() override { return true; }
-  uintptr_t CreateTexture(RagePixelFormat, RageSurface*, bool) override {
+  uintptr_t CreateTexture(RagePixelFormat format, RageSurface* surface, bool mipmaps) override {
+    if (bitmap_capture) {
+      const unsigned pixels = unsigned(surface->w) * unsigned(surface->h);
+      if (pixels > bitmap_remaining_pixels)
+        throw std::runtime_error("bitmap fixture exceeds its output pixel budget");
+      bitmap_remaining_pixels -= pixels;
+      // A Model always stretches its image to the full allocation. Sprites
+      // may have uninitialized POT padding beyond the one native border row
+      // and column; do not read or serialize that padding.
+      bitmap_upload = Json::Value(Json::objectValue);
+      bitmap_upload["width"] = surface->w;
+      bitmap_upload["height"] = surface->h;
+      bitmap_upload["surface_bit_depth"] = surface->fmt.BitsPerPixel;
+      bitmap_upload["pixels_captured"] = bitmap_pixels;
+      if (bitmap_pixels) bitmap_upload = surface_snapshot(surface);
+      bitmap_upload["pixels_captured"] = bitmap_pixels;
+      bitmap_upload["requested_pixel_format"] = RagePixelFormatToString(format);
+      bitmap_upload["requested_mipmaps"] = mipmaps;
+    }
     return 1;
   }
   void UpdateTexture(uintptr_t, RageSurface*, int, int, int, int) override {}
@@ -1177,6 +1224,110 @@ unsigned surface_integer(const Json::Value& value, unsigned maximum,
   return value.asUInt();
 }
 
+// Actual native file decoding and RageBitmapTexture::Create, stopped at the
+// display upload. Pixel format/mip requests are evidence; GPU conversion and
+// generated mip pixels are not emulated or claimed here.
+Json::Value evaluate_bitmap(const Json::Value& request) {
+  const auto& cases = request["texture_files"];
+  if (!cases.isArray() || cases.empty() || cases.size() > 64)
+    throw std::runtime_error("texture_files must contain 1..64 cases");
+  HarnessDisplay display(640, 480);
+  display.bitmap_capture = true;
+  struct Scope {
+    RageDisplay* previous_display = DISPLAY;
+    RageTextureManagerPrefs previous_prefs = TEXTUREMAN->GetPrefs();
+    explicit Scope(RageDisplay* display) {
+      harness_native_bitmap_loading(true);
+      DISPLAY = display;
+    }
+    ~Scope() {
+      harness_native_bitmap_loading(false);
+      TEXTUREMAN->SetPrefs(previous_prefs);
+      DISPLAY = previous_display;
+    }
+  } scope(&display);
+  Json::Value result(Json::objectValue);
+  result["schema_version"] = 1;
+  result["oracle"] = "itgmania_native_bitmap_loader";
+  result["fixture"] = request["name"];
+  result["framebuffer_verified"] = false;
+  result["hardware_max_size"] = display.GetMaxTextureSize();
+  result["cases"] = Json::Value(Json::arrayValue);
+  for (const auto& spec : cases) {
+    const std::string file = field_string(spec, "file", "", "bitmap");
+    if (file.empty()) throw std::runtime_error("bitmap file is required");
+    std::string error;
+    std::unique_ptr<RageSurface> header(RageSurfaceUtils::LoadFile(file, error, true));
+    if (!header) throw std::runtime_error("native bitmap header: " + error);
+    if (header->w <= 0 || header->h <= 0 || header->w > 4096 || header->h > 4096 ||
+        unsigned(header->w) * unsigned(header->h) > display.bitmap_remaining_pixels)
+      throw std::runtime_error("bitmap fixture exceeds its input pixel budget");
+    display.bitmap_remaining_pixels -= unsigned(header->w) * unsigned(header->h);
+    std::unique_ptr<RageSurface> loaded(RageSurfaceUtils::LoadFile(file, error));
+    if (!loaded) throw std::runtime_error("native bitmap decode: " + error);
+    RageTextureManagerPrefs prefs;
+    if (spec.isMember("color_depth"))
+      prefs.m_iTextureColorDepth = surface_integer(spec["color_depth"], 32, "color_depth");
+    if (prefs.m_iTextureColorDepth != 16 && prefs.m_iTextureColorDepth != 32)
+      throw std::runtime_error("color_depth must be 16 or 32");
+    if (spec.isMember("max_size"))
+      prefs.m_iMaxTextureResolution = surface_integer(spec["max_size"], 4096, "max_size");
+    if (prefs.m_iMaxTextureResolution < 8 ||
+        (prefs.m_iMaxTextureResolution & (prefs.m_iMaxTextureResolution - 1)))
+      throw std::runtime_error("max_size must be a power of two from 8 through 4096");
+    prefs.m_bHighResolutionTextures = field_bool(spec, "high_resolution", true, "bitmap");
+    prefs.m_bMipMaps = field_bool(spec, "force_mipmaps", false, "bitmap");
+    TEXTUREMAN->SetPrefs(prefs);
+    display.bitmap_palette = field_bool(spec, "palette_supported", false, "bitmap");
+    display.bitmap_upload = Json::Value();
+    Json::Value out(Json::objectValue);
+    out["name"] = spec["name"];
+    out["loaded"] = surface_snapshot(loaded.get());
+    out["profile"]["color_depth"] = prefs.m_iTextureColorDepth;
+    out["profile"]["max_size"] = prefs.m_iMaxTextureResolution;
+    out["profile"]["high_resolution"] = prefs.m_bHighResolutionTextures;
+    out["profile"]["force_mipmaps"] = prefs.m_bMipMaps;
+    out["profile"]["palette_supported"] = display.bitmap_palette;
+    const auto capture = [&](RageTexture* texture) {
+      const auto& id = texture->GetID();
+      out["adjusted_id"]["max_size"] = id.iMaxSize;
+      out["adjusted_id"]["color_depth"] = id.iColorDepth;
+      out["adjusted_id"]["stretch"] = id.bStretch;
+      out["adjusted_id"]["mipmaps"] = id.bMipMaps;
+      out["adjusted_id"]["hot_pink_color_key"] = id.bHotPinkColorKey;
+      for (const auto& entry : {std::pair{"source", std::pair{texture->GetSourceWidth(), texture->GetSourceHeight()}},
+                               std::pair{"image", std::pair{texture->GetImageWidth(), texture->GetImageHeight()}},
+                               std::pair{"texture", std::pair{texture->GetTextureWidth(), texture->GetTextureHeight()}}}) {
+        out["dimensions"][entry.first] = Json::Value(Json::arrayValue);
+        out["dimensions"][entry.first].append(entry.second.first);
+        out["dimensions"][entry.first].append(entry.second.second);
+      }
+      out["frame_rects"] = Json::Value(Json::arrayValue);
+      for (int i = 0; i < texture->GetNumFrames(); ++i) {
+        const RectF* rect = texture->GetTextureCoordRect(i);
+        Json::Value frame(Json::arrayValue);
+        for (const float value : {rect->left, rect->top, rect->right, rect->bottom}) frame.append(value);
+        out["frame_rects"].append(std::move(frame));
+      }
+      if (display.bitmap_upload.isNull()) throw std::runtime_error("native bitmap upload was not observed");
+      out["upload"] = display.bitmap_upload;
+    };
+    const std::string kind = field_string(spec, "kind", "sprite", "bitmap");
+    display.bitmap_pixels = kind == "model";
+    if (kind == "model") {
+      AnimatedTexture model;
+      model.Load(file);
+      capture(model.GetCurrentTexture());
+    } else if (kind == "sprite") {
+      RageTexture* texture = TEXTUREMAN->LoadTexture(RageTextureID(file));
+      try { capture(texture); } catch (...) { TEXTUREMAN->UnloadTexture(texture); throw; }
+      TEXTUREMAN->UnloadTexture(texture);
+    } else throw std::runtime_error("bitmap kind must be sprite or model");
+    result["cases"].append(std::move(out));
+  }
+  return result;
+}
+
 // Preserve decoded RGB/RGBA/palette representation: native color-key selection
 // differs for indexed surfaces. This is a CPU subroutine oracle, not a bitmap
 // loader or a GPU framebuffer. Input validation and ownership stay together.
@@ -1449,6 +1600,7 @@ Json::Value evaluate(const Json::Value& request) {
     return evaluate_lua_assertions(request);
   if (request.isMember("animated_texture")) return evaluate_texture(request);
   if (request.isMember("texture_surface")) return evaluate_surface(request);
+  if (request.isMember("texture_files")) return evaluate_bitmap(request);
   const std::string name = field_string(request, "name", "unnamed", "fixture");
   const Json::Value& screen = request["screen"];
   g_screen_width = screen.isNull() ? 640 : field_number(screen, "width", 640, "screen");
