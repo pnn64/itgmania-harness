@@ -648,6 +648,65 @@ fn asset_references(
             insert_asset_reference(&mut references, song_dir, lua_path.parent(), &value);
         }
     }
+    // Model::LoadMaterialsFromMilkshapeAscii resolves diffuse and alpha
+    // textures relative to the material file, rather than the Lua source.
+    let models: Vec<_> = references
+        .values()
+        .flatten()
+        .filter(|path| matches_extension(&path.to_string_lossy(), &["txt"]))
+        .cloned()
+        .collect();
+    for model in models {
+        let bytes = fs::read(&model)
+            .map_err(|error| Error::io("scan model material references", &model, error))?;
+        let source = String::from_utf8_lossy(&bytes);
+        if !source.lines().any(|line| line.starts_with("Materials:")) {
+            continue;
+        }
+        for line in source.lines() {
+            if let Some(value) = line
+                .trim()
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+            {
+                insert_asset_reference(
+                    &mut references,
+                    song_dir,
+                    model.parent(),
+                    &value.replace('\\', "/"),
+                );
+            }
+        }
+    }
+    // AnimatedTexture::Load reads FrameNNNN paths from the INI's directory.
+    let animations: Vec<_> = references
+        .values()
+        .flatten()
+        .filter(|path| matches_extension(&path.to_string_lossy(), &["ini"]))
+        .cloned()
+        .collect();
+    for animation in animations {
+        let bytes = fs::read(&animation)
+            .map_err(|error| Error::io("scan animated texture frames", &animation, error))?;
+        let source = String::from_utf8_lossy(&bytes);
+        let mut animated = false;
+        for line in source.lines().map(str::trim) {
+            if line.starts_with('[') {
+                animated = line.eq_ignore_ascii_case("[AnimatedTexture]");
+            } else if animated && let Some((key, value)) = line.split_once('=') {
+                if key.trim().strip_prefix("Frame").is_some_and(|suffix| {
+                    suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                }) {
+                    insert_asset_reference(
+                        &mut references,
+                        song_dir,
+                        animation.parent(),
+                        &value.trim().replace('\\', "/"),
+                    );
+                }
+            }
+        }
+    }
     // Font::GetFontPaths loads every page sharing the INI's basename.
     // Those images need not appear as literal texture paths in the Lua.
     let fonts: Vec<_> = references
@@ -739,7 +798,7 @@ fn resolve_asset_relative(
     let has_extension = path.extension().is_some();
     const EXTENSIONS: &[&str] = &[
         "png", "jpg", "jpeg", "gif", "webp", "bmp", "ogg", "wav", "mp3", "lua", "xml", "frag",
-        "vert", "ini",
+        "vert", "ini", "txt",
     ];
     // ActorUtil::ResolvePath appends '*' after an exact miss. Frame hints
     // such as "overlay 3x4.png" are therefore part of the resolved asset.
@@ -790,6 +849,7 @@ fn is_asset_path(path: &Path) -> bool {
                     | "frag"
                     | "vert"
                     | "ini"
+                    | "txt"
             )
         })
         || matches_extension(&path.to_string_lossy(), MOVIE_EXTENSIONS)
@@ -1187,6 +1247,76 @@ mod tests {
     }
 
     #[test]
+    fn model_archives_include_materials_and_frames() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/model-archive");
+        let nested = root.join("lua/body");
+        fs::create_dir_all(nested.join("textures")).expect("model directory");
+        fs::write(
+            root.join("model.sm"),
+            "#TITLE:Model;#FGCHANGES:0=lua/body=1;",
+        )
+        .expect("simfile");
+        fs::write(
+            nested.join("default.lua"),
+            "return Def.Model{Meshes='wall.txt', Materials='wall.txt', Bones='wall.txt'}",
+        )
+        .expect("model actor");
+        let model = b"// MilkShape 3D ASCII\nMeshes: 0\nMaterials: 1\n\"material\"\n0 0 0 1\n1 1 1 1\n0 0 0 1\n0 0 0 1\n0\n1\n\"surface.ini\"\n\"textures\\mask.png\"\nBones: 0\n";
+        fs::write(nested.join("wall.txt"), model).expect("model materials");
+        fs::write(nested.join("surface.ini"),
+            "[AnimatedTexture]\nFrame0000=textures/first.png\nDelay0000=0.1\nFrame0001=textures/second.png\nDelay0001=0.2\n")
+            .expect("animated diffuse texture");
+        for name in ["first.png", "second.png", "mask.png", "unrelated.png"] {
+            fs::write(nested.join("textures").join(name), name).expect("texture bytes");
+        }
+        let root = root.canonicalize().expect("fixture root");
+        let trace = serde_json::json!({"actor_definitions": [{
+            "source": "song:/lua/body/default.lua",
+            "properties": {"Meshes": "wall.txt", "Materials": "wall.txt", "Bones": "wall.txt"}
+        }]});
+        let provenance = || SemanticItgmania {
+            git_revision: "archive-test".into(),
+            git_dirty: "false".into(),
+        };
+        let semantic = SemanticManifest {
+            fixture_schema_version: 1,
+            oracle_schema_version: 2,
+            harness_version: env!("CARGO_PKG_VERSION").into(),
+            itgmania: provenance(),
+            simfiles: vec![],
+        };
+        let entry = SemanticEntry {
+            simfile: "model.sm".into(),
+            fixture: "semantic.json".into(),
+            title: "Model".into(),
+            status: "ok".into(),
+            itgmania: Some(provenance()),
+        };
+        let (members, manifest) = archive_members(
+            &root,
+            &root.join("model.sm"),
+            &serde_json::to_vec(&trace).expect("trace bytes"),
+            &trace,
+            &semantic,
+            &entry,
+        )
+        .expect("model archive");
+        assert_eq!(members["song/lua/body/wall.txt"], model);
+        for name in ["first.png", "second.png", "mask.png"] {
+            let path = format!("song/lua/body/textures/{name}");
+            assert_eq!(members[&path], name.as_bytes());
+            assert!(
+                manifest
+                    .textures
+                    .iter()
+                    .any(|texture| texture.reference == format!("song:/lua/body/textures/{name}"))
+            );
+        }
+        assert!(!members.contains_key("song/lua/body/textures/unrelated.png"));
+        assert!(manifest.required_assets.iter().all(|asset| asset.exists));
+    }
+
+    #[test]
     fn movie_actor_assets_are_required_textures() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/movie-actor-assets");
         fs::create_dir_all(&root).expect("fixture directory");
@@ -1201,7 +1331,10 @@ mod tests {
             assert!(is_asset_reference(&reference));
             assert!(is_texture_reference(&reference));
             assert_eq!(asset_kind(&reference), "texture");
-            assert_eq!(resolve_song_asset(&root, &reference), Some(root.join(&name)));
+            assert_eq!(
+                resolve_song_asset(&root, &reference),
+                Some(root.join(&name))
+            );
             assert_eq!(
                 resolve_song_asset(&root, &format!("song:/movie-{extension}")),
                 Some(root.join(&name)),
