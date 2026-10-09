@@ -3817,6 +3817,28 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn texture_coordinates_keep_native_allocation_space() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+        let entry = song_dir.join("texture-coordinates.lua");
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Texture coordinates",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single",
+            description: "", max_beat: 0.2, bpm: 60.0, bpm_segments: &[],
+            beat_step: 0.025, max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).expect("native texture coordinate scene");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        let completed = trace["events"].as_array().expect("native events").iter()
+            .filter(|event| event["operation"] == "Sprite.x" && event["args"] == serde_json::json!([140]))
+            .count();
+        assert_eq!(completed, 1, "coordinate assertions completed");
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn captures_image_texture_aliases() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

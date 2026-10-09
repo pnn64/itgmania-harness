@@ -920,6 +920,16 @@ local function actor_call(actor, name, ...)
 		return out
 	end
 	if name == "GetNumChildren" then return #(actor.children or {}) end
+	if name == "GetTextureCoordRect" and actor.class == "RageTexture" then
+		local rects = actor.state.framerects
+		if rects then
+			local frame = tonumber((...))
+			if not frame or frame < 0 then error("frame index must be nonnegative", 2) end
+			-- Rectangles come from RageTexture::GetTextureCoordRect, including
+			-- native image/allocation scaling, and stay with this texture proxy.
+			return unpack(rects[math.floor(frame) % #rects + 1])
+		end
+	end
 	if name == "GetUpdateRate" then return rawget(actor, "update_rate") or 1 end
 	if name == "GetNumWrapperStates" then return #(rawget(actor, "wrappers") or {}) end
 	if name == "GetWrapperState" then

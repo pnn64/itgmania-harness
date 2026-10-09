@@ -2089,6 +2089,18 @@ void install_actor_math(lua_State* state) {
       field("imagewidth", texture->GetImageWidth());
       field("imageheight", texture->GetImageHeight());
       field("numframes", texture->GetNumFrames());
+      lua_createtable(L, texture->GetNumFrames(), 0);
+      for (int frame = 0; frame < texture->GetNumFrames(); ++frame) {
+        const RectF* rect = texture->GetTextureCoordRect(frame);
+        lua_createtable(L, 4, 0);
+        int channel = 0;
+        for (float value : {rect->left, rect->top, rect->right, rect->bottom}) {
+          lua_pushnumber(L, value);
+          lua_rawseti(L, -2, ++channel);
+        }
+        lua_rawseti(L, -2, frame + 1);
+      }
+      lua_setfield(L, -2, "framerects");
       TEXTUREMAN->UnloadTexture(texture);
       return 1;
     } catch (const std::exception& error) {
