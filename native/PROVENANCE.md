@@ -226,3 +226,21 @@ and compares all three appended segment offsets and durations. Sleep's
 implicit zero-duration tail retains the offset after the sleep. Older
 captures lack these offsets and must be recaptured to audit messages that
 append to an existing queue.
+
+Harness 0.1.34 links the pinned Model.cpp, ModelManager.cpp and
+RageModelGeometry.cpp into the actor-conformance oracle. Model fixtures
+load all three pieces through Model::LoadPieces and execute native
+Model::Update and Model::DrawPrimitives. The compiled-geometry display
+adapter retains native meshes and expands their actual triangle indices;
+it records native matrices, normalized normals, material state, diffuse
+and glow passes, texture matrices and per-vertex matrix-scale flags.
+Texture flags and lighting state are observations, not GPU shading output.
+Relative fixture piece paths resolve beside the request file. The native
+manager owns shared geometry until the actors are destroyed.
+
+The regression verifies exact tweened world vertices, the native Y flip,
+normalization, material modulation, separate glow, texture flags and a
+hidden actor sharing the same mesh. The earlier oracle rejects Model.
+The song Lua host still omits Model projected geometry; this conformance
+capability does not establish complete Model song parity. Keep Mawaru9
+pending until song traces and the production comparator cover its meshes.

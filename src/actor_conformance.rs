@@ -3,6 +3,11 @@ use std::path::Path;
 
 pub fn evaluate(path: &Path) -> Result<serde_json::Value, Error> {
     let request = std::fs::read(path).map_err(Error::Read)?;
+    let mut request: serde_json::Value = serde_json::from_slice(&request).map_err(Error::Json)?;
+    if let Some(root) = request.get_mut("root") {
+        resolve_model_paths(root, path.parent().unwrap_or(Path::new(".")));
+    }
+    let request = serde_json::to_vec(&request).map_err(Error::Json)?;
     let response = native_eval(&request)?;
     let mut document: serde_json::Value = serde_json::from_slice(&response).map_err(Error::Json)?;
     if let Some(message) = document.get("error").and_then(serde_json::Value::as_str) {
@@ -15,6 +20,33 @@ pub fn evaluate(path: &Path) -> Result<serde_json::Value, Error> {
         "execution": "embedded_native_sources"
     });
     Ok(document)
+}
+
+// Model pieces belong to the fixture directory, like their native material
+// textures. Keep fixture requests portable across working directories.
+fn resolve_model_paths(actor: &mut serde_json::Value, directory: &Path) {
+    if actor["kind"] == "model" {
+        if let Some(pieces) = actor
+            .get_mut("model_paths")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for piece in pieces {
+                if let Some(path) = piece.as_str() {
+                    if Path::new(path).is_relative() {
+                        *piece = directory.join(path).to_string_lossy().as_ref().into();
+                    }
+                }
+            }
+        }
+    }
+    if let Some(children) = actor
+        .get_mut("children")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for child in children {
+            resolve_model_paths(child, directory);
+        }
+    }
 }
 
 #[cfg(itgmania_oracle)]
@@ -81,10 +113,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn model_geometry_uses_native_loader_and_draw() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/model-geometry.json");
+        let result = evaluate(&path).expect("native Model load and draw");
+        assert_eq!(result, evaluate(&path).expect("repeat native Model load"));
+        for (index, sample) in result["samples"].as_array().unwrap().iter().enumerate() {
+            let draws = sample["actors"][1]["draws"].as_array().unwrap();
+            assert_eq!(draws.len(), 2, "diffuse and glow");
+            assert_eq!(draws[0]["model_mesh_name"], "Triangle");
+            assert_eq!(draws[0]["primitive"], "triangles");
+            assert_eq!(draws[0]["texture_mode"], "modulate");
+            assert_eq!(draws[1]["texture_mode"], "glow");
+            assert_eq!(
+                draws[0]["normals"],
+                serde_json::json!([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
+            );
+            assert_eq!(
+                draws[0]["texture_matrix_scale"],
+                serde_json::json!([[1.0, 1.0], [0.0, 1.0], [1.0, 0.0]])
+            );
+            let origin = if index == 0 {
+                [100.0, 200.0]
+            } else {
+                [120.0, 210.0]
+            };
+            for draw in draws {
+                assert_eq!(draw["vertices"].as_array().unwrap().len(), 3);
+                for (vertex, offset) in draw["vertices"].as_array().unwrap().iter().zip([
+                    [0.0, 0.0, 0.0],
+                    [20.0, 0.0, 0.0],
+                    [0.0, -40.0, 10.0],
+                ]) {
+                    assert_eq!(
+                        vertex["world"],
+                        serde_json::json!([
+                            origin[0] + offset[0],
+                            origin[1] + offset[1],
+                            offset[2],
+                            1.0
+                        ])
+                    );
+                }
+            }
+            for (actual, expected) in draws[0]["material"]["diffuse"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip([0.4, 0.525, 0.6, 0.6])
+            {
+                assert!((actual.as_f64().unwrap() - expected).abs() < 0.000001);
+            }
+            assert_eq!(
+                draws[1]["material"]["diffuse"],
+                serde_json::json!([1.0, 0.0, 0.0, 0.25])
+            );
+            assert_eq!(sample["actors"][2]["draws"], serde_json::json!([]));
+        }
+    }
+
+    #[test]
     fn sprite_methods_use_native() {
         for name in ["sprite-load", "texture-path"] {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("fixtures/actors/{name}.json"));
+            let path =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/actors/{name}.json"));
             let result = evaluate(&path).expect("native Sprite assertions");
             for key in ["script_errors", "diagnostics", "allocations"] {
                 assert_eq!(result[key], serde_json::json!([]), "{name}: {key}");
@@ -94,7 +186,8 @@ mod tests {
 
     #[test]
     fn bitmap_methods_use_native_userdata() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-methods.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-methods.json");
         let result = evaluate(&path).expect("native BitmapText assertions");
         assert_eq!(result, evaluate(&path).expect("repeat native BitmapText"));
         assert_eq!(result["script_errors"], serde_json::json!([]));
@@ -104,8 +197,8 @@ mod tests {
 
     #[test]
     fn definitions_use_native_fallback_concatenation() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/actors/definition-concat.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/definition-concat.json");
         let result = evaluate(&path).expect("native definition concatenation");
         assert_eq!(result["script_errors"], serde_json::json!([]));
         assert_eq!(result["diagnostics"], serde_json::json!([]));
@@ -113,7 +206,8 @@ mod tests {
 
     #[test]
     fn value_iterator_uses_native_fallback() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/value-iterator.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/value-iterator.json");
         let result = evaluate(&path).expect("native value iterator");
         assert_eq!(result["script_errors"], serde_json::json!([]));
         assert_eq!(result["diagnostics"], serde_json::json!([]));
@@ -133,7 +227,10 @@ mod tests {
     fn aft_creation_uses_native_allocation_and_lua_methods() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/aft-creation.json");
         let result = evaluate(&path).expect("native AFT allocation assertions");
-        assert_eq!(result, evaluate(&path).expect("repeat native AFT allocation"));
+        assert_eq!(
+            result,
+            evaluate(&path).expect("repeat native AFT allocation")
+        );
         assert_eq!(
             result["allocations"],
             serde_json::json!([

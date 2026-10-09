@@ -21,6 +21,8 @@
 #include "BitmapText.h"
 #include "CubicSpline.h"
 #include "ModelTypes.h"
+#include "Model.h"
+#include "ModelManager.h"
 #include "MessageManager.h"
 #include "LuaManager.h"
 #include "LuaBinding.h"
@@ -233,6 +235,21 @@ const char* texture_mode_name(TextureMode mode) {
   }
 }
 
+class HarnessDisplay;
+
+class HarnessGeometry final : public RageCompiledGeometry {
+ public:
+  explicit HarnessGeometry(HarnessDisplay* display) : display_(display) {}
+  void Allocate(const std::vector<msMesh>& meshes) override {
+    meshes_.reserve(meshes.size());
+  }
+  void Change(const std::vector<msMesh>& meshes) override { meshes_ = meshes; }
+  void Draw(int index) const override;
+ private:
+  HarnessDisplay* display_;
+  std::vector<msMesh> meshes_;
+};
+
 class HarnessDisplay final : public RageDisplay {
  public:
   std::vector<RenderTargetParam> allocations;
@@ -289,18 +306,30 @@ class HarnessDisplay final : public RageDisplay {
   void SetZTestMode(ZTestMode mode) override { z_test_ = mode; }
   void SetZBias(float) override {}
   void ClearZBuffer() override {}
-  void SetCullMode(CullMode) override {}
+  void SetCullMode(CullMode mode) override { cull_mode_ = mode; }
   void SetAlphaTest(bool) override {}
-  void SetMaterial(const RageColor&, const RageColor&, const RageColor&,
-                   const RageColor&, float) override {}
-  void SetLighting(bool) override {}
-  void SetLightOff(int) override {}
-  void SetLightDirectional(int, const RageColor&, const RageColor&,
-                           const RageColor&, const RageVector3&) override {}
+  void SetMaterial(const RageColor& emissive, const RageColor& ambient, const RageColor& diffuse,
+                   const RageColor& specular, float shininess) override {
+    material_["emissive"] = color_json(emissive);
+    material_["ambient"] = color_json(ambient);
+    material_["diffuse"] = color_json(diffuse);
+    material_["specular"] = color_json(specular);
+    material_["shininess"] = shininess;
+  }
+  void SetLighting(bool enabled) override { lighting_ = enabled; }
+  void SetLightOff(int index) override { lights_.removeMember(std::to_string(index)); }
+  void SetLightDirectional(int index, const RageColor& ambient, const RageColor& diffuse,
+                           const RageColor& specular, const RageVector3& direction) override {
+    auto& light = lights_[std::to_string(index)];
+    light["ambient"] = color_json(ambient);
+    light["diffuse"] = color_json(diffuse);
+    light["specular"] = color_json(specular);
+    light["direction"] = vector3_json(direction);
+  }
   void SetSphereEnvironmentMapping(TextureUnit, bool) override {}
   void SetCelShaded(int) override {}
-  RageCompiledGeometry* CreateCompiledGeometry() override { return nullptr; }
-  void DeleteCompiledGeometry(RageCompiledGeometry*) override {}
+  RageCompiledGeometry* CreateCompiledGeometry() override { return new HarnessGeometry(this); }
+  void DeleteCompiledGeometry(RageCompiledGeometry* geometry) override { delete geometry; }
   RageSurface* CreateScreenshot() override { return nullptr; }
 
   RageMatrix world() const { return *GetWorldTop(); }
@@ -324,6 +353,40 @@ class HarnessDisplay final : public RageDisplay {
 
   void clear_actor() { current_actor_ = -1; }
 
+  void capture_mesh(const msMesh& mesh, int index) {
+    std::vector<RageSpriteVertex> vertices;
+    Json::Value normals(Json::arrayValue), texture_scale(Json::arrayValue);
+    vertices.reserve(mesh.Triangles.size() * 3);
+    for (const auto& triangle : mesh.Triangles) {
+      for (const auto vertex_index : triangle.nVertexIndices) {
+        const auto& source = mesh.Vertices.at(vertex_index);
+        RageSpriteVertex vertex;
+        vertex.p = source.p;
+        vertex.t = source.t;
+        vertex.c.r = vertex.c.g = vertex.c.b = vertex.c.a = 255;
+        vertices.push_back(vertex);
+        normals.append(vector3_json(source.n));
+        texture_scale.append(vector2_json(source.TextureMatrixScale));
+      }
+    }
+    capture("triangles", vertices.data(), static_cast<int>(vertices.size()));
+    if (current_actor_ >= 0 && actors_ != nullptr) {
+      auto& draws = (*actors_)[current_actor_]["draws"];
+      auto& draw = draws[draws.size() - 1];
+      draw["model_mesh_index"] = index;
+      draw["model_mesh_name"] = mesh.sName;
+      draw["normals"] = std::move(normals);
+      draw["texture_matrix_scale"] = std::move(texture_scale);
+      draw["texture_matrix"] = matrix_json(texture());
+      draw["material"] = material_;
+      draw["lighting"] = lighting_;
+      draw["lights"] = lights_;
+      draw["cull_mode"] = static_cast<int>(cull_mode_);
+      draw["z_write"] = z_write_;
+      draw["z_test"] = static_cast<int>(z_test_);
+    }
+  }
+
  protected:
   void DrawQuadsInternal(const RageSpriteVertex vertices[], int count) override {
     capture("quads", vertices, count);
@@ -340,7 +403,9 @@ class HarnessDisplay final : public RageDisplay {
   void DrawTrianglesInternal(const RageSpriteVertex vertices[], int count) override {
     capture("triangles", vertices, count);
   }
-  void DrawCompiledGeometryInternal(const RageCompiledGeometry*, int) override {}
+  void DrawCompiledGeometryInternal(const RageCompiledGeometry* geometry, int index) override {
+    geometry->Draw(index);
+  }
   void DrawLineStripInternal(const RageSpriteVertex vertices[], int count,
                              float) override {
     capture("line_strip", vertices, count);
@@ -442,6 +507,24 @@ class HarnessDisplay final : public RageDisplay {
   BlendMode blend_mode_ = BLEND_NORMAL;
   bool z_write_ = false;
   ZTestMode z_test_ = ZTEST_OFF;
+  Json::Value material_{Json::objectValue};
+  Json::Value lights_{Json::objectValue};
+  CullMode cull_mode_ = CULL_NONE;
+  bool lighting_ = false;
+};
+
+void HarnessGeometry::Draw(int index) const { display_->capture_mesh(meshes_.at(index), index); }
+
+struct HarnessModelScope {
+  ModelManager manager;
+  ModelManager* previous = MODELMAN;
+  HarnessModelScope() {
+    MODELMAN = &manager;
+    ModelManagerPrefs prefs;
+    prefs.m_bDelayedUnload = false;
+    manager.SetPrefs(prefs);
+  }
+  ~HarnessModelScope() { MODELMAN = previous; }
 };
 
 void apply_state(Actor& actor, const Json::Value& state,
@@ -621,6 +704,19 @@ class HarnessSprite final : public HarnessActorAccess<Sprite> {
 class HarnessFrame final : public HarnessActorAccess<ActorFrame> {
  public:
   void BeginDraw() override { capture_transform(*m_pTempState); }
+};
+
+class HarnessModel final : public HarnessActorAccess<Model> {
+ public:
+  void BeginDraw() override { capture_transform(*m_pTempState); }
+  void DrawPrimitives() override {
+    display_->set_actor(capture_index());
+    Model::DrawPrimitives();
+    display_->clear_actor();
+  }
+  void set_display(HarnessDisplay* display) { display_ = display; }
+ private:
+  HarnessDisplay* display_ = nullptr;
 };
 
 class HarnessTextureFrame final : public HarnessActorAccess<ActorFrameTexture> {
@@ -882,8 +978,19 @@ Actor* build_actor(const Json::Value& spec, const std::string& path,
       sprite->SetCustomTextureRect(RectF(uv[0], uv[1], uv[2], uv[3]));
     }
     actor = sprite;
+  } else if (kind == "model") {
+    auto model = std::make_unique<HarnessModel>();
+    model->set_display(&display);
+    const auto& pieces = spec["model_paths"];
+    if (!pieces.isArray() || pieces.size() != 3)
+      throw std::runtime_error(path + ".model_paths must contain meshes, materials and bones paths");
+    for (const auto& piece : pieces) {
+      if (!piece.isString()) throw std::runtime_error(path + ".model_paths entries must be strings");
+    }
+    model->LoadPieces(pieces[0].asString(), pieces[1].asString(), pieces[2].asString());
+    actor = model.release();
   } else {
-    throw std::runtime_error(path + ".kind must be `frame`, `texture_frame` or `sprite`");
+    throw std::runtime_error(path + ".kind must be `frame`, `texture_frame`, `sprite` or `model`");
   }
   const int index = static_cast<int>(scene.actors.size());
   if (auto* frame = dynamic_cast<HarnessFrame*>(actor)) {
@@ -897,6 +1004,10 @@ Actor* build_actor(const Json::Value& spec, const std::string& path,
   if (auto* sprite = dynamic_cast<HarnessSprite*>(actor)) {
     sprite->bind_capture(&display, index);
     sprite->bind_commands(spec["commands"], path + ".commands");
+  }
+  if (auto* model = dynamic_cast<HarnessModel*>(actor)) {
+    model->bind_capture(&display, index);
+    model->bind_commands(spec["commands"], path + ".commands");
   }
   if (!spec["subscriptions"].isNull()) {
     if (!spec["subscriptions"].isArray())
@@ -968,12 +1079,14 @@ Actor* build_actor(const Json::Value& spec, const std::string& path,
 Json::Value actor_snapshot(Actor* actor) {
   if (auto* frame = dynamic_cast<HarnessFrame*>(actor)) return frame->snapshot("frame");
   if (auto* frame = dynamic_cast<HarnessTextureFrame*>(actor)) return frame->snapshot("texture_frame");
+  if (auto* model = dynamic_cast<HarnessModel*>(actor)) return model->snapshot("model");
   return dynamic_cast<HarnessSprite*>(actor)->snapshot("sprite");
 }
 
 void bind_sample_actor(Actor* actor, Json::Value* records) {
   if (auto* frame = dynamic_cast<HarnessFrame*>(actor)) frame->bind_sample(records);
   else if (auto* frame = dynamic_cast<HarnessTextureFrame*>(actor)) frame->bind_sample(records);
+  else if (auto* model = dynamic_cast<HarnessModel*>(actor)) model->bind_sample(records);
   else dynamic_cast<HarnessSprite*>(actor)->bind_sample(records);
 }
 
@@ -1169,6 +1282,7 @@ Json::Value evaluate(const Json::Value& request) {
   DISPLAY = &display;
   display.LoadMenuPerspective(0, g_screen_width, g_screen_height,
                               g_screen_width / 2, g_screen_height / 2);
+  HarnessModelScope model_scope;
   Scene scene;
   Actor* root_actor = build_actor(request["root"], "root", display, scene);
   auto* root = dynamic_cast<HarnessFrame*>(root_actor);
