@@ -225,6 +225,19 @@ tree over 121 updates, including queued `setstate` and both sleep cases. Song
 captures record `capabilities.model_update_order`; older captures must be
 regenerated when queued commands change Model materials or animation.
 
+Harness 0.1.42 records the actual native texture binding, filtering, wrapping,
+and sphere mapping for every Model draw. Bitmap textures have distinct opaque
+headless handles; observations resolve their registered `RageTextureID`
+filenames and never serialize pointer addresses. Song paths use `song:/`.
+Captures record `capabilities.model_texture_bindings` and
+`model_texture_units: 1`. This follows `RageDisplay_Legacy::GetNumTextureUnits`
+when ARB multitexture is available: secondary material textures receive a
+separate additive draw. The `model-texture-images.json` control verifies
+independent diffuse and secondary frame selection, queued state changes,
+forced additive filtering, and glow texture selection against a native actor
+tree at every update. Earlier captures cannot establish texture identity and
+must be refreshed before accepting complete Model parity.
+
 The checked-in micro-fixtures under `fixtures/actors` cover actor behaviors independently:
 
 - `tween-queue.json`: queued interpolation, sleep, targets, and queue removal;

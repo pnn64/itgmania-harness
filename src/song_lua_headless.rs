@@ -6561,6 +6561,15 @@ fn check_model_draws(actual: &[Value], expected: &[Value], time: f64) {
             "lights", "cull_mode", "z_write", "z_test"] {
             assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
         }
+        let texture_path = |value: &Value| value.as_str().map(|name| {
+            let path = name.strip_prefix("song:/").map_or_else(|| PathBuf::from(name), |name|
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/song-lua-headless").join(name));
+            path.canonicalize().expect("native bound texture exists")
+        });
+        assert_eq!(texture_path(&actual["texture"]), texture_path(&expected["texture"]), "texture at {time}");
+        for field in ["texture_filtering", "texture_wrapping", "sphere_environment"] {
+            assert_eq!(actual[field], expected[field], "{field} at {time}");
+        }
         assert_eq!(actual["vertices"].as_array().unwrap().len(), expected["vertices"].as_array().unwrap().len());
         for (actual, expected) in actual["vertices"].as_array().unwrap().iter()
             .zip(expected["vertices"].as_array().unwrap()) {
@@ -6650,6 +6659,46 @@ fn model_song_texture_commands_match_native() {
             check_model_draws(&actual, actor["draws"].as_array().unwrap(), time);
         }
     }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn model_song_texture_bindings_match_native() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-texture-images.json"))
+        .expect("native animated diffuse and additive materials");
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-texture-images.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native Model texture bindings",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 1.0, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).expect("song Model material image capture");
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    assert_eq!(trace["capabilities"]["model_texture_bindings"], true);
+    let tracks = trace["model_geometry_tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 1);
+    let samples = tracks[0]["samples"].as_array().unwrap();
+    assert_eq!(samples.len(), 61);
+    let mut selected = std::collections::BTreeSet::new();
+    for (captured, sample) in samples.iter().zip(native["samples"].as_array().unwrap()) {
+        let time = sample["time"].as_f64().unwrap();
+        assert!((captured[1].as_f64().unwrap() - time).abs() < 0.000_001);
+        let draws = sample["actors"][1]["draws"].as_array().unwrap();
+        assert_eq!(draws.len(), 3, "native desktop diffuse, additive and glow passes");
+        assert_eq!(draws.iter().map(|draw| draw["blend_mode"].as_u64().unwrap()).collect::<Vec<_>>(), [0, 1, 0]);
+        assert_eq!(draws.iter().map(|draw| draw["texture_filtering"].as_bool().unwrap()).collect::<Vec<_>>(), [false, true, false]);
+        for draw in draws { selected.insert(Path::new(draw["texture"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned()); }
+        let actual = model_expand_draws(&trace, &captured[3]);
+        check_model_draws(&actual, draws, time);
+    }
+    assert_eq!(selected, ["alpha-green.png", "alpha-white.png", "frame-blue.png", "frame-red.png"]
+        .into_iter().map(str::to_string).collect());
 }
 
 #[cfg(all(test, itgmania_oracle))]

@@ -2902,6 +2902,7 @@ function manual.models.primitives(actor, world, view, projection, width, height,
 	if not view then view, projection = _ITG_MENU_MATRICES(width, height, 0, width/2, height/2) end
 	for _, primitive in ipairs(primitives) do
 		primitive.viewport = {width, height}
+		if type(primitive.texture) == "string" then primitive.texture = source_path(primitive.texture) end
 		for _, vertex in ipairs(primitive.vertices) do
 			-- Native Model::DrawPrimitives has already flipped Y and applied bones.
 			local position = vec_transform(vertex.world, world)
@@ -3279,6 +3280,7 @@ return json_encode({
         model_texture_matrix_scale = true,
         model_hardware_mesh_path = true,
         model_update_order = true,
+        model_texture_bindings = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
@@ -3294,6 +3296,7 @@ return json_encode({
 	model_geometry_tracks = manual.models.tracks,
 	model_geometry_encoding = "column-buffer-v1",
 	model_geometry_sample_clock = "update_frames",
+	model_texture_units = 1,
 	model_geometry_buffers = manual.models.buffers,
 	model_geometry_buffer_stats = {buffers=#manual.models.buffers, indexed_buffers=manual.models.lookup_count,
 		lookup_key_bytes=manual.models.lookup_bytes, hits=manual.models.buffer_hits,

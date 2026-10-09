@@ -269,7 +269,11 @@ class HarnessTexture final : public RageTexture {
 		}
 	}
 
-	uintptr_t GetTexHandle() const override { return 0; }
+	// Opaque headless handles distinguish live native texture objects. They
+	// never become GPU handles or serialized addresses; capture resolves GetID.
+	uintptr_t GetTexHandle() const override {
+		return reinterpret_cast<uintptr_t>(this);
+	}
 };
 
 } // namespace
@@ -410,6 +414,13 @@ void RageTextureManager::Update(float) {}
 static std::map<RageTextureID, RageTexture*>& harness_textures() {
 	static std::map<RageTextureID, RageTexture*> textures;
 	return textures;
+}
+std::string harness_texture_filename(uintptr_t handle) {
+	if (!handle) return {};
+	for (const auto& [id, texture] : harness_textures()) {
+		if (texture->GetTexHandle() == handle) return texture->GetID().filename;
+	}
+	throw std::runtime_error("Bound texture handle is not registered");
 }
 RageTexture* RageTextureManager::LoadTexture(RageTextureID id) {
 	return LoadTextureInternal(id);

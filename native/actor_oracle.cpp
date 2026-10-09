@@ -283,7 +283,7 @@ class HarnessDisplay final : public RageDisplay {
   }
   void UpdateTexture(uintptr_t, RageSurface*, int, int, int, int) override {}
   void DeleteTexture(uintptr_t) override {}
-  void ClearAllTextures() override {}
+  void ClearAllTextures() override { texture_filename_.clear(); }
   bool SupportsRenderToTexture() const override { return true; }
   uintptr_t CreateRenderTarget(const RenderTargetParam& param, int& width,
                               int& height) override {
@@ -296,14 +296,22 @@ class HarnessDisplay final : public RageDisplay {
   }
   uintptr_t GetRenderTarget() override { return target_; }
   void SetRenderTarget(uintptr_t handle, bool = true) override { target_ = handle; }
+  // RageDisplay_Legacy reports one unit when ARB multitexture is available.
+  // Keep that native desktop profile and its separate additive material pass.
   int GetNumTextureUnits() override { return 1; }
-  void SetTexture(TextureUnit, uintptr_t) override {}
+  void SetTexture(TextureUnit unit, uintptr_t handle) override {
+    if (unit == TextureUnit_1) texture_filename_ = harness_texture_filename(handle);
+  }
   void SetTextureMode(TextureUnit, TextureMode mode) override {
     texture_mode_ = mode;
   }
-  void SetTextureWrapping(TextureUnit, bool) override {}
+  void SetTextureWrapping(TextureUnit unit, bool enabled) override {
+    if (unit == TextureUnit_1) texture_wrapping_ = enabled;
+  }
   int GetMaxTextureSize() const override { return 4096; }
-  void SetTextureFiltering(TextureUnit, bool) override {}
+  void SetTextureFiltering(TextureUnit unit, bool enabled) override {
+    if (unit == TextureUnit_1) texture_filtering_ = enabled;
+  }
   bool IsZTestEnabled() const override { return z_test_ != ZTEST_OFF; }
   bool IsZWriteEnabled() const override { return z_write_; }
   void SetZWrite(bool value) override { z_write_ = value; }
@@ -330,7 +338,9 @@ class HarnessDisplay final : public RageDisplay {
     light["specular"] = color_json(specular);
     light["direction"] = vector3_json(direction);
   }
-  void SetSphereEnvironmentMapping(TextureUnit, bool) override {}
+  void SetSphereEnvironmentMapping(TextureUnit unit, bool enabled) override {
+    if (unit == TextureUnit_1) sphere_environment_ = enabled;
+  }
   void SetCelShaded(int) override {}
   RageCompiledGeometry* CreateCompiledGeometry() override { return new HarnessGeometry(this); }
   void DeleteCompiledGeometry(RageCompiledGeometry* geometry) override { delete geometry; }
@@ -385,6 +395,10 @@ class HarnessDisplay final : public RageDisplay {
       draw["normals"] = std::move(normals);
       draw["texture_matrix_scale"] = std::move(texture_scale);
       draw["texture_matrix"] = matrix_json(texture());
+      draw["texture"] = texture_filename_.empty() ? Json::Value() : Json::Value(texture_filename_);
+      draw["texture_filtering"] = texture_filtering_;
+      draw["texture_wrapping"] = texture_wrapping_;
+      draw["sphere_environment"] = sphere_environment_;
       draw["material"] = material_;
       draw["lighting"] = lighting_;
       draw["lights"] = lights_;
@@ -519,6 +533,10 @@ class HarnessDisplay final : public RageDisplay {
   int current_actor_ = -1;
   int primitive_index_ = 0;
   TextureMode texture_mode_ = TextureMode_Modulate;
+  std::string texture_filename_;
+  bool texture_filtering_ = true;
+  bool texture_wrapping_ = false;
+  bool sphere_environment_ = false;
   BlendMode blend_mode_ = BLEND_NORMAL;
   bool z_write_ = false;
   ZTestMode z_test_ = ZTEST_OFF;
@@ -850,6 +868,10 @@ void apply_state(Actor& actor, const Json::Value& state,
   }
   if (state.isMember("hibernate"))
     actor.SetHibernate(number(state["hibernate"], path + ".hibernate"));
+  if (state.isMember("texture_filtering"))
+    actor.SetTextureFiltering(field_bool(state, "texture_filtering", true, path));
+  if (state.isMember("texture_wrapping"))
+    actor.SetTextureWrapping(field_bool(state, "texture_wrapping", false, path));
   if (state.isMember("update_rate")) {
     auto* frame = dynamic_cast<ActorFrame*>(&actor);
     const float rate = number(state["update_rate"], path + ".update_rate");
