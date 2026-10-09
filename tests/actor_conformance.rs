@@ -63,6 +63,40 @@ fn model_uvs_honor_native_vertex_texture_flags() {
 }
 
 #[test]
+fn model_geometry_uses_the_native_hardware_mesh_path() {
+    let output = run_fixture("model-merged-meshes.json");
+    let draws = output["samples"][0]["actors"][1]["draws"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        draws.len(),
+        4,
+        "two diffuse meshes followed by two glow meshes"
+    );
+    for (draw, (mesh, vertices, mode)) in draws.iter().zip([
+        (0, 6, "modulate"),
+        (1, 3, "modulate"),
+        (0, 6, "glow"),
+        (1, 3, "glow"),
+    ]) {
+        // RageModelGeometry::MergeMeshes appends mesh 1 to mesh 0 but retains
+        // mesh 1. Preserve that native draw behavior, including duplicate faces.
+        assert_eq!(draw["model_mesh_index"], mesh);
+        assert_eq!(draw["model_mesh_name"], "joined mesh");
+        assert_eq!(draw["vertices"].as_array().unwrap().len(), vertices);
+        assert_eq!(draw["texture_mode"], mode);
+    }
+    assert_eq!(
+        draws[0]["vertices"][3]["local"],
+        draws[1]["vertices"][0]["local"]
+    );
+    assert_eq!(
+        draws[0]["vertices"][3]["world"],
+        draws[1]["vertices"][0]["world"]
+    );
+}
+
+#[test]
 fn manual_player_poses_match_the_checked_in_native_golden() {
     let output = run_fixture("manual-player-draws.json");
     let golden: serde_json::Value =

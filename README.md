@@ -207,6 +207,15 @@ these transforms and must be recaptured when they affect the chart. The
 `model-base-rotation` control compares the song host with an independent native
 actor tree across all three axes, queued rotations and replacement base values.
 
+Harness 0.1.40 selects the GL/GLES2 geometry path that supports per-vertex
+texture matrix scaling, which the capture already evaluates. It records
+`capabilities.model_hardware_mesh_path`. Native `RageModelGeometry` merges
+exactly two meshes with equal names by appending the second mesh to the first;
+it retains the second mesh and draws those faces again. The
+`model-merged-meshes.json` control verifies both diffuse and glow passes using
+the compiled native loader. Older captures used the software mesh path and
+must be regenerated when this merge condition applies.
+
 The checked-in micro-fixtures under `fixtures/actors` cover actor behaviors independently:
 
 - `tween-queue.json`: queued interpolation, sleep, targets, and queue removal;

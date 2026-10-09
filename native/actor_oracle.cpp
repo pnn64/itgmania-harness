@@ -275,7 +275,9 @@ class HarnessDisplay final : public RageDisplay {
   }
   void SetBlendMode(BlendMode mode) override { blend_mode_ = mode; }
   bool SupportsTextureFormat(RagePixelFormat, bool) override { return true; }
-  bool SupportsPerVertexMatrixScale() override { return false; }
+  // Capture the shader-capable GL/GLES2 geometry path. Texture matrix scaling
+  // is emulated below, including the native same-name two-mesh merge.
+  bool SupportsPerVertexMatrixScale() override { return true; }
   uintptr_t CreateTexture(RagePixelFormat, RageSurface*, bool) override {
     return 1;
   }

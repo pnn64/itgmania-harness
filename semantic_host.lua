@@ -3268,6 +3268,7 @@ return json_encode({
 		native_model_primitives = true, native_model_geometry_buffers = true,
         actor_base_rotation = true,
         model_texture_matrix_scale = true,
+        model_hardware_mesh_path = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
