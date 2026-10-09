@@ -783,6 +783,76 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn zero_fov_resets_native_parent_perspective() {
+        let song_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/song-lua-headless");
+        let entry = song_dir.join("zero-fov.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "native zero FOV",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.05,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 0.01,
+            max_events: 10000,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("native FOV control");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        for (name, fov) in [
+            ("Zero", 0.0),
+            ("Inherited", 60.0),
+            ("Negative", 0.1),
+            ("Small", 0.1),
+            ("WrongCase", 60.0),
+        ] {
+            let actor = trace["runtime_actors"]
+                .as_array().expect("native actors")
+                .iter().find(|actor| actor["name"] == name).expect("FOV probe");
+            let track = trace["projected_vertex_tracks"]
+                .as_array().expect("native vertices")
+                .iter().find(|track| track["actor"] == actor["id"]).expect("probe vertices");
+            let sample = &track["samples"][0];
+            assert!(
+                (sample[7][0].as_f64().expect("native camera FOV") - fov).abs() < 1e-7,
+                "{name}"
+            );
+            if name == "Zero" {
+                for (world, screen) in sample[4].as_array().expect("world corners").iter()
+                    .zip(sample[6].as_array().expect("screen corners"))
+                {
+                    for axis in 0..2 {
+                        assert!(
+                            (world[axis].as_f64().expect("world coordinate")
+                                - screen[axis].as_f64().expect("screen coordinate"))
+                            .abs() < 0.0001
+                        );
+                    }
+                }
+                for clip in sample[5].as_array().expect("clip corners") {
+                    assert_eq!(clip[3], 1.0);
+                    assert!((clip[2].as_f64().expect("clip depth") + 0.125).abs() < 1e-7);
+                }
+            }
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn streams_large_semantic_document() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/song-lua-headless");
         let path = dir.join("semantic-json-stream.lua");

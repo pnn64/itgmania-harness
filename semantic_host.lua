@@ -1478,7 +1478,10 @@ local function instantiate(definition, parent)
 	for key, value in pairs(definition) do
 		if type(key) == "string" and key:match("Command$") and type(value) == "function" then actor[key] = value end
 	end
-    for key, value in pairs(record.properties) do actor.state[key:lower()] = value end
+    for key, value in pairs(record.properties) do
+        -- ActorFrame::LoadFromNode reads the case-sensitive FOV attribute.
+        if key:lower() ~= "fov" or key == "FOV" then actor.state[key:lower()] = value end
+    end
     if actor.class == "ActorFrameTexture" then
         manual.aft_counter = (manual.aft_counter or 0) + 1
         actor.state.texturename = "ActorFrameTexture " .. manual.aft_counter
@@ -2445,7 +2448,10 @@ local function menu_projection(camera)
 		return unpack(cached)
 	end
 	local width, height = harness.screen_width, harness.screen_height
-	local fov = math.max(0.1, math.min(179.9, tonumber(camera.state.fov) or 0))
+	local fov = tonumber(camera.state.fov) or 0
+	-- RageDisplay::LoadMenuPerspective selects orthographic matrices for zero
+	-- before clamping nonzero FOV. Preserve that branch in the native call.
+	if fov ~= 0 then fov = math.max(0.1, math.min(179.9, fov)) end
 	local vanish = camera.state.vanishpoint or { width / 2, height / 2 }
 	local vanish_x, vanish_y = tonumber(vanish[1]) or width / 2, tonumber(vanish[2]) or height / 2
 	local view, projection, dist = _ITG_MENU_MATRICES(width, height, fov, vanish_x, vanish_y)
