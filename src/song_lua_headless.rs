@@ -6522,6 +6522,16 @@ fn model_song_meshes_match_native() {
     assert_eq!(trace["runtime_errors"], serde_json::json!([]));
     assert_eq!(trace["dropped_events"], 0);
     let tracks = trace["model_geometry_tracks"].as_array().expect("Model tracks");
+    assert_eq!(trace["model_geometry_sample_clock"], "update_frames");
+    let frames = trace["update_frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 61);
+    for track in tracks {
+        let samples = track["samples"].as_array().unwrap();
+        assert_eq!(samples.len(), frames.len(), "every Model update must be observed");
+        for (sample, frame) in samples.iter().zip(frames) {
+            assert_eq!(sample.as_array().unwrap()[..2], frame.as_array().unwrap()[..]);
+        }
+    }
     assert!(trace["model_geometry_buffer_stats"]["hits"].as_u64().unwrap() > 0);
     assert_eq!(trace["model_geometry_buffer_stats"]["saturated_misses"], 0);
     assert_eq!(trace["model_geometry_buffer_stats"]["buffers"].as_u64().unwrap() as usize,

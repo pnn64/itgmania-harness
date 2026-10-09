@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "native-song-model-geometry",
   "screen": {"width": 854, "height": 480},
-  "samples": [0, 1],
+  "samples": [0, 0.5, 1],
   "root": {
     "kind": "frame", "name": "Root",
     "camera": {"fov": 0, "vanish": [427, 240]},

@@ -24,6 +24,10 @@ and texture mode, remains on each primitive.
 This encoding applies to both ordinary Model tracks and explicit Model
 draws in `manual_draw_frames`. ActorMultiVertex data retains its original
 format. Invisible samples and empty primitive lists remain explicit.
+`model_geometry_sample_clock: "update_frames"` means ordinary Model tracks
+record every native update, including invisible and unchanged frames. Their
+coverage is independent of sparse `beat_step` sampling for other actors;
+native animation and texture clocks must not lose intermediate observations.
 Consumers must reject unknown encodings, absent columns, invalid buffer
 IDs, and inconsistent row counts; the capability flag alone is insufficient
 evidence of full-song parity.

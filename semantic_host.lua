@@ -2927,7 +2927,6 @@ end
 local function record_projected_vertices(loaded_roots)
 	world_matrix_cache, projection_cache, color_cache = {}, {}, {}
 	for _, root in ipairs(loaded_roots) do visit(root.actor, record_projected_actor) end
-	for _, root in ipairs(loaded_roots) do visit(root.actor, manual.models.record) end
 end
 
 -- Explicit Draw uses the current draw stack, not the actor's tree parent.
@@ -3156,6 +3155,10 @@ while true do
 		record_projected_vertices(loaded_roots)
 		while sample_beat <= current_beat + 0.000001 do sample_beat = sample_beat + beat_step end
 	end
+	-- Model animation and texture clocks advance at every Actor::Update.
+	-- Observe each update independently of sparse beat sampling for other actors.
+	world_matrix_cache, projection_cache, color_cache = {}, {}, {}
+	for _, root in ipairs(loaded_roots) do visit(root.actor, manual.models.record) end
 	previous_beat, previous_seconds = current_beat, current_seconds
 	if emitted_events >= harness.max_events then break end
 	if current_seconds >= end_seconds - 0.0000001 then break end
@@ -3270,6 +3273,7 @@ return json_encode({
 	projected_vertex_tracks = projected_vertex_tracks,
 	model_geometry_tracks = manual.models.tracks,
 	model_geometry_encoding = "column-buffer-v1",
+	model_geometry_sample_clock = "update_frames",
 	model_geometry_buffers = manual.models.buffers,
 	model_geometry_buffer_stats = {buffers=#manual.models.buffers, indexed_buffers=manual.models.lookup_count,
 		lookup_key_bytes=manual.models.lookup_bytes, hits=manual.models.buffer_hits,
