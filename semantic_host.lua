@@ -3281,6 +3281,7 @@ return json_encode({
         model_hardware_mesh_path = true,
         model_update_order = true,
         model_texture_bindings = true,
+        model_texture_metadata = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,

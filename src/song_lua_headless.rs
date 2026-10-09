@@ -6558,7 +6558,7 @@ fn check_model_draws(actual: &[Value], expected: &[Value], time: f64) {
     for (actual, expected) in actual.iter().zip(expected) {
         for field in ["primitive", "texture_mode", "blend_mode", "model_mesh_name",
             "normals", "texture_matrix_scale", "texture_matrix", "material", "lighting",
-            "lights", "cull_mode", "z_write", "z_test"] {
+            "lights", "cull_mode", "z_write", "z_test", "texture_dimensions"] {
             assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
         }
         let texture_path = |value: &Value| value.as_str().map(|name| {
@@ -6567,7 +6567,7 @@ fn check_model_draws(actual: &[Value], expected: &[Value], time: f64) {
             path.canonicalize().expect("native bound texture exists")
         });
         assert_eq!(texture_path(&actual["texture"]), texture_path(&expected["texture"]), "texture at {time}");
-        for field in ["texture_filtering", "texture_wrapping", "sphere_environment"] {
+        for field in ["texture_filtering", "texture_wrapping", "sphere_environment", "texture_request"] {
             assert_eq!(actual[field], expected[field], "{field} at {time}");
         }
         assert_eq!(actual["vertices"].as_array().unwrap().len(), expected["vertices"].as_array().unwrap().len());
@@ -6657,6 +6657,41 @@ fn model_song_texture_commands_match_native() {
                 .find(|actor| actor["name"] == name).expect("native Model actor");
             let actual = model_expand_draws(&trace, &captured[3]);
             check_model_draws(&actual, actor["draws"].as_array().unwrap(), time);
+        }
+    }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn model_texture_metadata() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-texture-request.json"))
+        .expect("native Model metadata control");
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-texture-request.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native Model texture metadata",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 0.1, bpm: 60.0, bpm_segments: &[], beat_step: 0.1,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).expect("song metadata capture");
+    assert_eq!(trace["capabilities"]["model_texture_metadata"], true);
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    let tracks = trace["model_geometry_tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 1);
+    let samples = tracks[0]["samples"].as_array().unwrap();
+    assert!(!samples.is_empty());
+    for sample in samples {
+        let draws = model_expand_draws(&trace, &sample[3]);
+        let expected = native["samples"][0]["actors"][1]["draws"].as_array().unwrap();
+        assert_eq!(draws.len(), 3);
+        for (draw, reference) in draws.iter().zip(expected) {
+            assert_eq!(draw["texture_request"], reference["texture_request"]);
+            assert_eq!(model_json_numbers(&draw["texture_dimensions"]),
+                model_json_numbers(&reference["texture_dimensions"]));
         }
     }
 }

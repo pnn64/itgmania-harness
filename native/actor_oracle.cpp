@@ -163,6 +163,13 @@ Json::Value rect_json(const RectF& value) {
   return result;
 }
 
+Json::Value dimensions_json(int width, int height) {
+  Json::Value result(Json::arrayValue);
+  result.append(width);
+  result.append(height);
+  return result;
+}
+
 Json::Value matrix_json(const RageMatrix& value) {
   Json::Value rows(Json::arrayValue);
   for (int row = 0; row < 4; ++row) {
@@ -283,7 +290,10 @@ class HarnessDisplay final : public RageDisplay {
   }
   void UpdateTexture(uintptr_t, RageSurface*, int, int, int, int) override {}
   void DeleteTexture(uintptr_t) override {}
-  void ClearAllTextures() override { texture_filename_.clear(); }
+  void ClearAllTextures() override {
+    texture_filename_.clear();
+    texture_request_ = texture_dimensions_ = Json::Value();
+  }
   bool SupportsRenderToTexture() const override { return true; }
   uintptr_t CreateRenderTarget(const RenderTargetParam& param, int& width,
                               int& height) override {
@@ -300,7 +310,19 @@ class HarnessDisplay final : public RageDisplay {
   // Keep that native desktop profile and its separate additive material pass.
   int GetNumTextureUnits() override { return 1; }
   void SetTexture(TextureUnit unit, uintptr_t handle) override {
-    if (unit == TextureUnit_1) texture_filename_ = harness_texture_filename(handle);
+    if (unit != TextureUnit_1) return;
+    const auto* texture = harness_texture_for_handle(handle);
+    texture_filename_ = texture ? texture->GetID().filename : std::string();
+    texture_request_ = texture_dimensions_ = Json::Value();
+    if (texture) {
+      const auto& id = texture->GetID();
+      texture_request_["stretch"] = id.bStretch;
+      texture_request_["mipmaps"] = id.bMipMaps;
+      texture_request_["hot_pink_color_key"] = id.bHotPinkColorKey;
+      texture_dimensions_["source"] = dimensions_json(texture->GetSourceWidth(), texture->GetSourceHeight());
+      texture_dimensions_["image"] = dimensions_json(texture->GetImageWidth(), texture->GetImageHeight());
+      texture_dimensions_["texture"] = dimensions_json(texture->GetTextureWidth(), texture->GetTextureHeight());
+    }
   }
   void SetTextureMode(TextureUnit, TextureMode mode) override {
     texture_mode_ = mode;
@@ -396,6 +418,8 @@ class HarnessDisplay final : public RageDisplay {
       draw["texture_matrix_scale"] = std::move(texture_scale);
       draw["texture_matrix"] = matrix_json(texture());
       draw["texture"] = texture_filename_.empty() ? Json::Value() : Json::Value(texture_filename_);
+      draw["texture_request"] = texture_request_;
+      draw["texture_dimensions"] = texture_dimensions_;
       draw["texture_filtering"] = texture_filtering_;
       draw["texture_wrapping"] = texture_wrapping_;
       draw["sphere_environment"] = sphere_environment_;
@@ -534,6 +558,7 @@ class HarnessDisplay final : public RageDisplay {
   int primitive_index_ = 0;
   TextureMode texture_mode_ = TextureMode_Modulate;
   std::string texture_filename_;
+  Json::Value texture_request_, texture_dimensions_;
   bool texture_filtering_ = true;
   bool texture_wrapping_ = false;
   bool sphere_environment_ = false;

@@ -980,3 +980,19 @@ negative song-offset controls compare effect getters, spin rotation, and
 pulse vertices with the separately compiled `Actor::Update` oracle.
 Actor-conformance fixtures can set `music_origin` independently of elapsed
 sample time to exercise this contract.
+
+
+Harness 0.1.43 honors the texture ID's `bStretch` flag in its metadata
+adapter, as `RageBitmapTexture.cpp` does for Model image loads. The native
+Model requests stretching, mipmaps and hot-pink color-key processing;
+requested flags now appear in `texture_request`. `texture_dimensions`
+records source, image and allocation sizes from the registered native
+texture object, and song captures retain these fields with
+`capabilities.model_texture_metadata`.
+
+A 5x9 Model image previously remained 5x9 inside an 8x16 allocation in
+the adapter. It now has an 8x16 image domain, matching the native stretch
+branch. The actor and song controls check diffuse, secondary and glow
+bindings. These are request/metadata observations. Pixel preprocessing,
+mip storage, trilinear filtering and framebuffer output still require
+independent native rendering verification.

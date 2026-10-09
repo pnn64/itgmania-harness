@@ -113,6 +113,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn model_texture_request() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/model-texture-request.json");
+        let result = evaluate(&path).expect("native Model texture request");
+        let draws = result["samples"][0]["actors"][1]["draws"].as_array().unwrap();
+        assert_eq!(draws.len(), 3);
+        for draw in draws {
+            assert_eq!(draw["texture_request"], serde_json::json!({
+                "stretch": true, "mipmaps": true, "hot_pink_color_key": true
+            }));
+            // ModelTypes requests stretch for a 5x9 source. The native
+            // RageBitmapTexture branch sets image size to the 8x16 allocation.
+            assert_eq!(draw["texture_dimensions"], serde_json::json!({
+                "source": [5, 9], "image": [8, 16], "texture": [8, 16]
+            }));
+        }
+    }
+
+    #[test]
     fn model_geometry_uses_native_loader_and_draw() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/model-geometry.json");

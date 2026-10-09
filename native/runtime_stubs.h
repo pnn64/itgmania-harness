@@ -21,4 +21,5 @@ void harness_clear_diagnostics();
 std::vector<std::string> harness_take_diagnostics();
 // Resolve the actual registered native texture bound by a display command.
 // Zero is an unbound texture; unknown nonzero handles are capture errors.
-std::string harness_texture_filename(uintptr_t handle);
+class RageTexture;
+RageTexture* harness_texture_for_handle(uintptr_t handle);

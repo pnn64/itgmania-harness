@@ -252,7 +252,7 @@ class HarnessTexture final : public RageTexture {
 		m_iImageHeight = std::min(m_iImageHeight, id.iMaxSize);
 		m_iTextureWidth = power_of_two(m_iImageWidth);
 		m_iTextureHeight = power_of_two(m_iImageHeight);
-		const bool stretch = hints.find("stretch") != std::string::npos ||
+		const bool stretch = id.bStretch || hints.find("stretch") != std::string::npos ||
 		                     m_iTextureWidth < 8 || m_iTextureHeight < 8;
 		m_iTextureWidth = std::max(8, m_iTextureWidth);
 		m_iTextureHeight = std::max(8, m_iTextureHeight);
@@ -415,10 +415,10 @@ static std::map<RageTextureID, RageTexture*>& harness_textures() {
 	static std::map<RageTextureID, RageTexture*> textures;
 	return textures;
 }
-std::string harness_texture_filename(uintptr_t handle) {
-	if (!handle) return {};
+RageTexture* harness_texture_for_handle(uintptr_t handle) {
+	if (!handle) return nullptr;
 	for (const auto& [id, texture] : harness_textures()) {
-		if (texture->GetTexHandle() == handle) return texture->GetID().filename;
+		if (texture->GetTexHandle() == handle) return texture;
 	}
 	throw std::runtime_error("Bound texture handle is not registered");
 }

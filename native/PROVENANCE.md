@@ -244,3 +244,13 @@ hidden actor sharing the same mesh. The earlier oracle rejects Model.
 The song Lua host still omits Model projected geometry; this conformance
 capability does not establish complete Model song parity. Keep Mawaru9
 pending until song traces and the production comparator cover its meshes.
+
+
+Harness 0.1.43 observes Model texture requests from the bound native
+`RageTextureID` and reports the metadata adapter's source/image/allocation
+sizes. `ModelTypes.cpp::AnimatedTexture::Load` requests `bStretch`,
+`bMipMaps` and `bHotPinkColorKey`. The adapter now respects requested
+stretching before `CreateFrameRects`, matching the stretch branch in
+`RageBitmapTexture.cpp`. The 5x9 source control requires an 8x16 image
+and allocation. Requested mip/color-key flags do not establish actual
+pixel processing, mip levels or GPU sampling parity.
