@@ -10,6 +10,9 @@ std::mutex& harness_native_mutex();
 
 struct lua_State;
 void harness_register_lua_globals(lua_State* state);
+struct SongLuaModels;
+SongLuaModels* install_song_models(lua_State* state);
+void destroy_song_models(SongLuaModels* models);
 
 void harness_configure_font_paths(const std::string& theme_fonts,
                                   const std::string& fallback_fonts);

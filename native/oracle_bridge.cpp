@@ -1114,6 +1114,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
   const std::lock_guard<std::mutex> guard(harness_native_mutex());
   lua_State* state = nullptr;
   std::unique_ptr<SongLuaMessages> messages;
+  std::unique_ptr<SongLuaModels, decltype(&destroy_song_models)> models(nullptr, destroy_song_models);
   // Borrowed Lua handles never outlive their semantic session, including errors.
   std::vector<std::unique_ptr<CubicSplineN>> splines;
   SongPosition native_position;
@@ -1225,6 +1226,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     lua_setglobal(state, "_ITG_INIT_NOTESKIN");
     install_option_queries(state);
     install_actor_math(state);
+    models.reset(install_song_models(state));
     lua_pushlightuserdata(state, &splines);
     lua_pushcclosure(state, [](lua_State* L) -> int {
       auto& owned = *static_cast<std::vector<std::unique_ptr<CubicSplineN>>*>(

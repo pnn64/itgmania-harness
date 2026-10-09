@@ -37,6 +37,7 @@ local sequence, emitted_events, dropped_events = 0, 0, 0
 local scheduled_beats, manual = {}, { frames = {}, stack = {}, actors = {}, message_dispatches = {} }
 local external_count, command_count = 0, 0
 local projected_vertex_tracks, projected_track_by_actor, projected_signature_by_actor = {}, {}, {}
+manual.models = {tracks={}, by_actor={}}
 local update_frames = {}
 local perspective_actors = {}
 local tracked_players
@@ -346,7 +347,8 @@ local function json_encode(value)
 		if kind ~= "table" then encode(tostring(item)); return end
 		if seen[item] then error("cycle in semantic document") end
 		seen[item] = true
-		local count, max_index, array = 0, 0, true
+		local metadata = getmetatable(item)
+		local count, max_index, array = 0, 0, not (type(metadata) == "table" and metadata._ITG_JSON_OBJECT)
 		for key in pairs(item) do
 			count = count + 1
 			if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then array = false
@@ -405,6 +407,7 @@ Def = setmetatable({}, {
 			definition.Class = definition.Class or class
 			local info = debug.getinfo(2, "Sl") or {}
 			definition._Source = definition._Source or source_path(info.source or "")
+			definition._ModelDirectory = definition._ModelDirectory or dirname(normalize(info.source or ""):gsub("^@", ""))
 			definition._Line = definition._Line or info.currentline or 0
 			return setmetatable(definition, actor_def_mt)
 		end
@@ -560,11 +563,13 @@ local actor_mt = { classes = {
     native = {
         Actor = Actor, ActorFrame = ActorFrame, ActorFrameTexture = ActorFrameTexture,
         ActorMultiVertex = ActorMultiVertex, Sprite = Sprite,
+        Model = Model,
         ActorProxy = ActorProxy, BitmapText = BitmapText,
     },
     bases = {
         ActorFrame = "Actor", ActorFrameTexture = "ActorFrame",
         ActorMultiVertex = "Actor", Sprite = "Actor",
+        Model = "Actor",
         ActorProxy = "Actor", BitmapText = "Actor",
     },
 } }
@@ -799,7 +804,25 @@ local function actor_size(actor)
 	return actor.state.width or width or 1, actor.state.height or height or 1
 end
 
+manual.models.methods = {position=true,playanimation=true,SetDefaultAnimation=true,
+    GetDefaultAnimation=true,loop=true,rate=true,GetNumStates=true}
+manual.models.actor_methods = {animate=true,play=true,pause=true,setstate=true,hibernate=true,
+    texturetranslate=true,texturewrapping=true,SetTextureFiltering=true,blend=true,
+    zbuffer=true,ztest=true,ztestmode=true,zwrite=true,zbias=true,clearzbuffer=true,
+    backfacecull=true,cullmode=true}
+
 local function actor_call(actor, name, ...)
+    if rawget(actor, "native_model") and manual.models.methods[name] then
+        local result, message = _ITG_MODEL_CALL(actor.native_model, name, ...)
+        if message then error(message, 0) end
+        if name:match("^Get") then return result end
+        emit("call", actor, event_operation(actor, name), safe_args(...))
+        return actor
+    end
+    if rawget(actor, "native_model") and manual.models.actor_methods[name] then
+        local result, message = _ITG_MODEL_CALL(actor.native_model, name, ...)
+        if message then error(message, 0) end
+    end
     if rawget(actor, "native_spline") then
         -- _fallback's camel aliases point at these linked LunaCubicSplineN methods.
         local native_name = name:gsub("%u", function(char) return "_" .. char:lower() end):gsub("^_", "")
@@ -1481,6 +1504,20 @@ local function instantiate(definition, parent)
     for key, value in pairs(record.properties) do
         -- ActorFrame::LoadFromNode reads the case-sensitive FOV attribute.
         if key:lower() ~= "fov" or key == "FOV" then actor.state[key:lower()] = value end
+    end
+    if actor.class == "Model" then
+        local function piece(key)
+            local value = rawget(definition, key)
+            if value == nil or value == "" then return nil end
+            local path = normalize(value)
+            if path:sub(1, 1) ~= "/" and not path:match("^%a:/") then
+                path = normalize((definition._ModelDirectory or song_dir) .. "/" .. path)
+            end
+            return path
+        end
+        local handle, message = _ITG_MODEL_LOAD(piece("Meshes"), piece("Materials"), piece("Bones"))
+        if not handle then error(message, 0) end
+        actor.native_model = handle
     end
     if actor.class == "ActorFrameTexture" then
         manual.aft_counter = (manual.aft_counter or 0) + 1
@@ -2228,6 +2265,12 @@ local function run_callback(actor, kind, fn, delta)
 end
 
 local function advance_actor(actor, delta)
+	if rawget(actor, "native_model") then
+		-- Model::Update advances bones/materials with the original delta even
+		-- when Actor::Update returns early during hibernation.
+		local ok, message = _ITG_MODEL_UPDATE(actor.native_model, delta)
+		if not ok then error(message, 0) end
+	end
 	if (rawget(actor, "hibernate_seconds") or 0) > 0 then
 		actor.hibernate_seconds, delta = _ITG_HIBERNATE_STEP(actor.hibernate_seconds, delta)
 		if delta == nil then return end
@@ -2782,9 +2825,54 @@ local function record_projected_actor(actor)
 	}
 end
 
+function manual.models.primitives(actor, world, view, projection, width, height, diffuse, glow)
+	local primitives, message = _ITG_MODEL_DRAW(actor.native_model, diffuse, glow)
+	if not primitives then error(message, 0) end
+	if not view then view, projection = _ITG_MENU_MATRICES(width, height, 0, width/2, height/2) end
+	for _, primitive in ipairs(primitives) do
+		primitive.viewport = {width, height}
+		for _, vertex in ipairs(primitive.vertices) do
+			-- Native Model::DrawPrimitives has already flipped Y and applied bones.
+			local position = vec_transform(vertex.world, world)
+			vertex.world = position
+			vertex.view = vec_transform(position, view)
+			vertex.clip = vec_transform(vertex.view, projection)
+			local inverse_w = vertex.clip[4] == 0 and 0 or _ITG_FLOAT(1/vertex.clip[4])
+			vertex.ndc = {_ITG_FLOAT(vertex.clip[1]*inverse_w), _ITG_FLOAT(vertex.clip[2]*inverse_w),
+				_ITG_FLOAT(vertex.clip[3]*inverse_w)}
+			vertex.screen = _ITG_SCREEN_VERTEX(vertex.clip, width, height)
+			vertex.screen[3] = vertex.ndc[3]
+		end
+	end
+	return primitives
+end
+
+function manual.models.record(actor)
+	if actor.class ~= "Model" then return end
+	local track = manual.models.by_actor[actor]
+	if not track then
+		track = {actor=actor.id, definition_id=actor.definition_id, class="Model", native_loaded=true,
+			sample_layout={"beat","seconds","visible","primitives"}, samples={}}
+		manual.models.by_actor[actor] = track
+		manual.models.tracks[#manual.models.tracks + 1] = track
+	end
+	local visible, alpha, diffuse, glow = actor_visibility(actor)
+	local primitives = {}
+	if visible then
+		local camera = perspective_ancestor(actor)
+		local width, height = actor_viewport(actor)
+		local view, projection
+		if camera then view, projection = menu_projection(camera) end
+		primitives = manual.models.primitives(actor, actor_world_matrix(actor, 1, 1), view, projection,
+			width, height, diffuse, glow)
+	end
+	track.samples[#track.samples+1] = {current_beat,current_seconds,visible,primitives}
+end
+
 local function record_projected_vertices(loaded_roots)
 	world_matrix_cache, projection_cache, color_cache = {}, {}, {}
 	for _, root in ipairs(loaded_roots) do visit(root.actor, record_projected_actor) end
+	for _, root in ipairs(loaded_roots) do visit(root.actor, manual.models.record) end
 end
 
 -- Explicit Draw uses the current draw stack, not the actor's tree parent.
@@ -2836,7 +2924,9 @@ manual.draw = function(actor)
 		elseif type(texture) == "string" then call.texture = source_path(texture_path(actor) or texture) end
 		-- Resource handles remain identities; avoid serializing mutable actor trees.
 		call.state.texture = nil
-		if actor.class == "ActorMultiVertex" then
+		if actor.class == "Model" then
+			call.primitives = manual.models.primitives(actor, world, view, projection, prior.width, prior.height, diffuse, glow)
+		elseif actor.class == "ActorMultiVertex" then
 			call.primitives = _ITG_AMV_DRAW(actor.state.vertices or {}, actor.state.drawstate or {},
 				tonumber(actor.state.linewidth) or 1, diffuse, glow)
 			for _, primitive in ipairs(call.primitives) do
@@ -3110,6 +3200,7 @@ return json_encode({
 		external_actor_paths = true, player_render_samples = true,
 		projected_vertex_samples = true, projected_draw_color_samples = true,
 		manual_draw_frames = true, native_multi_vertex_primitives = true,
+		native_model_primitives = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
@@ -3122,6 +3213,7 @@ return json_encode({
 	external_actors = external_actors,
 	player_render_tracks = player_render_tracks,
 	projected_vertex_tracks = projected_vertex_tracks,
+	model_geometry_tracks = manual.models.tracks,
 	manual_draw_frames = manual.frames,
 	events = events,
 	callback_operation_tracks = callback_operation_tracks,

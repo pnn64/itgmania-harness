@@ -11,6 +11,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -44,6 +45,7 @@
   if (L == LUA->Get()) p->PushSelf(L); else lua_pushnil(L); \
   return 1;
 #include "ActorMultiVertex.cpp"
+#include "Model.cpp"
 #undef COMMON_RETURN_SELF
 #define COMMON_RETURN_SELF p->PushSelf(L); return 1;
 #include "Tween.h"
@@ -1420,6 +1422,203 @@ class EffectMath final : public Actor {
   }
 };
 }  // namespace
+
+// One native model session owns geometry until the semantic Lua state closes.
+// Every operation borrows the native singleton slots and restores them before
+// returning to Lua; models never export manager-owned userdata to this state.
+struct SongLuaModels {
+  HarnessDisplay display{640, 480};
+  std::unique_ptr<ModelManager> manager{std::make_unique<ModelManager>()};
+  std::vector<std::unique_ptr<HarnessModel>> models;
+
+  struct Globals {
+    RageDisplay* display = DISPLAY;
+    ModelManager* manager = MODELMAN;
+    explicit Globals(SongLuaModels& session) {
+      DISPLAY = &session.display;
+      MODELMAN = session.manager.get();
+    }
+    ~Globals() { DISPLAY = display; MODELMAN = manager; }
+  };
+
+  SongLuaModels() {
+    ModelManagerPrefs prefs;
+    prefs.m_bDelayedUnload = false;
+    manager->SetPrefs(prefs);
+  }
+  ~SongLuaModels() {
+    Globals globals(*this);
+    models.clear();
+    manager.reset();
+  }
+  HarnessModel& get(int id) {
+    if (id < 1 || static_cast<size_t>(id) > models.size())
+      throw std::runtime_error("invalid native Model handle");
+    return *models[id - 1];
+  }
+};
+
+namespace {
+void push_json(lua_State* state, const Json::Value& value) {
+  if (value.isObject()) {
+    lua_createtable(state, 0, value.size());
+    if (value.empty()) {
+      lua_createtable(state, 0, 1);
+      lua_pushboolean(state, true); lua_setfield(state, -2, "_ITG_JSON_OBJECT");
+      lua_setmetatable(state, -2);
+    }
+    for (const auto& key : value.getMemberNames()) {
+      push_json(state, value[key]);
+      lua_setfield(state, -2, key.c_str());
+    }
+  } else if (value.isArray()) {
+    lua_createtable(state, value.size(), 0);
+    int index = 0;
+    for (const auto& item : value) {
+      push_json(state, item);
+      lua_rawseti(state, -2, ++index);
+    }
+  } else if (value.isString()) {
+    const auto text = value.asString();
+    lua_pushlstring(state, text.data(), text.size());
+  } else if (value.isBool()) lua_pushboolean(state, value.asBool());
+  else if (value.isNumeric()) lua_pushnumber(state, value.asDouble());
+  else lua_pushnil(state);
+}
+
+SongLuaModels& model_session(lua_State* state) {
+  return *static_cast<SongLuaModels*>(lua_touserdata(state, lua_upvalueindex(1)));
+}
+
+int model_load(lua_State* state) {
+  const std::string mesh = luaL_optstring(state, 1, "");
+  const std::string material = luaL_optstring(state, 2, "");
+  const std::string bones = luaL_optstring(state, 3, "");
+  try {
+    auto& session = model_session(state);
+    SongLuaModels::Globals globals(session);
+    auto model = std::make_unique<HarnessModel>();
+    model->set_display(&session.display);
+    model->bind_capture(&session.display, 0);
+    if (!mesh.empty() || !material.empty() || !bones.empty()) {
+      if (mesh.empty() || material.empty() || bones.empty())
+        throw std::runtime_error("Model requires all meshes, materials and bones pieces");
+      model->LoadPieces(mesh, material, bones);
+    }
+    session.models.push_back(std::move(model));
+    lua_pushinteger(state, session.models.size());
+    return 1;
+  } catch (const std::exception& error) {
+    lua_pushnil(state); lua_pushstring(state, error.what()); return 2;
+  }
+}
+
+int model_update(lua_State* state) {
+  const int id = luaL_checkint(state, 1);
+  const float delta = static_cast<float>(luaL_checknumber(state, 2));
+  try {
+    auto& session = model_session(state);
+    SongLuaModels::Globals globals(session);
+    session.get(id).Update(delta);
+    lua_pushboolean(state, true); return 1;
+  } catch (const std::exception& error) {
+    lua_pushnil(state); lua_pushstring(state, error.what()); return 2;
+  }
+}
+
+int model_call(lua_State* state) {
+  const int id = luaL_checkint(state, 1);
+  const char* name = luaL_checkstring(state, 2);
+  const std::string_view method(name);
+  Model* model;
+  try { model = &model_session(state).get(id); }
+  catch (const std::exception& error) {
+    lua_pushnil(state); lua_pushstring(state, error.what()); return 2;
+  }
+  lua_remove(state, 1); lua_remove(state, 1);
+  // These are the actual linked LunaModel argument checks and methods. Their
+  // ignored self return is nil in this separate state (the macro above).
+  try {
+    if (method == "position") return LunaModel::position(model, state);
+    if (method == "playanimation") return LunaModel::playanimation(model, state);
+    if (method == "SetDefaultAnimation") return LunaModel::SetDefaultAnimation(model, state);
+    if (method == "GetDefaultAnimation") return LunaModel::GetDefaultAnimation(model, state);
+    if (method == "loop") return LunaModel::loop(model, state);
+    if (method == "rate") return LunaModel::rate(model, state);
+    if (method == "GetNumStates") return LunaModel::GetNumStates(model, state);
+    // Match LunaActor's inherited argument contracts and virtual dispatch.
+    // Pose and tween state remain in the semantic Actor, outside Model internals.
+    lua_State* L = state;
+    if (method == "animate") model->EnableAnimation(BIArg(1));
+    else if (method == "play") model->EnableAnimation(true);
+    else if (method == "pause") model->EnableAnimation(false);
+    else if (method == "setstate") model->SetState(IArg(1));
+    else if (method == "hibernate") model->SetHibernate(FArg(1));
+    else if (method == "texturetranslate") model->SetTextureTranslate(FArg(1), FArg(2));
+    else if (method == "texturewrapping") model->SetTextureWrapping(BIArg(1));
+    else if (method == "SetTextureFiltering") model->SetTextureFiltering(BArg(1));
+    else if (method == "blend") model->SetBlendMode(Enum::Check<BlendMode>(L, 1));
+    else if (method == "zbuffer") model->SetUseZBuffer(BIArg(1));
+    else if (method == "ztest") model->SetZTestMode(BIArg(1) ? ZTEST_WRITE_ON_PASS : ZTEST_OFF);
+    else if (method == "ztestmode") model->SetZTestMode(Enum::Check<ZTestMode>(L, 1));
+    else if (method == "zwrite") model->SetZWrite(BIArg(1));
+    else if (method == "zbias") model->SetZBias(FArg(1));
+    else if (method == "clearzbuffer") model->SetClearZBuffer(BIArg(1));
+    else if (method == "backfacecull") model->SetCullMode(BIArg(1) ? CULL_BACK : CULL_NONE);
+    else if (method == "cullmode") model->SetCullMode(Enum::Check<CullMode>(L, 1));
+    else {
+      lua_pushnil(state); lua_pushfstring(state, "unsupported native Model method: %s", name); return 2;
+    }
+    lua_pushboolean(state, true); return 1;
+  } catch (const std::exception& error) {
+    lua_pushnil(state); lua_pushstring(state, error.what()); return 2;
+  }
+}
+
+int model_draw(lua_State* state) {
+  const int id = luaL_checkint(state, 1);
+  const auto diffuse = lua_vector(state, 2), glow = lua_vector(state, 3);
+  try {
+    auto& session = model_session(state);
+    auto& model = session.get(id);
+    model.SetDiffuse(RageColor(diffuse.x, diffuse.y, diffuse.z, diffuse.w));
+    model.SetGlow(RageColor(glow.x, glow.y, glow.z, glow.w));
+    Json::Value actors(Json::arrayValue), sequence(Json::arrayValue);
+    actors.append(Json::Value(Json::objectValue));
+    actors[0]["draws"] = Json::Value(Json::arrayValue);
+    {
+      SongLuaModels::Globals globals(session);
+      struct Capture {
+        HarnessDisplay& display;
+        HarnessModel& model;
+        ~Capture() { display.start_sample(nullptr, nullptr); model.bind_sample(nullptr); }
+      } capture{session.display, model};
+      model.bind_sample(&actors);
+      session.display.start_sample(&actors, &sequence);
+      model.Draw();
+    }
+    // Lua allocation failures must not strand borrowed native globals.
+    push_json(state, actors[0]["draws"]);
+    return 1;
+  } catch (const std::exception& error) {
+    lua_pushnil(state); lua_pushstring(state, error.what()); return 2;
+  }
+}
+}  // namespace
+
+SongLuaModels* install_song_models(lua_State* state) {
+  auto session = std::make_unique<SongLuaModels>();
+  for (const auto& entry : std::vector<std::pair<const char*, lua_CFunction>>{
+      {"_ITG_MODEL_LOAD", model_load}, {"_ITG_MODEL_UPDATE", model_update},
+      {"_ITG_MODEL_CALL", model_call}, {"_ITG_MODEL_DRAW", model_draw}}) {
+    lua_pushlightuserdata(state, session.get());
+    lua_pushcclosure(state, entry.second, 1);
+    lua_setglobal(state, entry.first);
+  }
+  return session.release();
+}
+
+void destroy_song_models(SongLuaModels* models) { delete models; }
 
 void install_actor_math(lua_State* state) {
   LuaDrawMode(state);

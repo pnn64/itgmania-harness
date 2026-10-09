@@ -6453,3 +6453,125 @@ fn manual_draws_keep_each_frame_and_color_pass() {
             < 1e-5
     );
 }
+
+#[cfg(all(test, itgmania_oracle))]
+fn model_json_numbers(value: &Value) -> Value {
+    // Lua's JSON encoder writes integral doubles as integers. Compare the
+    // same numeric values without changing floating-point tolerances.
+    match value {
+        Value::Number(number) => serde_json::json!(number.as_f64().unwrap()),
+        Value::Array(items) => Value::Array(items.iter().map(model_json_numbers).collect()),
+        Value::Object(fields) => Value::Object(fields.iter()
+            .map(|(key,value)| (key.clone(),model_json_numbers(value))).collect()),
+        _ => value.clone(),
+    }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn model_song_meshes_match_native() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-song-geometry.json"))
+        .expect("actual native Model geometry control");
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-geometry.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native song Models",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 1.0, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).expect("song native mesh capture");
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    let tracks = trace["model_geometry_tracks"].as_array().expect("Model tracks");
+    assert_eq!(tracks.len(), 2);
+    assert!(!tracks[1]["samples"].as_array().unwrap().is_empty());
+    for sample in tracks[1]["samples"].as_array().unwrap() {
+        assert_eq!(sample[2], false);
+        assert_eq!(sample[3], serde_json::json!([]));
+    }
+    for sample in native["samples"].as_array().unwrap() {
+        let time = sample["time"].as_f64().unwrap();
+        let captured = tracks[0]["samples"].as_array().unwrap().iter()
+            .find(|row| (row[1].as_f64().unwrap()-time).abs() < 0.00001).expect("matching sample");
+        let expected = sample["actors"][1]["draws"].as_array().unwrap();
+        let actual = captured[3].as_array().unwrap();
+        assert_eq!(expected.len(), actual.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            for field in ["primitive", "texture_mode", "blend_mode", "model_mesh_name",
+                "normals", "texture_matrix_scale", "texture_matrix", "material", "lighting",
+                "lights", "cull_mode", "z_write", "z_test"] {
+                assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
+            }
+            assert_eq!(actual["vertices"].as_array().unwrap().len(), expected["vertices"].as_array().unwrap().len());
+            for (actual, expected) in actual["vertices"].as_array().unwrap().iter()
+                .zip(expected["vertices"].as_array().unwrap()) {
+                for field in ["local", "uv", "transformed_uv", "color"] {
+                    assert_eq!(model_json_numbers(&actual[field]), model_json_numbers(&expected[field]), "{field} at {time}");
+                }
+                for field in ["world", "view", "clip", "ndc", "screen"] {
+                    assert_eq!(actual[field].as_array().unwrap().len(), expected[field].as_array().unwrap().len());
+                    for (a,b) in actual[field].as_array().unwrap().iter().zip(expected[field].as_array().unwrap()) {
+                        assert!((a.as_f64().unwrap()-b.as_f64().unwrap()).abs() < 0.0001, "{field} at {time}: {a} != {b}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn model_song_manual_draws_keep_native_passes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/model-geometry.json")).unwrap();
+    let song_dir = root.join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-manual.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native manual Models",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 0.1, bpm: 60.0, bpm_segments: &[], beat_step: 0.1,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert!(!trace["manual_draw_frames"].as_array().unwrap().is_empty());
+    for frame in trace["manual_draw_frames"].as_array().unwrap() {
+        let calls = frame[2].as_array().unwrap();
+        assert_eq!(calls.len(), 2);
+        let first = calls[0]["primitives"].as_array().unwrap();
+        assert_eq!(first.len(), 2);
+        for (actual, expected) in first.iter().zip(native["samples"][0]["actors"][1]["draws"].as_array().unwrap()) {
+            assert_eq!(model_json_numbers(&actual["material"]), model_json_numbers(&expected["material"]));
+            assert_eq!(actual["vertices"].as_array().unwrap().len(), expected["vertices"].as_array().unwrap().len());
+            for (a,b) in actual["vertices"].as_array().unwrap().iter().zip(expected["vertices"].as_array().unwrap()) {
+                assert_eq!(model_json_numbers(&a["world"]), model_json_numbers(&b["world"]));
+            }
+        }
+        assert_eq!(calls[1]["primitives"].as_array().unwrap().len(), 1);
+        assert_eq!(calls[1]["primitives"][0]["vertices"][0]["world"][0].as_f64(), Some(120.0));
+    }
+}
+
+#[cfg(all(test, itgmania_oracle))]
+#[test]
+fn model_song_methods_use_native_contracts() {
+    let song_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/song-lua-headless").canonicalize().unwrap();
+    let entry = song_dir.join("model-methods.lua");
+    let context = Context {
+        simfile: &entry, song_dir: &song_dir, title: "native Model methods",
+        difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+        max_beat: 0.1, bpm: 60.0, bpm_segments: &[], beat_step: 0.1,
+        max_events: 10000, random_seed: 1,
+    };
+    let trace = evaluate_with_noteskin(&[Entry {
+        path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+    }], &context, None).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+}
