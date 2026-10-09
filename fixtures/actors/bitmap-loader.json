@@ -151,6 +151,30 @@
       "kind": "model",
       "color_depth": 32,
       "high_resolution": false
+    },
+    {
+      "name": "sprite-bmp8",
+      "file": "bitmap-loader/palette-8.bmp",
+      "kind": "sprite",
+      "color_depth": 32
+    },
+    {
+      "name": "sprite-gif",
+      "file": "bitmap-loader/palette.gif",
+      "kind": "sprite",
+      "color_depth": 32
+    },
+    {
+      "name": "sprite-jpeg",
+      "file": "bitmap-loader/uniform.jpg",
+      "kind": "sprite",
+      "color_depth": 32
+    },
+    {
+      "name": "sprite-gray",
+      "file": "bitmap-loader/gray (grayscale).png",
+      "kind": "sprite",
+      "color_depth": 32
     }
   ]
 }

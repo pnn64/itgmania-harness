@@ -1044,3 +1044,11 @@ a 2051x3 Model source uses the same 2048x8 image/allocation as actual
 RageBitmapTexture with the game profile. The resolved high-resolution setting
 remains enabled in the capture context; Auto resolution selection is still
 outside this headless profile.
+
+Harness 0.1.48 also captures Sprite upload pixels for power-of-two source
+dimensions of at least 2x2. Under the oracle's power-of-two caps, native sizing
+only preserves/halves those dimensions or forces minimum-size stretching;
+the image fills its allocation. Other Sprite inputs still omit upload pixels
+to exclude uninitialized padding. The 28 bitmap controls verify palette
+cleanup and source colors for these Sprite uploads. GPU conversion, physical
+mips and framebuffer output remain outside the CPU oracle.

@@ -323,9 +323,9 @@ class HarnessDisplay final : public RageDisplay {
       if (pixels > bitmap_remaining_pixels)
         throw std::runtime_error("bitmap fixture exceeds its output pixel budget");
       bitmap_remaining_pixels -= pixels;
-      // A Model always stretches its image to the full allocation. Sprites
-      // may have uninitialized POT padding beyond the one native border row
-      // and column; do not read or serialize that padding.
+      // Model stretching, or a POT source with power-of-two caps, fills the
+      // allocation. Other Sprites may have uninitialized padding beyond one
+      // native border row/column; do not read or serialize that padding.
       bitmap_upload = Json::Value(Json::objectValue);
       bitmap_upload["width"] = surface->w;
       bitmap_upload["height"] = surface->h;
@@ -1310,10 +1310,19 @@ Json::Value evaluate_bitmap(const Json::Value& request) {
         out["frame_rects"].append(std::move(frame));
       }
       if (display.bitmap_upload.isNull()) throw std::runtime_error("native bitmap upload was not observed");
+      if (display.bitmap_pixels &&
+          (texture->GetImageWidth() != texture->GetTextureWidth() ||
+           texture->GetImageHeight() != texture->GetTextureHeight()))
+        throw std::runtime_error("bitmap pixel capture includes unused allocation padding");
       out["upload"] = display.bitmap_upload;
     };
     const std::string kind = field_string(spec, "kind", "sprite", "bitmap");
-    display.bitmap_pixels = kind == "model";
+    // Native sizing can only halve doubleres images, cap to a power of two,
+    // or force minimum-size stretching. POT sources of at least 2x2 retain
+    // a full image allocation under these explicit profiles.
+    const bool power_of_two_source = loaded->w >= 2 && loaded->h >= 2 &&
+        !(loaded->w & (loaded->w - 1)) && !(loaded->h & (loaded->h - 1));
+    display.bitmap_pixels = kind == "model" || power_of_two_source;
     if (kind == "model") {
       AnimatedTexture model;
       model.Load(file);

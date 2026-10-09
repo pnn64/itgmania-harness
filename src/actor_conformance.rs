@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(result["oracle"], "itgmania_native_bitmap_loader");
         assert_eq!(result["framebuffer_verified"], false);
         let cases = result["cases"].as_array().unwrap();
-        assert_eq!(cases.len(), 24);
+        assert_eq!(cases.len(), 28);
         let case = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
         assert_eq!(
             case("model-pink")["upload"]["pixels"],
@@ -215,6 +215,23 @@ mod tests {
         let jpeg = case("native-jpeg")["loaded"]["pixels"].as_array().unwrap();
         assert!(jpeg.iter().all(|pixel| pixel == &jpeg[0]));
         assert_eq!(jpeg[0][3], 255);
+        for name in ["sprite-bmp8", "sprite-gif", "sprite-jpeg", "sprite-gray"] {
+            let sprite = case(name);
+            assert_eq!(sprite["upload"]["pixels_captured"], true);
+            assert_eq!(
+                sprite["dimensions"]["image"],
+                sprite["dimensions"]["texture"]
+            );
+            assert_eq!(sprite["upload"]["pixels"].as_array().unwrap().len(), 64);
+        }
+        assert_eq!(
+            case("sprite-bmp8")["upload"]["pixels"][0],
+            serde_json::json!([255, 0, 255, 255])
+        );
+        assert_eq!(
+            case("sprite-gif")["upload"]["pixels"][3],
+            serde_json::json!([0, 0, 0, 0])
+        );
     }
 
     #[test]
