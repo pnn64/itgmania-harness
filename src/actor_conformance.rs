@@ -292,6 +292,43 @@ mod tests {
     }
 
     #[test]
+    fn bitmap_sprite_preparation_captures_initialized_pixels() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/bitmap-sprite-preparation.json");
+        let result = evaluate(&path).expect("native tiny Sprite preparation");
+        assert_eq!(result, evaluate(&path).expect("repeat native preparation"));
+        assert_eq!(result["framebuffer_verified"], false);
+        let cases = result["cases"].as_array().expect("native bitmap cases");
+        assert_eq!(cases.len(), 10);
+        let case = |name: &str| cases.iter().find(|case| case["name"] == name).expect("named native case");
+        for item in cases {
+            let upload = &item["upload"];
+            if item["name"] == "padded" {
+                assert_eq!(upload["pixels_captured"], false);
+                assert!(upload.get("pixels").is_none());
+                continue;
+            }
+            assert_eq!(upload["pixels_captured"], true);
+            assert_eq!(item["dimensions"]["image"], item["dimensions"]["texture"]);
+            let size = upload["width"].as_u64().expect("width")
+                * upload["height"].as_u64().expect("height");
+            assert_eq!(upload["pixels"].as_array().expect("initialized pixels").len() as u64, size);
+        }
+        for (name, source, image) in [
+            ("tiny", [3, 2], [8, 8]), ("tiny-wide", [9, 3], [16, 8]),
+            ("tiny-tall", [3, 9], [8, 16]), ("unit", [1, 1], [8, 8]),
+            ("resolution", [53, 12], [8, 8]), ("hires-off", [5, 3], [8, 8]),
+            ("capped-tiny", [2049, 3], [2048, 8]),
+        ] {
+            assert_eq!(case(name)["dimensions"]["source"], serde_json::json!(source));
+            assert_eq!(case(name)["dimensions"]["image"], serde_json::json!(image));
+        }
+        let pixels = case("tiny")["upload"]["pixels"].as_array().expect("tiny pixels");
+        assert!(pixels.iter().any(|pixel| pixel != &pixels[0]));
+        assert_eq!(case("sheet")["frame_rects"].as_array().expect("sheet frames").len(), 2);
+    }
+
+    #[test]
     fn bitmap_loader_applies_native_preferences_and_hints() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/bitmap-loader.json");
         let result = evaluate(&path).expect("native bitmap policy");

@@ -288,6 +288,7 @@ class HarnessDisplay final : public RageDisplay {
   bool bitmap_capture = false;
   bool bitmap_palette = false;
   bool bitmap_pixels = false;
+  RageTexture* bitmap_reload_texture = nullptr;
   unsigned bitmap_remaining_pixels = 262144;
   Json::Value bitmap_upload;
   explicit HarnessDisplay(int width, int height)
@@ -323,9 +324,12 @@ class HarnessDisplay final : public RageDisplay {
       if (pixels > bitmap_remaining_pixels)
         throw std::runtime_error("bitmap fixture exceeds its output pixel budget");
       bitmap_remaining_pixels -= pixels;
-      // Model stretching, or a POT source with power-of-two caps, fills the
-      // allocation. Other Sprites may have uninitialized padding beyond one
-      // native border row/column; do not read or serialize that padding.
+      // Reload runs on an existing native texture: Create has updated its
+      // image dimensions before this callback. Read pixels only when the
+      // entire surface is initialized; NPOT padding stays excluded.
+      if (bitmap_reload_texture)
+        bitmap_pixels = bitmap_reload_texture->GetImageWidth() == surface->w &&
+                        bitmap_reload_texture->GetImageHeight() == surface->h;
       bitmap_upload = Json::Value(Json::objectValue);
       bitmap_upload["width"] = surface->w;
       bitmap_upload["height"] = surface->h;
@@ -1340,19 +1344,27 @@ Json::Value evaluate_bitmap(const Json::Value& request) {
       out["upload"] = display.bitmap_upload;
     };
     const std::string kind = field_string(spec, "kind", "sprite", "bitmap");
-    // Native sizing can only halve doubleres images, cap to a power of two,
-    // or force minimum-size stretching. POT sources of at least 2x2 retain
-    // a full image allocation under these explicit profiles.
-    const bool power_of_two_source = loaded->w >= 2 && loaded->h >= 2 &&
-        !(loaded->w & (loaded->w - 1)) && !(loaded->h & (loaded->h - 1));
-    display.bitmap_pixels = kind == "model" || power_of_two_source;
+    display.bitmap_pixels = kind == "model";
     if (kind == "model") {
       AnimatedTexture model;
       model.Load(file);
       capture(model.GetCurrentTexture());
     } else if (kind == "sprite") {
       RageTexture* texture = TEXTUREMAN->LoadTexture(RageTextureID(file));
-      try { capture(texture); } catch (...) { TEXTUREMAN->UnloadTexture(texture); throw; }
+      try {
+        if (texture->GetImageWidth() == texture->GetTextureWidth() &&
+            texture->GetImageHeight() == texture->GetTextureHeight()) {
+          display.bitmap_reload_texture = texture;
+          display.bitmap_upload = Json::Value();
+          texture->Reload();
+        }
+        capture(texture);
+      } catch (...) {
+        display.bitmap_reload_texture = nullptr;
+        TEXTUREMAN->UnloadTexture(texture);
+        throw;
+      }
+      display.bitmap_reload_texture = nullptr;
       TEXTUREMAN->UnloadTexture(texture);
     } else throw std::runtime_error("bitmap kind must be sprite or model");
     result["cases"].append(std::move(out));
