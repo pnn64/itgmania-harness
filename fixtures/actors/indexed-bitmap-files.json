@@ -1,0 +1,19 @@
+{
+  "name": "native-indexed-bitmap-files",
+  "texture_files": [
+    {
+      "name": "gif-offset",
+      "file": "bitmap-loader/frame-offset.gif",
+      "kind": "model",
+      "color_depth": 32,
+      "max_size": 2048
+    },
+    {
+      "name": "os2-bmp",
+      "file": "bitmap-loader/os2-4.bmp",
+      "kind": "model",
+      "color_depth": 32,
+      "max_size": 2048
+    }
+  ]
+}

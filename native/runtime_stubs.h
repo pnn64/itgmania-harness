@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include <mutex>
+#include <utility>
 
 // ITGmania's singleton managers and diagnostics are shared by every oracle.
 // Hold this for the entire native call, including manager teardown.
@@ -25,3 +26,5 @@ class RageTexture;
 RageTexture* harness_texture_for_handle(uintptr_t handle);
 // Serialized control scope only; regular actor captures retain metadata loads.
 void harness_native_bitmap_loading(bool enabled);
+// Use the actual file loader for source dimensions, including first-frame GIFs.
+std::pair<int, int> harness_texture_source_size(const std::string& path);

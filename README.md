@@ -1052,3 +1052,10 @@ the image fills its allocation. Other Sprite inputs still omit upload pixels
 to exclude uninitialized padding. The 28 bitmap controls verify palette
 cleanup and source colors for these Sprite uploads. GPU conversion, physical
 mips and framebuffer output remain outside the CPU oracle.
+
+Harness 0.1.49 uses the actual native LoadFile header path for regular
+textures and archive metadata, replacing PNG/JPEG-only and logical-canvas
+probes. First-frame GIF dimensions, OS/2 BMP headers and native format
+rejections now come from the pinned loader. texture_headers controls and
+a regular GIF Model verify the same source dimensions as RageBitmapTexture.
+Native GIF/BMP loaders decode pixels even when header-only is requested.

@@ -600,7 +600,10 @@ fn texture_metadata(
     song_dir: &Path,
 ) -> Result<TextureMetadata, Error> {
     let path = resolve_song_asset(song_dir, reference);
-    let dimensions = dimensions.or_else(|| path.as_deref().and_then(image_dimensions));
+    let dimensions = dimensions.or_else(|| {
+        path.as_deref()
+            .and_then(|path| crate::actor_conformance::texture_source_size(path).ok())
+    });
     let local_path = path
         .as_deref()
         .map(|path| portable_relative(song_dir, path))
@@ -931,61 +934,6 @@ fn append_member(
         .map_err(|source| Error(format!("could not append archive member {path}: {source}")))
 }
 
-fn image_dimensions(path: &Path) -> Option<[u32; 2]> {
-    let bytes = fs::read(path).ok()?;
-    if bytes.len() >= 24 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some([
-            u32::from_be_bytes(bytes[16..20].try_into().ok()?),
-            u32::from_be_bytes(bytes[20..24].try_into().ok()?),
-        ]);
-    }
-    if bytes.len() >= 10 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
-        return Some([
-            u16::from_le_bytes(bytes[6..8].try_into().ok()?) as u32,
-            u16::from_le_bytes(bytes[8..10].try_into().ok()?) as u32,
-        ]);
-    }
-    if bytes.len() >= 26 && bytes.starts_with(b"BM") {
-        return Some([
-            u32::from_le_bytes(bytes[18..22].try_into().ok()?),
-            i32::from_le_bytes(bytes[22..26].try_into().ok()?).unsigned_abs(),
-        ]);
-    }
-    jpeg_dimensions(&bytes)
-}
-
-fn jpeg_dimensions(bytes: &[u8]) -> Option<[u32; 2]> {
-    if !bytes.starts_with(&[0xff, 0xd8]) {
-        return None;
-    }
-    let mut offset = 2;
-    while offset + 4 <= bytes.len() {
-        if bytes[offset] != 0xff {
-            offset += 1;
-            continue;
-        }
-        let marker = bytes[offset + 1];
-        offset += 2;
-        if matches!(marker, 0xd8 | 0xd9) {
-            continue;
-        }
-        let length = usize::from(u16::from_be_bytes(
-            bytes.get(offset..offset + 2)?.try_into().ok()?,
-        ));
-        if length < 2 || offset + length > bytes.len() {
-            return None;
-        }
-        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
-            return Some([
-                u16::from_be_bytes(bytes.get(offset + 5..offset + 7)?.try_into().ok()?) as u32,
-                u16::from_be_bytes(bytes.get(offset + 3..offset + 5)?.try_into().ok()?) as u32,
-            ]);
-        }
-        offset += length;
-    }
-    None
-}
-
 fn frame_grid(reference: &str) -> Option<[u32; 2]> {
     let stem = Path::new(reference).file_stem()?.to_string_lossy();
     stem.split_whitespace().rev().find_map(|part| {
@@ -1244,6 +1192,23 @@ mod tests {
             texture.source_sha256.as_deref(),
             Some(hash_bytes(&image).as_str())
         );
+    }
+
+    #[test]
+    fn indexed_archive_metadata_uses_native_frame_dimensions() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/bitmap-loader")
+            .canonicalize()
+            .expect("native indexed asset root");
+        for name in ["frame-offset.gif", "os2-4.bmp"] {
+            let texture = texture_metadata(&format!("song:/{name}"), None, &root)
+                .expect("indexed texture metadata");
+            assert_eq!((texture.width, texture.height), (Some(8), Some(8)));
+            assert_eq!(
+                texture.source_sha256,
+                Some(hash_file(&root.join(name)).unwrap())
+            );
+        }
     }
 
     #[test]

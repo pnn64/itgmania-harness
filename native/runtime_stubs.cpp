@@ -63,6 +63,7 @@ Preference<float> g_fLightsAheadSeconds("LightsAheadSeconds", 0.05f);
 #include "RageUtil.h"
 #include "RageUtil/Endian.h"
 #include "RageSurface.h"
+#include "RageSurface_Load.h"
 #include "RageSurfaceUtils_Zoom.h"
 #include "RageSurface_Save_BMP.h"
 #include "RageSurface_Save_JPEG.h"
@@ -145,77 +146,6 @@ std::filesystem::path& harness_fallback_fonts() {
 	return path;
 }
 
-uint32_t read_be_u32(const unsigned char* bytes) {
-	return (static_cast<uint32_t>(bytes[0]) << 24) |
-	       (static_cast<uint32_t>(bytes[1]) << 16) |
-	       (static_cast<uint32_t>(bytes[2]) << 8) |
-	       static_cast<uint32_t>(bytes[3]);
-}
-
-std::pair<int, int> jpeg_dimensions(std::ifstream& file,
-                                  const std::string& path) {
-	const auto invalid = [&]() {
-		return std::runtime_error("invalid JPEG dimensions in texture " + path);
-	};
-	file.seekg(0, std::ios::end);
-	const auto limit = file.tellg();
-	file.seekg(2);
-	// Inspect bounded header segments only. Entropy-coded image data begins
-	// at SOS; dimensions must have appeared before it.
-	for (size_t segment = 0; segment < 4096; ++segment) {
-		if (file.get() != 0xff) throw invalid();
-		int marker = file.get();
-		while (marker == 0xff) marker = file.get();
-		if (marker <= 0 || marker == 0xd9 || marker == 0xda) throw invalid();
-		if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-		std::array<unsigned char, 2> bytes{};
-		if (!file.read(reinterpret_cast<char*>(bytes.data()), bytes.size())) throw invalid();
-		const int length = (bytes[0] << 8) | bytes[1];
-		const auto payload = file.tellg();
-		if (length < 2 || payload < 0 || length - 2 > limit - payload) throw invalid();
-		// SOF0/SOF2 include baseline/progressive JPEG. DHT, JPG and DAC are
-		// the non-frame markers in the otherwise contiguous SOF range.
-		if (marker >= 0xc0 && marker <= 0xcf && marker != 0xc4 &&
-		    marker != 0xc8 && marker != 0xcc) {
-			std::array<unsigned char, 6> frame{};
-			if (length < 8 ||
-			    !file.read(reinterpret_cast<char*>(frame.data()), frame.size())) throw invalid();
-			const int height = (frame[1] << 8) | frame[2];
-			const int width = (frame[3] << 8) | frame[4];
-			if (width == 0 || height == 0 || frame[5] == 0 ||
-			    length < 8 + 3 * frame[5]) throw invalid();
-			return {width, height};
-		}
-		file.seekg(payload + std::streamoff(length - 2));
-	}
-	throw invalid();
-}
-
-std::pair<int, int> image_dimensions(const std::string& path) {
-	std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
-	std::array<unsigned char, 24> header{};
-	if (!file.read(reinterpret_cast<char*>(header.data()), header.size())) {
-		throw std::runtime_error("could not read font texture " + path);
-	}
-	constexpr std::array<unsigned char, 8> signature = {
-		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
-	if (header[0] == 0xff && header[1] == 0xd8) {
-		return jpeg_dimensions(file, path);
-	}
-	if (!std::equal(signature.begin(), signature.end(), header.begin())) {
-		throw std::runtime_error(
-			"headless texture probing supports PNG and JPEG headers only: " + path);
-	}
-	const uint32_t width = read_be_u32(header.data() + 16);
-	const uint32_t height = read_be_u32(header.data() + 20);
-	if (width == 0 || height == 0 ||
-	    width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-	    height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-		throw std::runtime_error("invalid PNG dimensions in font texture " + path);
-	}
-	return {static_cast<int>(width), static_cast<int>(height)};
-}
-
 void apply_resolution_hint(const std::string& path, int& width, int& height) {
 	static Regex resolution("\\([^\\)]*res ([0-9]+)x([0-9]+).*\\)");
 	std::vector<std::string> matches;
@@ -236,7 +166,7 @@ class HarnessTexture final : public RageTexture {
 		const bool synthetic = id.filename.rfind("__harness_", 0) == 0;
 		const auto [width, height] = synthetic
 		    ? std::pair<int, int>{64, 64}
-		    : image_dimensions(id.filename);
+		    : harness_texture_source_size(id.filename);
 		m_iSourceWidth = width;
 		m_iSourceHeight = height;
 		m_iImageWidth = width;
@@ -278,6 +208,15 @@ class HarnessTexture final : public RageTexture {
 };
 
 } // namespace
+
+std::pair<int, int> harness_texture_source_size(const std::string& path) {
+    std::string error;
+    std::unique_ptr<RageSurface> surface(RageSurfaceUtils::LoadFile(path, error, true));
+    if (!surface) throw std::runtime_error("native texture header: " + error + ": " + path);
+    if (surface->w <= 0 || surface->h <= 0)
+        throw std::runtime_error("native texture dimensions must be positive: " + path);
+    return {surface->w, surface->h};
+}
 
 static RageLog gLog;
 static RageTextureManager gTextureManager;

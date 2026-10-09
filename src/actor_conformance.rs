@@ -7,15 +7,19 @@ pub fn evaluate(path: &Path) -> Result<serde_json::Value, Error> {
     if let Some(root) = request.get_mut("root") {
         resolve_model_paths(root, path.parent().unwrap_or(Path::new(".")));
     }
-    if let Some(files) = request
-        .get_mut("texture_files")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        let directory = path.parent().unwrap_or(Path::new("."));
-        for spec in files {
-            if let Some(file) = spec.get_mut("file") {
-                if let Some(relative) = file.as_str().filter(|file| Path::new(file).is_relative()) {
-                    *file = directory.join(relative).to_string_lossy().as_ref().into();
+    for field in ["texture_files", "texture_headers"] {
+        if let Some(files) = request
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            let directory = path.parent().unwrap_or(Path::new("."));
+            for spec in files {
+                if let Some(file) = spec.get_mut("file") {
+                    if let Some(relative) =
+                        file.as_str().filter(|file| Path::new(file).is_relative())
+                    {
+                        *file = directory.join(relative).to_string_lossy().as_ref().into();
+                    }
                 }
             }
         }
@@ -33,6 +37,27 @@ pub fn evaluate(path: &Path) -> Result<serde_json::Value, Error> {
         "execution": "embedded_native_sources"
     });
     Ok(document)
+}
+
+/// Probe the actual native file loader rather than an image's logical canvas.
+pub fn texture_source_size(path: &Path) -> Result<[u32; 2], Error> {
+    let request = serde_json::to_vec(&serde_json::json!({
+        "texture_headers": [{"file": path.to_string_lossy()}]
+    }))
+    .map_err(Error::Json)?;
+    let response = native_eval(&request)?;
+    let value: serde_json::Value = serde_json::from_slice(&response).map_err(Error::Json)?;
+    if let Some(message) = value.get("error").and_then(serde_json::Value::as_str) {
+        return Err(Error::Native(message.to_owned()));
+    }
+    let dimension = |axis: usize| {
+        value["cases"][0]["dimensions"][axis]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value != 0)
+            .ok_or_else(|| Error::Native("invalid native texture dimensions".into()))
+    };
+    Ok([dimension(0)?, dimension(1)?])
 }
 
 // Model pieces belong to the fixture directory, like their native material
@@ -124,6 +149,38 @@ impl fmt::Display for Error {
 #[cfg(all(test, itgmania_oracle))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_headers_match_native_bitmap_and_regular_model() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors");
+        let headers = evaluate(&root.join("indexed-texture-headers.json")).expect("native headers");
+        let files =
+            evaluate(&root.join("indexed-bitmap-files.json")).expect("actual native bitmaps");
+        for (index, name) in ["frame-offset.gif", "os2-4.bmp"].iter().enumerate() {
+            let dimensions =
+                texture_source_size(&root.join("bitmap-loader").join(name)).expect("native size");
+            assert_eq!(dimensions, [8, 8]);
+            assert_eq!(
+                headers["cases"][index]["dimensions"],
+                serde_json::json!(dimensions)
+            );
+            assert_eq!(
+                files["cases"][index]["dimensions"]["source"],
+                serde_json::json!(dimensions)
+            );
+        }
+        let model = evaluate(&root.join("indexed-model-texture-profile.json"))
+            .expect("regular Model GIF texture");
+        for draw in model["samples"][0]["actors"][1]["draws"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(draw["texture_dimensions"], files["cases"][0]["dimensions"]);
+        }
+        let error =
+            texture_source_size(&root.join("bitmap-loader/native-misnamed-bmp.png")).unwrap_err();
+        assert!(error.to_string().contains("Unknown file format"), "{error}");
+    }
 
     #[test]
     fn normal_model_texture_profile_matches_native_bitmap() {

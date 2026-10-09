@@ -1,0 +1,13 @@
+{
+  "name": "native-indexed-texture-headers",
+  "texture_headers": [
+    {
+      "name": "gif-offset",
+      "file": "bitmap-loader/frame-offset.gif"
+    },
+    {
+      "name": "os2-bmp",
+      "file": "bitmap-loader/os2-4.bmp"
+    }
+  ]
+}

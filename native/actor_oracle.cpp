@@ -1227,6 +1227,29 @@ unsigned surface_integer(const Json::Value& value, unsigned maximum,
 // Actual native file decoding and RageBitmapTexture::Create, stopped at the
 // display upload. Pixel format/mip requests are evidence; GPU conversion and
 // generated mip pixels are not emulated or claimed here.
+Json::Value evaluate_headers(const Json::Value& request) {
+  const auto& cases = request["texture_headers"];
+  if (!cases.isArray() || cases.empty() || cases.size() > 64)
+    throw std::runtime_error("texture_headers must contain 1..64 cases");
+  Json::Value result(Json::objectValue);
+  result["schema_version"] = 1;
+  result["oracle"] = "itgmania_native_texture_headers";
+  result["framebuffer_verified"] = false;
+  result["cases"] = Json::Value(Json::arrayValue);
+  for (const auto& spec : cases) {
+    const std::string file = field_string(spec, "file", "", "texture header");
+    if (file.empty()) throw std::runtime_error("texture header file is required");
+    const auto [width, height] = harness_texture_source_size(file);
+    Json::Value out(Json::objectValue);
+    out["name"] = spec["name"];
+    out["dimensions"] = Json::Value(Json::arrayValue);
+    out["dimensions"].append(width);
+    out["dimensions"].append(height);
+    result["cases"].append(std::move(out));
+  }
+  return result;
+}
+
 Json::Value evaluate_bitmap(const Json::Value& request) {
   const auto& cases = request["texture_files"];
   if (!cases.isArray() || cases.empty() || cases.size() > 64)
@@ -1610,6 +1633,7 @@ Json::Value evaluate(const Json::Value& request) {
   if (request.isMember("animated_texture")) return evaluate_texture(request);
   if (request.isMember("texture_surface")) return evaluate_surface(request);
   if (request.isMember("texture_files")) return evaluate_bitmap(request);
+  if (request.isMember("texture_headers")) return evaluate_headers(request);
   const std::string name = field_string(request, "name", "unnamed", "fixture");
   const Json::Value& screen = request["screen"];
   g_screen_width = screen.isNull() ? 640 : field_number(screen, "width", 640, "screen");
