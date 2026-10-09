@@ -254,3 +254,17 @@ stretching before `CreateFrameRects`, matching the stretch branch in
 `RageBitmapTexture.cpp`. The 5x9 source control requires an 8x16 image
 and allocation. Requested mip/color-key flags do not establish actual
 pixel processing, mip levels or GPU sampling parity.
+
+
+Harness 0.1.44 links the pinned `RageSurfaceUtils.cpp` and
+`RageSurfaceUtils_Zoom.cpp` instead of the no-op Zoom stub. The
+`texture-surface.json` actor-conformance control supplies bounded decoded
+RGB, RGBA or indexed pixels and calls native hot-pink color keying,
+iterative resizing and hidden-alpha cleanup in bitmap order. This preserves
+the source representation, including the native distinction between
+palette and RGBA key selection. Output contains exact CPU RGBA bytes.
+
+These controls verify the native surface subroutines. They do not load
+images through RageBitmapTexture, generate GPU mips or establish native
+framebuffer parity. Destination dimensions are explicit test inputs; the
+separate Model request control verifies the native stretch dimensions.

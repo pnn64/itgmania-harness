@@ -45,6 +45,8 @@ const ITG_SOURCES: &[&str] = &[
     "src/RageTypes.cpp",
     "src/RageDisplay.cpp",
     "src/RageSurface.cpp",
+    "src/RageSurfaceUtils.cpp",
+    "src/RageSurfaceUtils_Zoom.cpp",
     "src/Sprite.cpp",
     "src/ModelTypes.cpp",
     "src/ModelManager.cpp",

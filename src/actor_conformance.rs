@@ -113,21 +113,135 @@ mod tests {
     use super::*;
 
     #[test]
+    fn texture_surface_uses_native_preprocessing() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors/texture-surface.json");
+        let result = evaluate(&path).expect("native surface preprocessing");
+        assert_eq!(
+            result,
+            evaluate(&path).expect("repeat native preprocessing")
+        );
+        assert_eq!(result["oracle"], "itgmania_native_surface_utils");
+        assert_eq!(result["framebuffer_verified"], false);
+        let cases = result["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 12);
+        let pixels =
+            |name: &str| &cases.iter().find(|case| case["name"] == name).unwrap()["output_pixels"];
+        assert_eq!(
+            pixels("model-pink-npot"),
+            &serde_json::json!(vec![[0; 4]; 128])
+        );
+        assert_eq!(
+            pixels("off-pink-top-edge")[0],
+            serde_json::json!([255, 0, 255, 255])
+        );
+        assert_eq!(
+            pixels("off-pink-top-edge")[1],
+            serde_json::json!([0, 0, 0, 0])
+        );
+        assert_eq!(
+            pixels("off-pink-side-middle")[3],
+            serde_json::json!([248, 0, 248, 255])
+        );
+        assert_eq!(
+            pixels("off-pink-side-middle")[4],
+            serde_json::json!([240, 40, 10, 0])
+        );
+        assert_eq!(
+            pixels("partial-alpha-pink")[0],
+            serde_json::json!([255, 0, 255, 128])
+        );
+        assert_eq!(
+            pixels("rgb-key-adds-alpha")[0],
+            serde_json::json!([240, 40, 10, 0])
+        );
+        assert_eq!(
+            pixels("palette-keys-both-pinks")[0],
+            serde_json::json!([240, 40, 10, 0])
+        );
+        assert_eq!(
+            pixels("palette-keys-both-pinks")[1],
+            serde_json::json!([240, 40, 10, 0])
+        );
+        assert_eq!(
+            pixels("transparent-hidden-rgb"),
+            &serde_json::json!(vec![[0; 4]; 4])
+        );
+        assert_eq!(
+            pixels("uniform-hidden-rgb")[1],
+            serde_json::json!([240, 40, 10, 0])
+        );
+        assert_eq!(
+            pixels("mixed-hidden-rgb")[1],
+            serde_json::json!([0, 0, 0, 0])
+        );
+        assert_eq!(pixels("npot-linear-stretch").as_array().unwrap().len(), 128);
+        assert_eq!(
+            pixels("npot-linear-stretch")[0],
+            serde_json::json!([0, 0, 0, 255])
+        );
+        assert_eq!(
+            pixels("npot-linear-stretch")[127],
+            serde_json::json!([200, 224, 228, 255])
+        );
+        assert_eq!(pixels("iterative-reduction").as_array().unwrap().len(), 1);
+        assert_eq!(
+            pixels("one-pixel-expansion"),
+            &serde_json::json!(vec![[240, 40, 10, 255]; 64])
+        );
+    }
+
+    #[test]
+    fn texture_surface_rejects_invalid_inputs() {
+        let valid = serde_json::json!({"width": 1, "height": 1, "pixels": [[0, 0, 0, 255]]});
+        for (key, value) in [
+            ("width", serde_json::json!(0)),
+            ("height", serde_json::json!(257)),
+            ("width", serde_json::json!(1.5)),
+            ("format", serde_json::json!("unknown")),
+            ("pixels", serde_json::json!([[0, 0, 0, 256]])),
+            ("pixels", serde_json::json!([])),
+            ("destination", serde_json::json!([0, 8])),
+            ("destination", serde_json::json!([8])),
+            ("hot_pink_color_key", serde_json::json!(1)),
+        ] {
+            let mut case = valid.clone();
+            case[key] = value;
+            let request =
+                serde_json::to_vec(&serde_json::json!({"texture_surface": [case]})).unwrap();
+            let response: serde_json::Value =
+                serde_json::from_slice(&native_eval(&request).unwrap()).unwrap();
+            assert!(
+                response["error"].is_string(),
+                "accepted invalid {key}: {response}"
+            );
+        }
+    }
+
+    #[test]
     fn model_texture_request() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/actors/model-texture-request.json");
         let result = evaluate(&path).expect("native Model texture request");
-        let draws = result["samples"][0]["actors"][1]["draws"].as_array().unwrap();
+        let draws = result["samples"][0]["actors"][1]["draws"]
+            .as_array()
+            .unwrap();
         assert_eq!(draws.len(), 3);
         for draw in draws {
-            assert_eq!(draw["texture_request"], serde_json::json!({
-                "stretch": true, "mipmaps": true, "hot_pink_color_key": true
-            }));
+            assert_eq!(
+                draw["texture_request"],
+                serde_json::json!({
+                    "stretch": true, "mipmaps": true, "hot_pink_color_key": true
+                })
+            );
             // ModelTypes requests stretch for a 5x9 source. The native
             // RageBitmapTexture branch sets image size to the 8x16 allocation.
-            assert_eq!(draw["texture_dimensions"], serde_json::json!({
-                "source": [5, 9], "image": [8, 16], "texture": [8, 16]
-            }));
+            assert_eq!(
+                draw["texture_dimensions"],
+                serde_json::json!({
+                    "source": [5, 9], "image": [8, 16], "texture": [8, 16]
+                })
+            );
         }
     }
 

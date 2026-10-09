@@ -996,3 +996,17 @@ branch. The actor and song controls check diffuse, secondary and glow
 bindings. These are request/metadata observations. Pixel preprocessing,
 mip storage, trilinear filtering and framebuffer output still require
 independent native rendering verification.
+
+
+Harness 0.1.44 links the pinned `RageSurfaceUtils.cpp` and
+`RageSurfaceUtils_Zoom.cpp` instead of the no-op Zoom stub. The
+`texture-surface.json` actor-conformance control supplies bounded decoded
+RGB, RGBA or indexed pixels and calls native hot-pink color keying,
+iterative resizing and hidden-alpha cleanup in bitmap order. This preserves
+the source representation, including the native distinction between
+palette and RGBA key selection. Output contains exact CPU RGBA bytes.
+
+These controls verify the native surface subroutines. They do not load
+images through RageBitmapTexture, generate GPU mips or establish native
+framebuffer parity. Destination dimensions are explicit test inputs; the
+separate Model request control verifies the native stretch dimensions.

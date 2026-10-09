@@ -30,6 +30,9 @@
 #include "RageTextureRenderTarget.h"
 #include "RageDisplay.h"
 #include "RageMath.h"
+#include "RageSurface.h"
+#include "RageSurfaceUtils.h"
+#include "RageSurfaceUtils_Zoom.h"
 #include "RageTexture.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
@@ -1167,6 +1170,108 @@ void bind_sample_actor(Actor* actor, Json::Value* records) {
   else dynamic_cast<HarnessSprite*>(actor)->bind_sample(records);
 }
 
+unsigned surface_integer(const Json::Value& value, unsigned maximum,
+                         const char* name) {
+  if (!value.isUInt() || value.asUInt() > maximum)
+    throw std::runtime_error(std::string(name) + " must be a bounded unsigned integer");
+  return value.asUInt();
+}
+
+// Preserve decoded RGB/RGBA/palette representation: native color-key selection
+// differs for indexed surfaces. This is a CPU subroutine oracle, not a bitmap
+// loader or a GPU framebuffer. Input validation and ownership stay together.
+Json::Value evaluate_surface(const Json::Value& request) {
+  const auto& cases = request["texture_surface"];
+  if (!cases.isArray() || cases.empty() || cases.size() > 64)
+    throw std::runtime_error("texture_surface must contain 1..64 cases");
+  Json::Value result(Json::objectValue);
+  result["schema_version"] = 1;
+  result["oracle"] = "itgmania_native_surface_utils";
+  result["fixture"] = request["name"];
+  result["framebuffer_verified"] = false;
+  result["cases"] = Json::Value(Json::arrayValue);
+  for (const auto& spec : cases) {
+    const unsigned width = surface_integer(spec["width"], 256, "width");
+    const unsigned height = surface_integer(spec["height"], 256, "height");
+    if (!width || !height) throw std::runtime_error("surface dimensions must be positive");
+    const std::string format = field_string(spec, "format", "rgba", "surface");
+    if (format != "rgba" && format != "rgb" && format != "palette")
+      throw std::runtime_error("surface format must be rgba, rgb or palette");
+    const auto& pixels = spec["pixels"];
+    if (!pixels.isArray() || pixels.size() != width * height)
+      throw std::runtime_error("surface pixel count differs from dimensions");
+    RageSurface* image = CreateSurface(width, height,
+        format == "palette" ? 8 : format == "rgb" ? 24 : 32,
+        format == "palette" ? 0 : 0x000000FF,
+        format == "palette" ? 0 : 0x0000FF00,
+        format == "palette" ? 0 : 0x00FF0000,
+        format == "rgba" ? 0xFF000000 : 0);
+    try {
+      if (format == "palette") {
+        const auto& palette = spec["palette"];
+        if (!palette.isArray() || palette.empty() || palette.size() > 256)
+          throw std::runtime_error("palette must contain 1..256 RGBA colors");
+        image->fmt.palette->ncolors = palette.size();
+        for (Json::ArrayIndex i = 0; i < palette.size(); ++i) {
+          if (!palette[i].isArray() || palette[i].size() != 4)
+            throw std::runtime_error("palette color must contain four bytes");
+          auto& color = image->fmt.palette->colors[i];
+          color.r = surface_integer(palette[i][0], 255, "red");
+          color.g = surface_integer(palette[i][1], 255, "green");
+          color.b = surface_integer(palette[i][2], 255, "blue");
+          color.a = surface_integer(palette[i][3], 255, "alpha");
+        }
+      }
+      for (Json::ArrayIndex i = 0; i < pixels.size(); ++i) {
+        auto* destination = image->pixels + (i / width) * image->pitch +
+                            (i % width) * image->fmt.BytesPerPixel;
+        if (format == "palette") {
+          *destination = surface_integer(pixels[i], image->fmt.palette->ncolors - 1, "palette index");
+        } else {
+          const unsigned channels = format == "rgb" ? 3 : 4;
+          if (!pixels[i].isArray() || pixels[i].size() != channels)
+            throw std::runtime_error("surface pixel has the wrong channel count");
+          for (unsigned c = 0; c < channels; ++c)
+            destination[c] = surface_integer(pixels[i][c], 255, "pixel channel");
+        }
+      }
+      if (field_bool(spec, "hot_pink_color_key", true, "surface"))
+        RageSurfaceUtils::ApplyHotPinkColorKey(image);
+      if (spec.isMember("destination")) {
+        const auto& destination = spec["destination"];
+        if (!destination.isArray() || destination.size() != 2)
+          throw std::runtime_error("destination must contain width and height");
+        const unsigned w = surface_integer(destination[0], 256, "destination width");
+        const unsigned h = surface_integer(destination[1], 256, "destination height");
+        if (!w || !h) throw std::runtime_error("destination dimensions must be positive");
+        RageSurfaceUtils::Zoom(image, w, h);
+      }
+      if (field_bool(spec, "fix_hidden_alpha", true, "surface"))
+        RageSurfaceUtils::FixHiddenAlpha(image);
+      Json::Value out = spec;
+      out["output_width"] = image->w;
+      out["output_height"] = image->h;
+      out["output_pixels"] = Json::Value(Json::arrayValue);
+      for (int y = 0; y < image->h; ++y) {
+        for (int x = 0; x < image->w; ++x) {
+          uint8_t rgba[4];
+          RageSurfaceUtils::GetRGBAV(image->pixels + y * image->pitch +
+              x * image->fmt.BytesPerPixel, image, rgba);
+          Json::Value pixel(Json::arrayValue);
+          for (const auto value : rgba) pixel.append(unsigned(value));
+          out["output_pixels"].append(std::move(pixel));
+        }
+      }
+      result["cases"].append(std::move(out));
+      delete image;
+    } catch (...) {
+      delete image;
+      throw;
+    }
+  }
+  return result;
+}
+
 // A model loaded by foreground Lua advances AnimatedTexture through Update;
 // NoteDisplay instead seeks its cached model via SetSecondsIntoAnimation.
 // Keep the material implementation native and feed Foreground::Update's
@@ -1332,6 +1437,7 @@ Json::Value evaluate(const Json::Value& request) {
   if (request.isMember("aft_creation") || request.isMember("lua_assertions"))
     return evaluate_lua_assertions(request);
   if (request.isMember("animated_texture")) return evaluate_texture(request);
+  if (request.isMember("texture_surface")) return evaluate_surface(request);
   const std::string name = field_string(request, "name", "unnamed", "fixture");
   const Json::Value& screen = request["screen"];
   g_screen_width = screen.isNull() ? 640 : field_number(screen, "width", 640, "screen");

@@ -906,7 +906,6 @@ DisplaySpecs* pushDisplaySpecs(lua_State*, const DisplaySpecs&) {
 }
 
 namespace RageSurfaceUtils {
-void Zoom(RageSurface*&, int, int) {}
 bool SaveBMP(RageSurface*, RageFile&) { return false; }
 bool SaveJPEG(RageSurface*, RageFile&, bool) { return false; }
 bool SavePNG(RageSurface*, RageFile&, std::string&) { return false; }
