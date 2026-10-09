@@ -37,7 +37,9 @@ local sequence, emitted_events, dropped_events = 0, 0, 0
 local scheduled_beats, manual = {}, { frames = {}, stack = {}, actors = {}, message_dispatches = {} }
 local external_count, command_count = 0, 0
 local projected_vertex_tracks, projected_track_by_actor, projected_signature_by_actor = {}, {}, {}
-manual.models = {tracks={}, by_actor={}}
+manual.models = {tracks={}, by_actor={}, buffers={}, buffer_lookup={}, lookup_count=0,
+	lookup_bytes=0, buffer_hits=0, saturated_misses=0,
+	vertex_fields={"local","world","view","clip","ndc","screen","uv","transformed_uv","color"}}
 local update_frames = {}
 local perspective_actors = {}
 local tracked_players
@@ -2825,6 +2827,59 @@ local function record_projected_actor(actor)
 	}
 end
 
+-- The isolated capture's single Lua thread owns this index for one simfile.
+-- Its exact serialized keys share immutable observations, never approximate
+-- float values. Index capacity: 65,536 keys and 64 MiB of key bytes. On
+-- saturation, retain every new buffer without indexing it; existing hits
+-- still share. No pruning occurs in the frame loop. The output buffers are
+-- reference data, bounded by the complete capture's frames and mesh sizes,
+-- and are released with the session. Counters expose hits and saturation.
+function manual.models.intern(values)
+	local parts = {tostring(#values), ":"}
+	for _, row in ipairs(values) do
+		parts[#parts+1] = tostring(#row) .. ":"
+		for _, value in ipairs(row) do
+			assert(type(value) == "number" or value == _ITG_JSON_NULL, "non-numeric native Model column")
+			parts[#parts+1] = type(value) == "number" and finite(value)
+				and string.format("%.17g", value) or "null"
+			parts[#parts+1] = ","
+		end
+		parts[#parts+1] = ";"
+	end
+	local key = table.concat(parts)
+	local prior = manual.models.buffer_lookup[key]
+	if prior then
+		manual.models.buffer_hits = manual.models.buffer_hits + 1
+		return prior
+	end
+	local id = #manual.models.buffers + 1
+	manual.models.buffers[id] = values
+	if manual.models.lookup_count < 65536 and manual.models.lookup_bytes + #key <= 67108864 then
+		manual.models.buffer_lookup[key] = id
+		manual.models.lookup_count = manual.models.lookup_count + 1
+		manual.models.lookup_bytes = manual.models.lookup_bytes + #key
+	else
+		manual.models.saturated_misses = manual.models.saturated_misses + 1
+	end
+	return id
+end
+
+function manual.models.pack(primitives)
+	for _, primitive in ipairs(primitives) do
+		primitive.vertex_count = #primitive.vertices
+		primitive.vertex_buffers = {}
+		for _, field in ipairs(manual.models.vertex_fields) do
+			local column = {}
+			for index, vertex in ipairs(primitive.vertices) do column[index] = assert(vertex[field]) end
+			primitive.vertex_buffers[field] = manual.models.intern(column)
+		end
+		primitive.normals_buffer = manual.models.intern(primitive.normals)
+		primitive.texture_matrix_scale_buffer = manual.models.intern(primitive.texture_matrix_scale)
+		primitive.vertices, primitive.normals, primitive.texture_matrix_scale = nil, nil, nil
+	end
+	return primitives
+end
+
 function manual.models.primitives(actor, world, view, projection, width, height, diffuse, glow)
 	local primitives, message = _ITG_MODEL_DRAW(actor.native_model, diffuse, glow)
 	if not primitives then error(message, 0) end
@@ -2844,7 +2899,7 @@ function manual.models.primitives(actor, world, view, projection, width, height,
 			vertex.screen[3] = vertex.ndc[3]
 		end
 	end
-	return primitives
+	return manual.models.pack(primitives)
 end
 
 function manual.models.record(actor)
@@ -3200,7 +3255,7 @@ return json_encode({
 		external_actor_paths = true, player_render_samples = true,
 		projected_vertex_samples = true, projected_draw_color_samples = true,
 		manual_draw_frames = true, native_multi_vertex_primitives = true,
-		native_model_primitives = true,
+		native_model_primitives = true, native_model_geometry_buffers = true,
         native_column_splines = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
@@ -3214,6 +3269,11 @@ return json_encode({
 	player_render_tracks = player_render_tracks,
 	projected_vertex_tracks = projected_vertex_tracks,
 	model_geometry_tracks = manual.models.tracks,
+	model_geometry_encoding = "column-buffer-v1",
+	model_geometry_buffers = manual.models.buffers,
+	model_geometry_buffer_stats = {buffers=#manual.models.buffers, indexed_buffers=manual.models.lookup_count,
+		lookup_key_bytes=manual.models.lookup_bytes, hits=manual.models.buffer_hits,
+		saturated_misses=manual.models.saturated_misses},
 	manual_draw_frames = manual.frames,
 	events = events,
 	callback_operation_tracks = callback_operation_tracks,

@@ -6468,6 +6468,41 @@ fn model_json_numbers(value: &Value) -> Value {
 }
 
 #[cfg(all(test, itgmania_oracle))]
+fn model_expand_draws(trace: &Value, draws: &Value) -> Vec<Value> {
+    assert_eq!(trace["model_geometry_encoding"], "column-buffer-v1");
+    let buffers = trace["model_geometry_buffers"].as_array().expect("Model buffers");
+    let resolve = |id: &Value| {
+        let index = id.as_u64().expect("positive Model buffer ID").checked_sub(1)
+            .expect("one-based Model buffer ID");
+        buffers.get(index as usize).expect("existing Model buffer").as_array()
+            .expect("Model column array")
+    };
+    draws.as_array().expect("Model primitives").iter().map(|draw| {
+        let mut draw = draw.as_object().expect("Model primitive object").clone();
+        let count = draw.remove("vertex_count").expect("vertex count").as_u64().unwrap() as usize;
+        let fields = draw.remove("vertex_buffers").expect("vertex buffers");
+        assert_eq!(fields.as_object().unwrap().len(), 9);
+        let mut vertices = vec![serde_json::Map::new(); count];
+        for (field, id) in fields.as_object().unwrap() {
+            let column = resolve(id);
+            assert_eq!(column.len(), count, "{field} column length");
+            for (vertex, value) in vertices.iter_mut().zip(column) {
+                vertex.insert(field.clone(), value.clone());
+            }
+        }
+        assert!(draw.insert("vertices".into(), Value::Array(vertices.into_iter().map(Value::Object).collect())).is_none());
+        for (field, reference) in [("normals", "normals_buffer"),
+            ("texture_matrix_scale", "texture_matrix_scale_buffer")] {
+            let id = draw.remove(reference).expect("mesh attribute buffer");
+            let column = resolve(&id);
+            assert_eq!(column.len(), count, "{field} column length");
+            assert!(draw.insert(field.into(), Value::Array(column.clone())).is_none());
+        }
+        Value::Object(draw)
+    }).collect()
+}
+
+#[cfg(all(test, itgmania_oracle))]
 #[test]
 fn model_song_meshes_match_native() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -6487,6 +6522,10 @@ fn model_song_meshes_match_native() {
     assert_eq!(trace["runtime_errors"], serde_json::json!([]));
     assert_eq!(trace["dropped_events"], 0);
     let tracks = trace["model_geometry_tracks"].as_array().expect("Model tracks");
+    assert!(trace["model_geometry_buffer_stats"]["hits"].as_u64().unwrap() > 0);
+    assert_eq!(trace["model_geometry_buffer_stats"]["saturated_misses"], 0);
+    assert_eq!(trace["model_geometry_buffer_stats"]["buffers"].as_u64().unwrap() as usize,
+        trace["model_geometry_buffers"].as_array().unwrap().len());
     assert_eq!(tracks.len(), 2);
     assert!(!tracks[1]["samples"].as_array().unwrap().is_empty());
     for sample in tracks[1]["samples"].as_array().unwrap() {
@@ -6498,7 +6537,7 @@ fn model_song_meshes_match_native() {
         let captured = tracks[0]["samples"].as_array().unwrap().iter()
             .find(|row| (row[1].as_f64().unwrap()-time).abs() < 0.00001).expect("matching sample");
         let expected = sample["actors"][1]["draws"].as_array().unwrap();
-        let actual = captured[3].as_array().unwrap();
+        let actual = model_expand_draws(&trace, &captured[3]);
         assert_eq!(expected.len(), actual.len());
         for (actual, expected) in actual.iter().zip(expected) {
             for field in ["primitive", "texture_mode", "blend_mode", "model_mesh_name",
@@ -6541,10 +6580,11 @@ fn model_song_manual_draws_keep_native_passes() {
     }], &context, None).unwrap();
     assert_eq!(trace["runtime_errors"], serde_json::json!([]));
     assert!(!trace["manual_draw_frames"].as_array().unwrap().is_empty());
+    assert!(trace["model_geometry_buffer_stats"]["hits"].as_u64().unwrap() > 0);
     for frame in trace["manual_draw_frames"].as_array().unwrap() {
         let calls = frame[2].as_array().unwrap();
         assert_eq!(calls.len(), 2);
-        let first = calls[0]["primitives"].as_array().unwrap();
+        let first = model_expand_draws(&trace, &calls[0]["primitives"]);
         assert_eq!(first.len(), 2);
         for (actual, expected) in first.iter().zip(native["samples"][0]["actors"][1]["draws"].as_array().unwrap()) {
             assert_eq!(model_json_numbers(&actual["material"]), model_json_numbers(&expected["material"]));
@@ -6553,8 +6593,9 @@ fn model_song_manual_draws_keep_native_passes() {
                 assert_eq!(model_json_numbers(&a["world"]), model_json_numbers(&b["world"]));
             }
         }
-        assert_eq!(calls[1]["primitives"].as_array().unwrap().len(), 1);
-        assert_eq!(calls[1]["primitives"][0]["vertices"][0]["world"][0].as_f64(), Some(120.0));
+        let second = model_expand_draws(&trace, &calls[1]["primitives"]);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["vertices"][0]["world"][0].as_f64(), Some(120.0));
     }
 }
 
