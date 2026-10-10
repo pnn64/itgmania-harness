@@ -14,6 +14,51 @@ fn itgmania_root() -> PathBuf {
 }
 
 #[test]
+fn timing_data_keeps_each_native_owner() {
+    let directory = temp_dir("timing-data");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, content) in [
+        ("control.ssc", include_str!("fixtures/song-lua-headless/timing-data/control.ssc")),
+        ("control.lua", include_str!("fixtures/song-lua-headless/timing-data/control.lua")),
+    ] {
+        std::fs::write(directory.join(name), content).unwrap();
+    }
+    let out = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+        "--out", out.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let trace: Value = serde_json::from_slice(
+        &std::fs::read(out.join("control.ssc.semantic.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    // TimingData.cpp's native float Lua getters: the song and both Steps
+    // have independent offsets/BPMs; default BPM lists are native strings.
+    for (name, values) in [
+        ("Song", [0.125f32, 2.625, 7.5, 240.0, 120.0]),
+        ("Selected", [-0.25, 4.4166665, 3.25, 180.0, 60.0]),
+        ("Chart1", [-0.25, 4.4166665, 3.25, 180.0, 60.0]),
+        ("Chart2", [0.5, 3.6999998, 5.125, 75.0, 150.0]),
+    ] {
+        let actor = trace["actor_definitions"].as_array().unwrap().iter()
+            .find(|actor| actor["name"] == name).expect(name);
+        let track = trace["tween_tracks"].as_array().unwrap().iter()
+            .find(|track| track["definition_id"] == actor["id"] || track["actor"] == actor["id"])
+            .expect("native timing setters");
+        for (method, expected) in ["Actor.x", "Actor.y", "Actor.z", "Actor.aux", "Actor.zoomx"]
+            .into_iter().zip(values).chain([("Actor.zoomy", 3.0), ("Actor.zoomz", 1.0)])
+        {
+            let operation = track["segments"].as_array().unwrap().iter()
+                .flat_map(|segment| segment["operations"].as_array().unwrap())
+                .find(|operation| operation["operation"] == method).expect(method);
+            let actual = operation["args"][0].as_f64().expect("native number") as f32;
+            assert_eq!(actual.to_bits(), expected.to_bits(), "{name}.{method}");
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn captures_selected_empty_charts_and_isolates_file_writes() {
     let directory = temp_dir("song-host");
     let corpus = directory.join("corpus");

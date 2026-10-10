@@ -1380,7 +1380,39 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
         return 1;
       }, 1);
       lua_setglobal(state, "_ITG_SONG_SECONDS");
+    } else {
+      // Standalone actor captures also expose a real native timing object.
+      if (request.bpm_segments.empty()) {
+        timing_song.m_SongTiming.AddSegment(BPMSegment(0, request.bpm));
+      } else {
+        for (const auto& segment : request.bpm_segments) {
+          timing_song.m_SongTiming.AddSegment(
+              BPMSegment(BeatToNoteRow(segment.beat), segment.bpm));
+        }
+      }
+      timing_song.m_SongTiming.TidyUpData(false);
+      timing_song.m_SongTiming.PrepareLookup();
     }
+    // GetTimingData returns each owner's actual Lua binding, including split
+    // timing on non-selected Steps. Keep lookup construction outside callbacks.
+    for (Steps* steps : timing_song.GetAllSteps()) {
+      steps->GetTimingData()->PrepareLookup();
+    }
+    lua_pushlightuserdata(state, &timing_song);
+    lua_pushcclosure(state, [](lua_State* L) -> int {
+      auto* song = static_cast<Song*>(lua_touserdata(L, lua_upvalueindex(1)));
+      const int index = luaL_checkint(L, 1);
+      const auto& charts = song->GetAllSteps();
+      if (index < 0 || (index > static_cast<int>(charts.size()) &&
+                        !(charts.empty() && index == 1))) {
+        return luaL_error(L, "invalid native timing owner: %d", index);
+      }
+      TimingData* timing = index == 0 || charts.empty()
+          ? &song->m_SongTiming : charts[static_cast<size_t>(index - 1)]->GetTimingData();
+      timing->PushSelf(L);
+      return 1;
+    }, 1);
+    lua_setglobal(state, "_ITG_TIMING_DATA");
 
     lua_getglobal(state, "os");
     if (lua_istable(state, -1)) {

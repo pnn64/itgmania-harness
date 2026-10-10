@@ -923,6 +923,14 @@ continuous BPM fallback. Captures made before harness 0.1.5 can retain a
 double-precision clock for simple charts and should be regenerated when
 strict beat boundaries are relevant.
 
+Harness 0.1.52 returns the linked `TimingData` Lua object from
+`Song:GetTimingData()` and every `Steps:GetTimingData()`. The song, selected
+chart, and other charts retain their own offsets and timing segments. Native
+getters also preserve the engine's BPM list formats and float conversions.
+Standalone actor captures use a native object built from their supplied BPM
+map. Earlier semantic hosts returned one constant-BPM table for all owners;
+captures that call these APIs need revalidation.
+
 Harness 0.1.17 also compiles `SongPosition.cpp` and calls its actual Lua
 binding for `GetMusicSeconds`, `GetMusicSecondsVisible`, and
 `GAMESTATE:GetCurMusicSeconds`. These APIs return the native float song music

@@ -1758,13 +1758,6 @@ song_position = {
 }
 end
 
-local timing_data = {
-	GetBeatFromElapsedTime = function(_, seconds) return seconds * harness.bpm / 60 end,
-	GetElapsedTimeFromBeat = function(_, beat) return beat * 60 / harness.bpm end,
-	GetBPMAtBeat = function() return harness.bpm end,
-	GetBPMsAndTimes = function() return { { 0, harness.bpm } } end,
-}
-
 local song = {
 	GetBackgroundPath = function() return harness.background_path end,
 	GetSongDir = function() return song_dir .. "/" end,
@@ -1772,7 +1765,7 @@ local song = {
 	GetDisplayMainTitle = function() return harness.title end,
 	GetMainTitle = function() return harness.title end,
 	GetDisplayBpms = function() return { harness.bpm, harness.bpm } end,
-	GetTimingData = function() return timing_data end,
+	GetTimingData = function() return _ITG_TIMING_DATA(0) end,
     GetSongBPS = function() return harness.bpm / 60 end,
     GetFirstSecond = function() return harness.first_second or 0 end,
     GetLastSecond = function() return harness.last_second or harness.max_beat * 60 / harness.bpm end,
@@ -1805,7 +1798,7 @@ for index, chart in ipairs(harness.steps or { harness }) do
         GetAuthorCredit = function() return chart.author_credit or "" end,
         GetChartName = function() return chart.chart_name or "" end,
 		GetMeter = function() return chart.meter or 0 end,
-		GetTimingData = function() return timing_data end,
+		GetTimingData = function() return _ITG_TIMING_DATA(index) end,
 		GetNoteData = function() return {} end,
 	}
 end
