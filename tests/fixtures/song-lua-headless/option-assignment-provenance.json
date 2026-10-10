@@ -1,0 +1,54 @@
+{
+  "problem": "Fresh PlayerState.SetPlayerOptions resets omitted numeric fields, but events recorded only the replacement text and skin state.",
+  "change": "Record numeric getter amounts and speeds from compiled native PlayerOptions after assignment, including native switches and timer enum. The native parser is not replayed to synthesize the final values.",
+  "source_parent_commit": "5707aa0c1e911df0cd4a255b35d3a5b474e34252",
+  "harness_version": "0.1.57",
+  "native_reference_sha256": {
+    "PlayerOptions.cpp": "8b650534e902301bc26b0ffa27d896f1677f1cd590d205159120dc3a01815595",
+    "PlayerState.cpp": "d54ad94985f1917627af53a55d96986777c9c0b3949768d7822074b09b796280",
+    "ModsGroup.h": "69eed3b53a0781add857158dae13e47804d287a57047a41cadf3c50dedb321a0"
+  },
+  "source_contract": [
+    "PlayerState.cpp:240-244 constructs fresh options and uses ModsGroup::Assign",
+    "PlayerOptions.cpp:90-174 defines numeric reset defaults"
+  ],
+  "getter_regression": {
+    "path": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass158-native-options-snapshot-v2.exe",
+    "sha256": "2bf68d72f00819764dabf5bb227f2b68b9923a7441e983fcb257648d6067e495",
+    "results": [
+      {
+        "test": "song_lua_headless::tests::noteskin_writes_use_native_strings_on_every_frame",
+        "exit_code": 0,
+        "seconds": 1.409658432006836,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 176 filtered out; finished in 1.04s"
+        ],
+        "log_sha256": "6fa24ad1cc5781879cb9eaab7876a2ee10b0ebd142fafca3048f0fa5e495490b"
+      }
+    ]
+  },
+  "full_units": {
+    "binary": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass158-native-options-snapshot-v2.exe",
+    "binary_sha256": "2bf68d72f00819764dabf5bb227f2b68b9923a7441e983fcb257648d6067e495",
+    "exit_code": 0,
+    "seconds": 143.7060580998659,
+    "log": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass158-native-options-snapshot-all-v2.log",
+    "log_sha256": "960ec51620d9aa21e1f19dbce33ba09cc5d59c42d2bbf7c6e714c633173b7109",
+    "result_lines": [
+      "test result: ok. 175 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 143.40s"
+    ]
+  },
+  "cli_binary_sha256": "a49d5cb3faddce6f74908745498a4a81829821a0f3f62ce07e02cdc07cc48827",
+  "tested_source_sha256": {
+    "semantic_host.lua": "586cd5d861f1469d017e39862ed78a5c67fd7000e11ac3c10f6f48b34196cc46",
+    "src/song_lua_headless.rs": "40a792b7768faf0b3cadcad0dbd30fd54f308cf0ede663ef822a4587cf1927a8",
+    "build.rs": "7120c369d692fef8f7e051f9937f70059e07474210cb5a592ea36c18a6f8969c",
+    "native/options_oracle.cpp": "33f44f77e2205add1adfcc578993ed1101eead5be4fe6bb83c38e2a6bec48e15",
+    "Cargo.toml": "97d4ff4be4b0abb6fbf66f9d9bc92a0075bfad10adb4f85bde1bed2ffdf381af",
+    "Cargo.lock": "df287c9447dc631a5e1d4a0a7a88657aaca74600ac1d950ab3ec96417e0a043b"
+  },
+  "reference_sources_unchanged": true,
+  "independence_limit": "Compiled native PlayerOptions getters and parsing supply the option fields; semantic_host executes the authored Lua and collects events. This does not establish native whole-song loading or framebuffer parity.",
+  "current_vs_song_options_complete": false,
+  "full_corpus_complete": false
+}

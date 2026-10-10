@@ -1624,9 +1624,7 @@ local function indexed_option_noops(options, text)
 	end
 	return #out > 0 and out or nil
 end
-local function rejected_option_parts(options, text)
-	local parts = _ITG_OPTIONS_REJECTED(options.native_index, text)
-	if #parts == 0 then return nil end
+function manual.numeric_options(options)
 	local values = {}
 	for _, method in ipairs(_ITG_PLAYER_OPTION_FLOATS) do
 		local amount, speed = _ITG_OPTIONS_UPDATE(options.native_index, method, nil)
@@ -1634,6 +1632,23 @@ local function rejected_option_parts(options, text)
 			values[#values + 1] = { method:lower(), amount, speed }
 		end
 	end
+	return values
+end
+function manual.assignment_options(options)
+	local values = manual.numeric_options(options)
+	for _, method in ipairs({ "StealthType", "StealthPastReceptors", "Cosecant", "DizzyHolds", "ZBuffer" }) do
+		values[#values + 1] = { method:lower(), _ITG_OPTIONS_UPDATE(options.native_index, method) and 1 or 0 }
+	end
+	local mode = _ITG_OPTIONS_UPDATE(options.native_index, "ModTimerSetting")
+	local modes = { ModTimerType_Game = 0, ModTimerType_Beat = 1, ModTimerType_Song = 2, ModTimerType_Default = 3 }
+	assert(modes[mode] ~= nil, "unavailable native modifier timer enum")
+	values[#values + 1] = { "modtimersetting", modes[mode] }
+	return values
+end
+local function rejected_option_parts(options, text)
+	local parts = _ITG_OPTIONS_REJECTED(options.native_index, text)
+	if #parts == 0 then return nil end
+	local values = manual.numeric_options(options)
 	for _, part in ipairs(parts) do part.values = values end
 	return parts
 end
@@ -1744,7 +1759,7 @@ player_state_mt.__index = function(state, name)
 		local event = emit("modifier", self, "PlayerState.SetPlayerOptions", safe_args(level, value), { noteskin_option = {} })
 		player_options[self.player].values = {}
 		update_native_options(player_options[self.player], "SetPlayerOptions", value)
-		if event then event.detail = { noteskin_option = {
+		if event then event.detail = { numeric_options = manual.assignment_options(options), noteskin_option = {
 			previous = before,
 			current = _ITG_OPTIONS_UPDATE(options.native_index, "NoteSkin"),
 			parts = _ITG_OPTIONS_SKINS(options.native_index, value),

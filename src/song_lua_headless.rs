@@ -3239,6 +3239,14 @@ mod tests {
         assert_eq!(writes[0]["detail"]["noteskin_option"]["previous"], "cyber");
         assert_eq!(writes[0]["detail"]["noteskin_option"]["current"], "default");
         assert_eq!(writes[1]["detail"]["noteskin_option"]["current"], "cel");
+        let numeric = |event: &serde_json::Value, key: &str| {
+            event["detail"]["numeric_options"].as_array().expect("compiled getter snapshot")
+                .iter().find(|field| field[0] == key).expect("native numeric field")[1]
+                .as_f64().expect("native numeric amount")
+        };
+        assert_eq!(numeric(writes[1], "dark"), 0.0, "fresh assignment resets omitted dark");
+        assert_eq!(numeric(writes[1], "reverse"), 0.0);
+        assert_eq!(numeric(writes[1], "modtimersetting"), 3.0);
         for (index, frame) in frames.iter().enumerate() {
             let writes = &writes[2 + 4 * index..6 + 4 * index];
             for write in writes {
@@ -3250,6 +3258,8 @@ mod tests {
             assert_eq!(writes[0]["detail"]["noteskin_option"]["parts"],
                 serde_json::json!([{ "part": "50% default", "target": "default" }]));
             assert_eq!(writes[1]["detail"]["noteskin_option"]["current"], "cyber");
+            assert_eq!(numeric(writes[1], "dark"), f64::from(0.4_f32));
+            assert_eq!(numeric(writes[1], "reverse"), 0.0);
             assert_eq!(writes[2]["detail"]["noteskin_option"]["current"], "CYBER");
             assert_eq!(writes[3]["detail"]["noteskin_option"]["current"], "CYBER");
         }
