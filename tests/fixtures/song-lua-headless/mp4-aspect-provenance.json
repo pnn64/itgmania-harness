@@ -1,0 +1,105 @@
+{
+  "fixture_sha256": "7ec0369d791657d65901513888e47057f411c100a4be0a5f5cce348a06dcc742",
+  "command": [
+    "ffmpeg",
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:s=16x16:r=10:d=0.1",
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=r=8000:cl=mono",
+    "-map",
+    "1:a",
+    "-map",
+    "0:v",
+    "-c:v",
+    "libx264",
+    "-vf",
+    "setsar=2/1",
+    "-c:a",
+    "aac",
+    "-t",
+    "0.1",
+    "-pix_fmt",
+    "yuv420p",
+    "C:\\GitHub\\itgmania-harness\\tests\\fixtures\\song-lua-headless\\mp4-aspect.mp4"
+  ],
+  "ffprobe": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "index": 0,
+        "codec_type": "audio"
+      },
+      {
+        "index": 1,
+        "codec_type": "video",
+        "width": 16,
+        "height": 16,
+        "sample_aspect_ratio": "2:1",
+        "display_aspect_ratio": "2:1"
+      }
+    ]
+  },
+  "decoded_rgb_bytes": 768,
+  "decoded_rgb_sha256": "89d68b858259a55eb1581184b7760ef524d0ab49dba14b11d5dd53cba4aefa23",
+  "harness_or_deadsync_used_for_expected_dimensions": false,
+  "whole_native_gameplay_or_framebuffer_claimed": false,
+  "reference_source_sha256": {
+    "MovieTexture_FFMpeg.h": "6f45137be370b68a8189b4ca0f0cd411e0582286744066a1916c1af476bd4a96",
+    "MovieTexture_Generic.h": "4b397a41edb18755f7aa6e4319f173721f19829ccdebf6e7b2fcefdcf7651db2",
+    "MovieTexture_Generic.cpp": "2b2ec3dd99033f6b3c5a626f3b9e106d9a9804c0112cdab0b1847cf5e375423b"
+  },
+  "source_contract": [
+    "MovieTexture_FFMpeg.h:114-115 reads codec context width/height",
+    "MovieTexture_Generic.h:54 defaults source aspect to 1; FFmpeg does not override it",
+    "MovieTexture_Generic.cpp:189-204 sets source/image dimensions from decoder dimensions",
+    "MovieTexture_Generic.cpp:54-73 creates source geometry after opening the codec, before the decoding thread"
+  ],
+  "display_width_differs_from_decoded_width": true,
+  "audio_track_is_first": true,
+  "faststart_control": {
+    "command": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-i",
+      "C:\\GitHub\\itgmania-harness\\tests\\fixtures\\song-lua-headless\\mp4-aspect.mp4",
+      "-map",
+      "0",
+      "-c",
+      "copy",
+      "-movflags",
+      "+faststart",
+      "C:\\GitHub\\itgmania-harness\\tests\\fixtures\\song-lua-headless\\mp4-aspect-faststart.mp4"
+    ],
+    "fixture_sha256": "fb738302e4ca795dd44749e577ada5b9a950d904af89f8e05d9d40156eedc51c",
+    "ffprobe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "index": 0,
+          "codec_type": "audio"
+        },
+        {
+          "index": 1,
+          "codec_type": "video",
+          "width": 16,
+          "height": 16,
+          "sample_aspect_ratio": "2:1",
+          "display_aspect_ratio": "2:1"
+        }
+      ]
+    },
+    "decoded_rgb_bytes": 768,
+    "decoded_rgb_sha256": "89d68b858259a55eb1581184b7760ef524d0ab49dba14b11d5dd53cba4aefa23"
+  },
+  "empty_free_box_before_moov_in_original_control": true,
+  "faststart_control_isolates_display_vs_coded_dimensions": true
+}

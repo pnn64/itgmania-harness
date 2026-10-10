@@ -3414,6 +3414,42 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn mp4_geometry_uses_codec_frame_dimensions() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("fixtures");
+        let entry = song_dir.join("mp4-metadata.lua");
+        let bpms = [BpmSegment { beat: 0.0, bpm: 120.0 }];
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "MP4 metadata",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single",
+            description: "", max_beat: 0.25, bpm: 120.0, bpm_segments: &bpms,
+            beat_step: 0.25, max_events: 100, random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry { path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0 }],
+            &context,
+        ).expect("native MP4 geometry");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let tracks = trace["projected_vertex_tracks"].as_array().expect("video tracks");
+        assert_eq!(tracks.len(), 2, "check ordinary and faststart MP4 layouts");
+        for (track, center_x) in tracks.iter().zip([100.0, 200.0]) {
+            assert_eq!(track["texture_size"], serde_json::json!([16, 16]));
+            let corners = track["samples"][0][6].as_array().expect("video corners");
+            for (corner, [x, y]) in corners.iter().zip([
+                [center_x - 16.0, 92.0], [center_x + 16.0, 92.0],
+                [center_x + 16.0, 108.0], [center_x - 16.0, 108.0],
+            ]) {
+                assert!((corner[0].as_f64().expect("x") - x).abs() < 0.0001);
+                assert!((corner[1].as_f64().expect("y") - y).abs() < 0.0001);
+            }
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn jpeg_geometry_uses_native_texture_metadata() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

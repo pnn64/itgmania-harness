@@ -2610,10 +2610,10 @@ texture_path = function(actor)
 	return candidate
 end
 
--- ISO BMFF track headers carry the movie's native source dimensions. Read only
--- container headers and the eight dimension bytes, never the video payload.
+-- MovieDecoder_FFMpeg uses codec frame dimensions, not tkhd display dimensions.
+-- Read VisualSampleEntry width/height under stsd without loading movie payloads.
 local function movie_size(file, begin, limit, depth)
-    if depth > 4 then return nil end
+    if depth > 6 then return nil end
     local pos = begin
     while pos + 8 <= limit do
         file:seek("set", pos)
@@ -2628,13 +2628,34 @@ local function movie_size(file, begin, limit, depth)
             size, payload = high * 4294967296 + low, pos + 16
         elseif size == 0 then size = limit - pos end
         local finish = pos + size
-        if finish <= payload or finish > limit then return nil end
-        if kind == "tkhd" and size >= 84 then
-            file:seek("set", finish - 8)
-            local dims = file:read(8) or ""
-            local width, height = be32(dims, 1), be32(dims, 5)
-            if width and height and width > 0 and height > 0 then return width / 65536, height / 65536 end
-        elseif kind == "moov" or kind == "trak" then
+        if finish < payload or finish > limit then return nil end
+        if kind == "stsd" and finish - payload >= 8 then
+            file:seek("set", payload)
+            local full_header = file:read(8) or ""
+            local count = be32(full_header, 5)
+            if not count or count > 1024 then return nil end
+            local entry = payload + 8
+            for _ = 1, count do
+                if entry + 8 > finish then return nil end
+                file:seek("set", entry)
+                local sample = file:read(math.min(36, finish - entry)) or ""
+                local length, codec = be32(sample, 1), sample:sub(5, 8)
+                if not length or length < 8 or entry + length > finish then return nil end
+                local visual = codec == "avc1" or codec == "avc3" or codec == "hvc1"
+                    or codec == "hev1" or codec == "mp4v" or codec == "av01"
+                    or codec == "vp08" or codec == "vp09" or codec == "encv"
+                    or codec == "jpeg" or codec == "png " or codec == "raw "
+                if visual and length >= 86 then
+                    local a, b, c, d = sample:byte(33, 36)
+                    if a and b and c and d then
+                        local width, height = a * 256 + b, c * 256 + d
+                        if width > 0 and height > 0 then return width, height end
+                    end
+                end
+                entry = entry + length
+            end
+        elseif kind == "moov" or kind == "trak" or kind == "mdia"
+            or kind == "minf" or kind == "stbl" then
             local width, height = movie_size(file, payload, finish, depth + 1)
             if width and height then return width, height end
         end

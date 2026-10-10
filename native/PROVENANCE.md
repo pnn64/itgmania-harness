@@ -28,7 +28,12 @@ accessors; a copied handle keeps its source path after the original Sprite
 loads another image. The host retains each Sprite's texture binding changes
 alongside projected geometry, including aliases from invisible resource
 caches. This remains a headless metadata probe, without bitmap decoding or a
-GPU backend. Movie geometry uses the existing container-header probe; other
+GPU backend. MP4/MOV geometry reads coded VisualSampleEntry dimensions under
+`stsd`, following `MovieDecoder_FFMpeg::GetWidth/GetHeight`. It ignores `tkhd`
+display dimensions; the FFmpeg decoder does not override the default source
+aspect ratio. The audio-first, non-square-pixel MP4 control is checked with
+ffprobe and an independently decoded RGB frame. This establishes source
+geometry, not native movie allocation dimensions or rendered pixels. Other
 image formats are not covered by this path.
 
 Named ActorFrameTexture resources follow the local ActorFrameTexture::Create
