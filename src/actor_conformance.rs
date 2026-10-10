@@ -151,6 +151,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scalar_float_lua_bindings_match_actor_storage() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/scalar-float-lua.json");
+        let native = evaluate(&fixture).expect("native scalar Lua bindings");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+        assert_eq!(native["diagnostics"], serde_json::json!([]));
+    }
+
+    #[test]
     fn indexed_headers_match_native_bitmap_and_regular_model() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors");
         let headers = evaluate(&root.join("indexed-texture-headers.json")).expect("native headers");

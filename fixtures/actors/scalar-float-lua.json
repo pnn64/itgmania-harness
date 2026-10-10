@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "name": "native-float-lua-bindings",
+  "lua_assertions": "local self = native_target\n        self:x(.1):y(.2):z(.3):rotationx(.1):rotationy(.2):rotationz(.3)\n        assert(self:GetX() == 0.10000000149011612, 'native GetX float')\n        assert(self:GetY() == 0.20000000298023224, 'native GetY float')\n        assert(self:GetZ() == 0.30000001192092896, 'native GetZ float')\n        assert(self:GetRotationX() == 0.10000000149011612, 'native GetRotationX float')\n        assert(self:GetRotationY() == 0.20000000298023224, 'native GetRotationY float')\n        assert(self:GetRotationZ() == 0.30000001192092896, 'native GetRotationZ float')\n        self:rotationx(100000000):addrotationx(-99999999.3)\n        assert(self:GetRotationX() == 0, 'float argument conversion precedes addition')\n\nassert(not pcall(function() self:xy(nil, 7) end), \"native XY rejects nil\")\nself:diffusealpha(.92)\nassert(self:GetDiffuseAlpha() == 0.9200000166893005, \"native alpha float\")\n"
+}

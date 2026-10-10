@@ -106,7 +106,7 @@
       "Actor.h": "76ff31b0dad5cc1198d01dbe735fed769aac40d309017fbb501bcdcef958219b"
     }
   },
-  "independence_limit": "Compiled C++ Actor conformance established stored position and rotation values. Lua getter assertions run in the semantic loader under test. Addition argument conversion and nil rejection follow the native bindings and header; this control did not directly execute those Lua bindings in C++.",
+  "independence_limit": "Compiled C++ Actor conformance and native Lua assertions establish getter precision, addition argument narrowing, nil rejection, and diffuse alpha storage. No semantic_host.lua or DeadSync execution supplied those results. The song control separately exercises the semantic loader under test; this does not prove native whole-song loading or framebuffer parity.",
   "pre_fix_control": {
     "harness_commit": "5e225ab9e6ffdcb3bdaacc4617a3d231fed219be",
     "source_pending_commit": false,
@@ -157,5 +157,35 @@
     "Other direct scalar fields and derived sizing operations need separate native audits",
     "Original fixture 76 must be recaptured and fully compared"
   ],
-  "full_corpus_complete": false
+  "full_corpus_complete": false,
+  "direct_native_binding_control": {
+    "harness_commit": "10cb65cb67a4e550316c9bd286a6784b90d6a25d",
+    "binary_sha256": "2b39b098d08bf31b87188463d2f0236523a67e75c66bb1e8779df1053902c710",
+    "input_sha256": "fea5ae6b3ae96bc003fee575ee07d0c36d7ef0a127f4c5017dae2e7d7568563d",
+    "native_sha256": "75e375eb39a1a41ec7b483042b26f43f070281053fafc39e603c550dec2aa5a0",
+    "native_cpp_actor_and_lua_bindings_used": true,
+    "semantic_host_used": false,
+    "assertions": "Native X/Y/Z and rotation getters use float storage; AddRotation narrows arguments before addition; XY rejects nil; diffusealpha stores float .92.",
+    "result": {
+      "allocations": [],
+      "diagnostics": [],
+      "provenance": {
+        "execution": "embedded_native_sources",
+        "git_dirty": "false",
+        "git_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+        "source_root": "C:\\GitHub\\itgmania-harness\\vendor/itgmania"
+      },
+      "script_errors": []
+    }
+  },
+  "direct_native_binding_control_before_fix": {
+    "source_commit": "5e225ab9e6ffdcb3bdaacc4617a3d231fed219be",
+    "binary_sha256": "8b2b7f0f7efa66c9454c15f6df08c4d7d3fc08a04c50fc95f4b13f1e37e242e5",
+    "historical_frozen_binary": true,
+    "native_cpp_actor_and_lua_bindings_used": true,
+    "semantic_host_used": false,
+    "input_sha256": "fea5ae6b3ae96bc003fee575ee07d0c36d7ef0a127f4c5017dae2e7d7568563d",
+    "native_sha256": "75e375eb39a1a41ec7b483042b26f43f070281053fafc39e603c550dec2aa5a0",
+    "same_native_binding_results_before_and_after_harness_fix": true
+  }
 }
