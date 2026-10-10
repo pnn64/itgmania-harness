@@ -585,7 +585,10 @@ RString CryptManager::GetSHA1ForString(RString s) {
 #endif
 }
 
-int64_t ArchHooks::GetSystemTimeInMicroseconds() { return 0; }
+static int64_t native_time_us = 0;
+int64_t harness_native_time() { return native_time_us; }
+void harness_native_time(int64_t microseconds) { native_time_us = microseconds; }
+int64_t ArchHooks::GetSystemTimeInMicroseconds() { return harness_native_time(); }
 
 // ---------------------------------------------------------------------------
 // RageTimer minimal implementation
@@ -1986,6 +1989,7 @@ static void init_globals_once() {
     PrefsManager* prefs_raw = reinterpret_cast<PrefsManager*>(&prefs_storage);
 	new (&prefs_raw->m_fGlobalOffsetSeconds) Preference<float>("GlobalOffsetSeconds", 0.0f);
 	new (&prefs_raw->m_bQuirksMode) Preference<bool>("QuirksMode", false);
+	new (&prefs_raw->m_bRateModsAffectTweens) Preference<bool>("RateModsAffectFGChanges", false);
 	new (&prefs_raw->m_bLightsSimplifyBass) Preference<bool>("LightsSimplifyBass", false);
 	new (&prefs_raw->m_MinTNSToHideNotes) Preference<TapNoteScore>("MinTNSToHideNotes", TNS_W3);
 	PREFSMAN = prefs_raw;

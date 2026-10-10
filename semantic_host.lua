@@ -64,6 +64,7 @@ if reference_skin then
 	for player = 0, 1 do
 		local _, valid = _ITG_OPTIONS_UPDATE(player, "NoteSkin", reference_skin.skin)
 		assert(valid, "native player noteskin initialization failed")
+		_ITG_OPTIONS_SEED(player)
 	end
 end
 
@@ -1594,14 +1595,14 @@ end
 
 MESSAGEMAN = { Broadcast = function(self, name, params) broadcast(name, params); return self end }
 
-local option_query_error
-local function update_native_options(options, name, ...)
-	-- Older captures permit custom modifier names. Preserve their events, but
-	-- refuse a later query if its native state could not be reproduced.
-	local ok, message = pcall(_ITG_OPTIONS_UPDATE, options.native_index, name, ...)
-	if not ok then option_query_error = message end
-end
 local player_options_mt = {}
+function manual.option_call(options, name, ...)
+	return _ITG_OPTIONS_AT(options.native_index, options.native_level, name, ...)
+end
+manual.song_methods = { AutosyncSetting = true, AssistClap = true, AssistMetronome = true,
+	StaticBackground = true, RandomBGOnly = true, SaveScore = true, SaveReplay = true, MusicRate = true, Haste = true }
+manual.song_bools = { AssistClap = true, AssistMetronome = true, StaticBackground = true,
+	RandomBGOnly = true, SaveScore = true, SaveReplay = true }
 local function option_returns(...) return { n = select("#", ...), ... } end
 local function indexed_option_noops(options, text)
 	local out = {}
@@ -1614,10 +1615,10 @@ local function indexed_option_noops(options, text)
 			local snapshot = { key = key, unchanged = _ITG_USING_MODIFIER(options.native_index, part), values = {} }
 			-- Query the linked PlayerOptions fields, not the authored invalid level.
 			if prefix == "confusionoffset" then
-				snapshot.values[#snapshot.values + 1] = { prefix, _ITG_OPTIONS_UPDATE(options.native_index, method) }
+				snapshot.values[#snapshot.values + 1] = { prefix, manual.option_call(options, method) }
 			end
 			for index = 1, column_count do
-				snapshot.values[#snapshot.values + 1] = { prefix .. index, _ITG_OPTIONS_UPDATE(options.native_index, method .. index) }
+				snapshot.values[#snapshot.values + 1] = { prefix .. index, manual.option_call(options, method .. index) }
 			end
 			out[#out + 1] = snapshot
 		end
@@ -1627,7 +1628,7 @@ end
 function manual.numeric_options(options)
 	local values = {}
 	for _, method in ipairs(_ITG_PLAYER_OPTION_FLOATS) do
-		local amount, speed = _ITG_OPTIONS_UPDATE(options.native_index, method, nil)
+		local amount, speed = manual.option_call(options, method, nil)
 		if type(amount) == "number" then
 			values[#values + 1] = { method:lower(), amount, speed }
 		end
@@ -1637,27 +1638,28 @@ end
 function manual.assignment_options(options)
 	local values = manual.numeric_options(options)
 	for _, method in ipairs({ "StealthType", "StealthPastReceptors", "Cosecant", "DizzyHolds", "ZBuffer" }) do
-		values[#values + 1] = { method:lower(), _ITG_OPTIONS_UPDATE(options.native_index, method) and 1 or 0 }
+		values[#values + 1] = { method:lower(), manual.option_call(options, method) and 1 or 0 }
 	end
-	local mode = _ITG_OPTIONS_UPDATE(options.native_index, "ModTimerSetting")
+	local mode = manual.option_call(options, "ModTimerSetting")
 	local modes = { ModTimerType_Game = 0, ModTimerType_Beat = 1, ModTimerType_Song = 2, ModTimerType_Default = 3 }
 	assert(modes[mode] ~= nil, "unavailable native modifier timer enum")
 	values[#values + 1] = { "modtimersetting", modes[mode] }
 	return values
 end
 local function rejected_option_parts(options, text)
-	local parts = _ITG_OPTIONS_REJECTED(options.native_index, text)
+	local parts = _ITG_OPTIONS_REJECTED(options.native_index, text, options.native_level)
 	if #parts == 0 then return nil end
 	local values = manual.numeric_options(options)
 	for _, part in ipairs(parts) do part.values = values end
 	return parts
 end
 player_options_mt.__index = function(options, name)
-	if not rawget(options, "allow_unknown") and not _ITG_PLAYER_OPTION_METHODS[name] then return nil end
+	local methods = options.kind == "SongOptions" and manual.song_methods or _ITG_PLAYER_OPTION_METHODS
+	if not methods[name] then return nil end
 	if name == "GetReversePercentForColumn" then return function(self, column)
 		local col = math.floor(tonumber(column) or 0)
 		if col < 0 or col > column_count then return nil end
-		local function amount(mod) return _ITG_OPTIONS_UPDATE(self.native_index, mod, nil) end
+		local function amount(mod) return manual.option_call(self, mod, nil) end
 		-- Native GetReversePercentForColumn needs a full GameState style.
 		-- Apply its exact column composition to the linked option amounts.
 		local value = _ITG_FLOAT(amount("Reverse") + amount("Reverse" .. (col + 1)))
@@ -1670,14 +1672,15 @@ player_options_mt.__index = function(options, name)
 		return value
 	end end
 	return function(self, ...)
-		if self.kind == "PlayerOptions" and (_ITG_PLAYER_OPTION_METHODS[name] and name ~= "FromString") then
+		if name ~= "FromString" then
 			local count = select("#", ...)
-			local bool_option = _ITG_PLAYER_OPTION_BOOLS[name] and name ~= "Overhead"
+			local bool_option = (self.kind == "SongOptions" and manual.song_bools[name]
+				or self.kind == "PlayerOptions" and _ITG_PLAYER_OPTION_BOOLS[name]) and name ~= "Overhead"
 			local bool_write = bool_option and count > 0 and type(select(1, ...)) == "boolean"
-			local previous = bool_write and _ITG_OPTIONS_UPDATE(self.native_index, name) or nil
+			local previous = bool_write and manual.option_call(self, name) or nil
 			local skin_write = name == "NoteSkin" and count > 0
 				and (type(select(1, ...)) == "string" or type(select(1, ...)) == "number")
-			local skin_before = skin_write and _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin") or nil
+			local skin_before = skin_write and manual.option_call(self, "NoteSkin") or nil
 			local event
 			-- A nil enum argument only queries; it may request chaining as well.
 			-- BOOL_INTERFACE only writes when its first argument is a boolean.
@@ -1688,18 +1691,18 @@ player_options_mt.__index = function(options, name)
 			end
 			-- Native getters return amounts and speeds (or inactive alias nils).
 			-- Setters return previous values unless the last boolean requests chaining.
-			local values = option_returns(_ITG_OPTIONS_UPDATE(self.native_index, name, ...))
+			local values = option_returns(manual.option_call(self, name, ...))
 			if bool_write and event then
 				event.detail = { boolean_option = {
 					previous = previous == true,
-					current = _ITG_OPTIONS_UPDATE(self.native_index, name),
+					current = manual.option_call(self, name),
 					chained = count >= 2 and type(select(2, ...)) == "boolean",
 				} }
 			end
 			if skin_write and event then
 				event.detail = { noteskin_option = {
 					previous = skin_before,
-					current = _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin"),
+					current = manual.option_call(self, "NoteSkin"),
 				} }
 			end
 			if bool_option then
@@ -1707,19 +1710,11 @@ player_options_mt.__index = function(options, name)
 			elseif count > 0 and type(select(count, ...)) == "boolean" and select(count, ...) then return self end
 			return unpack(values, 1, values.n)
 		end
-		if name:match("^Get") or select("#", ...) == 0 then
-			local value = self.values[name]
-			if value ~= nil then return value end
-			if self.kind == "PlayerOptions" and _ITG_PLAYER_OPTION_BOOLS[name] then return false end
-			if name == "XMod" or self.kind == "SongOptions" and name == "MusicRate" then return 1 end
-			if name == "CMod" or name == "MMod" then return nil end
-			return 0
-		end
 		local skin_before = self.kind == "PlayerOptions" and name == "FromString"
-			and _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin") or nil
+			and manual.option_call(self, "NoteSkin") or nil
 		local event = emit("modifier", self, self.kind .. "." .. name, safe_args(...),
 			skin_before and { noteskin_option = {} } or nil)
-		update_native_options(self, name, ...)
+		manual.option_call(self, name, ...)
 		if self.kind == "PlayerOptions" and name == "FromString" then
 			local noops = indexed_option_noops(self, (...))
 			if event then event.detail = {
@@ -1727,44 +1722,60 @@ player_options_mt.__index = function(options, name)
 				rejected_parts = rejected_option_parts(self, (...)),
 				noteskin_option = {
 					previous = skin_before,
-					current = _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin"),
-					parts = _ITG_OPTIONS_SKINS(self.native_index, (...)),
+					current = manual.option_call(self, "NoteSkin"),
+					parts = _ITG_OPTIONS_SKINS(self.native_index, (...), self.native_level),
 				},
 			} end
 		end
-		self.values[name] = (...)
 		return self
 	end
 end
 
-local function make_options(path, kind, allow_unknown)
+local function make_options(path, kind)
 	local index = kind == "SongOptions" and -1 or (path:find("PLAYER_2", 1, true) and 1 or 0)
-	return setmetatable({ path = path, id = path, kind = kind, values = {}, native_index = index, allow_unknown = allow_unknown }, player_options_mt)
+	return setmetatable({ path = path, id = path, kind = kind, native_index = index,
+		native_level = _ITG_OPTIONS_LEVEL(path:match("options:(.+)$")) }, player_options_mt)
 end
 
 local player_options = { PLAYER_1 = make_options("player-state:PLAYER_1/options:ModsLevel_Song", "PlayerOptions"), PLAYER_2 = make_options("player-state:PLAYER_2/options:ModsLevel_Song", "PlayerOptions") }
-local song_options = make_options("song-options:ModsLevel_Song", "SongOptions", true)
+local song_options = make_options("song-options:ModsLevel_Song", "SongOptions")
+manual.player_options = { PLAYER_1 = { ModsLevel_Song = player_options.PLAYER_1 },
+	PLAYER_2 = { ModsLevel_Song = player_options.PLAYER_2 } }
+manual.song_options = { ModsLevel_Song = song_options }
+for _, level in ipairs({ "ModsLevel_Preferred", "ModsLevel_Stage", "ModsLevel_Current" }) do
+	for _, player in ipairs({ "PLAYER_1", "PLAYER_2" }) do
+		manual.player_options[player][level] = make_options("player-state:" .. player .. "/options:" .. level, "PlayerOptions")
+	end
+	manual.song_options[level] = make_options("song-options:" .. level, "SongOptions")
+end
 
 local song_position
 local player_state_mt = {}
 player_state_mt.__index = function(state, name)
     if name == "GetSongPosition" then return function() return song_position end end
-	if name == "GetPlayerOptions" then return function(self) return player_options[self.player] end end
-	if name == "GetPlayerOptionsString" then return function(self)
-		return _ITG_OPTIONS_UPDATE(player_options[self.player].native_index, "GetString")
+	if name == "GetPlayerOptions" then return function(self, level)
+		return manual.player_options[self.player][_ITG_OPTIONS_LEVEL(level)]
+	end end
+	if name == "GetCurrentPlayerOptions" then return function(self)
+		return manual.player_options[self.player].ModsLevel_Current
+	end end
+	if name == "GetPlayerOptionsString" then return function(self, level)
+		return manual.option_call(manual.player_options[self.player][_ITG_OPTIONS_LEVEL(level)], "GetString")
+	end end
+	if name == "GetPlayerOptionsArray" then return function(self, level)
+		return manual.option_call(manual.player_options[self.player][_ITG_OPTIONS_LEVEL(level)], "GetMods")
 	end end
 	if name == "SetPlayerOptions" then return function(self, level, value)
-		local options = player_options[self.player]
-		local before = _ITG_OPTIONS_UPDATE(options.native_index, "NoteSkin")
+		level = _ITG_OPTIONS_LEVEL(level)
+		local options = manual.player_options[self.player][level]
+		local before = manual.option_call(options, "NoteSkin")
 		local event = emit("modifier", self, "PlayerState.SetPlayerOptions", safe_args(level, value), { noteskin_option = {} })
-		player_options[self.player].values = {}
-		update_native_options(player_options[self.player], "SetPlayerOptions", value)
+		manual.option_call(options, "SetPlayerOptions", value)
 		if event then event.detail = { numeric_options = manual.assignment_options(options), noteskin_option = {
 			previous = before,
-			current = _ITG_OPTIONS_UPDATE(options.native_index, "NoteSkin"),
-			parts = _ITG_OPTIONS_SKINS(options.native_index, value),
+			current = manual.option_call(options, "NoteSkin"),
+			parts = _ITG_OPTIONS_SKINS(options.native_index, value, options.native_level),
 		} } end
-		return self
 	end end
 	return function(self) return self end
 end
@@ -1891,7 +1902,6 @@ function setenv(name, value) game_env[name] = value end
 GAMESTATE = {
 	Env = function() return game_env end,
 	PlayerIsUsingModifier = function(_, player, modifier)
-		if option_query_error then error("native modifier state unavailable: " .. option_query_error) end
 		return _ITG_USING_MODIFIER(player_key(player) == "PLAYER_2" and 1 or 0, modifier)
 	end,
 	GetSongBeat = function() return song_position:GetSongBeat() end,
@@ -1909,9 +1919,14 @@ GAMESTATE = {
 	GetHumanPlayers = function() return is_double and { PLAYER_1 } or { PLAYER_1, PLAYER_2 } end,
 	IsPlayerEnabled = function(_, player) return not is_double or player_key(player) == "PLAYER_1" end,
 	IsHumanPlayer = function(_, player) return not is_double or player_key(player) == "PLAYER_1" end,
-	GetSongOptionsObject = function() return song_options end,
-	GetSongOptions = function() return _ITG_OPTIONS_UPDATE(-1, "GetString") end,
-    GetSongOptionsString = function() return _ITG_OPTIONS_UPDATE(-1, "GetString") end,
+	GetSongOptionsObject = function(_, level) return manual.song_options[_ITG_OPTIONS_LEVEL(level)] end,
+	GetSongOptions = function(_, level) return manual.option_call(manual.song_options[_ITG_OPTIONS_LEVEL(level)], "GetString") end,
+    GetSongOptionsString = function() return manual.option_call(manual.song_options.ModsLevel_Current, "GetString") end,
+    SetSongOptions = function(self, level, value)
+        manual.option_call(manual.song_options[_ITG_OPTIONS_LEVEL(level)], "SetSongOptions", value)
+        emit("modifier", nil, "GameState.SetSongOptions", safe_args(level, value))
+        return self
+    end,
     GetMasterPlayerNumber = function() return PLAYER_1 end,
     GetCoinMode = function() return "CoinMode_Home" end,
     GetPremium = function() return "Premium_Off" end,
@@ -2026,6 +2041,7 @@ THEME = {
 local timing_window_add = 0
 PREFSMAN = { GetPreference = function(_, name)
 	if tostring(name):lower() == "timingwindowadd" then return timing_window_add end
+	if tostring(name):lower() == "ratemodsaffectfgchanges" then return _ITG_OPTIONS_RATE_TWEENS() end
 	if name == "EventMode" then return true end
     if name == "CoinMode" then return "CoinMode_Home" end
 	if name == "VideoRenderers" then return "opengl" end
@@ -2042,6 +2058,11 @@ PREFSMAN = { GetPreference = function(_, name)
 	return false
 end,
 SetPreference = function(self, name, value)
+	if tostring(name):lower() == "ratemodsaffectfgchanges" then
+		assert(type(value) == "boolean", "RateModsAffectFGChanges requires a boolean")
+		_ITG_OPTIONS_RATE_TWEENS(value)
+		return self
+	end
 	if tostring(name):lower() ~= "timingwindowadd" then
 		error("headless SetPreference does not support " .. tostring(name))
 	end
@@ -2223,13 +2244,13 @@ ArrowEffects = setmetatable({}, { __index = function(_, name)
 	if name == "GetYPos" then return function(state, column, offset, reverse_offset)
 		-- ArrowGetReverseShiftAndScale in the local ArrowEffects.cpp. Query
 		-- the linked PlayerOptions and retain native float arithmetic.
-		local options = player_options[state.player]
+		local options = manual.player_options[state.player].ModsLevel_Current
 		local reverse = options:GetReversePercentForColumn((tonumber(column) or 1) - 1)
-		local zoom = _ITG_FLOAT(1 - _ITG_FLOAT(_ITG_OPTIONS_UPDATE(options.native_index, "Mini", nil) * 0.5))
+		local zoom = _ITG_FLOAT(1 - _ITG_FLOAT(manual.option_call(options, "Mini", nil) * 0.5))
 		if math.abs(zoom) < 0.01 then zoom = _ITG_FLOAT(0.01) end
 		local half = _ITG_FLOAT(_ITG_FLOAT((tonumber(reverse_offset) or 270) / zoom) / 2)
 		local shift = _ITG_FLOAT(_ITG_FLOAT(reverse * _ITG_FLOAT(half + half)) - half)
-		shift = _ITG_FLOAT(_ITG_FLOAT(_ITG_OPTIONS_UPDATE(options.native_index, "Centered", nil) * -shift) + shift)
+		shift = _ITG_FLOAT(_ITG_FLOAT(manual.option_call(options, "Centered", nil) * -shift) + shift)
 		local scale = _ITG_FLOAT(_ITG_FLOAT(reverse * -2) + 1)
 		return _ITG_FLOAT(_ITG_FLOAT((tonumber(offset) or 0) * scale) + shift)
 	end end
@@ -3167,6 +3188,10 @@ while true do
 	capture_operations = sample_frame or frame <= 1 or current_freeze or current_delay
 		or crosses_action(previous_beat, current_beat, frame == 0)
 	local delta = _ITG_FLOAT(_ITG_FLOAT(current_seconds) - _ITG_FLOAT(previous_seconds))
+	_ITG_OPTIONS_ADVANCE(current_seconds, delta)
+	if _ITG_OPTIONS_RATE_TWEENS() then
+		delta = _ITG_FLOAT(delta * manual.song_options.ModsLevel_Current:MusicRate())
+	end
 	advance_actor(top_screen, delta)
 	run_scheduled_beats()
 	manual.run(loaded_roots)

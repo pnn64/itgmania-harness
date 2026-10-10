@@ -1,0 +1,96 @@
+{
+  "problem": "The host selected Song for all option levels and modifier queries. Its constant ArchHooks clock also prevented compiled ModsGroup from advancing Current.",
+  "change": "Use distinct native ModsGroup levels, compiled assignment and approach behavior, the actual GameState SongOptions group, and an injected integer microsecond clock. Remove fabricated option getter fallbacks.",
+  "source_parent_commit": "0caa61639b50365afb48eb230000b28d14abd435",
+  "harness_version": "0.1.58",
+  "native_reference_sha256": {
+    "PlayerOptions.cpp": "8b650534e902301bc26b0ffa27d896f1677f1cd590d205159120dc3a01815595",
+    "PlayerState.cpp": "d54ad94985f1917627af53a55d96986777c9c0b3949768d7822074b09b796280",
+    "SongOptions.cpp": "7d8205c988751ef656f5c195ea1e33b38de42ff235659e6e2651f209d7c11386",
+    "ModsGroup.h": "69eed3b53a0781add857158dae13e47804d287a57047a41cadf3c50dedb321a0",
+    "ModsGroup.cpp": "cf9a0c326513ecd9f6b4dc308437e9e7cf16c443650dabd71f7e452e3baa5248",
+    "GameState.cpp": "72263c9ec676fb1b612ac938ce5b629be5aa6088e113e8eb175f2375f665ac77",
+    "RageTimer.cpp": "2542029c6c12fbd560a3b65808a5bdccb14756350331bbe276ae79e2326cf553",
+    "PrefsManager.cpp": "a522c490a5db7ebc994fdcf918c5eed729c7821322c55f7528e85ff25d25285b",
+    "EnumHelper.cpp": "3f4b9f2049a7b5f0d5c1c46d41186dda482bf0afc2749b5ce813640aebd4635c"
+  },
+  "source_contract": [
+    "PlayerState.cpp:240-267 selects requested ModsLevel or Current and assigns freshly parsed options",
+    "ModsGroup.h:50-54 uses RageTimer delta; 79-85 propagates assignments except Song-to-Current",
+    "GameState.cpp:1148-1152 advances SongOptions before players; 2605-2613 queries Current",
+    "PlayerOptions.cpp:177-279 approaches float targets and copies discrete fields",
+    "RageTimer.cpp:34-78 reads ArchHooks integer microseconds",
+    "PrefsManager.cpp:191 defaults RateModsAffectFGChanges to false",
+    "SongOptions.cpp:200-201 parses haste as an on/off token"
+  ],
+  "standalone_compiled_native_control": "fixtures/actors/current-options.json",
+  "standalone_control_sha256": "2ea95d0aed23a9c4dcf21697050bb4674f6206fb42d47b40979dbb678e7f27d4",
+  "standalone_control_uses_semantic_host": false,
+  "standalone_control_uses_deadsync": false,
+  "controls": {
+    "path": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass159-current-options-v7.exe",
+    "sha256": "63fe395c68dba09ad0f81a75d2cf8bec911e10ca2eb8acb1b9aeece202c44f77",
+    "results": [
+      {
+        "test": "actor_conformance::tests::current_options_use_native_levels_and_clock",
+        "exit_code": 0,
+        "seconds": 0.3458724021911621,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 0.01s"
+        ],
+        "log_sha256": "c4850af2fec6df4bb398fddf26d1979b3d49d61adf77b3360adf7abb5527d596"
+      },
+      {
+        "test": "song_lua_headless::tests::current_options_remain_distinct_from_song_targets",
+        "exit_code": 0,
+        "seconds": 1.0203306674957275,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 0.98s"
+        ],
+        "log_sha256": "91b66f736a438b9f0f374d90283ef4811a46ca2950268fceacc3d95f94c0d6be"
+      },
+      {
+        "test": "song_lua_headless::tests::modifier_queries_use_native_parsers_and_option_values",
+        "exit_code": 0,
+        "seconds": 1.1105644702911377,
+        "result": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 1.07s"
+        ],
+        "log_sha256": "73e5bb9a1d6c1505368f1baa0d75972a89ccfdd57acc79d9066b8296644f62c8"
+      }
+    ]
+  },
+  "full_units": {
+    "binary": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass159-current-options-v7.exe",
+    "binary_sha256": "63fe395c68dba09ad0f81a75d2cf8bec911e10ca2eb8acb1b9aeece202c44f77",
+    "exit_code": 0,
+    "seconds": 190.0100523000583,
+    "log": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass159-current-options-all-units-v2.log",
+    "log_sha256": "321c3f3c24ebe967ef8d9ea1b32c8970c1203deb94a5239db07b73ad7edd447e",
+    "result_lines": [
+      "test result: ok. 177 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 189.69s"
+    ]
+  },
+  "healthy_normal_lua_capture": {
+    "trace_sha256": "24169ef95801c880c85d216c4b2ac77fcd4f2cedb7ca0cf5292dbb12d0a7c553",
+    "control_sha256": "fd3fec4d1d52dc5a81d96be2f806d38cfc7b9801160f092d4e579f533129bd74",
+    "runtime_errors": 0,
+    "dropped_events": 0,
+    "update_frames": 241
+  },
+  "cli_binary_sha256": "041e2514c2971d6393bc2b3ae1655dec2580f6ae0f05bc276ce42004bfe43d9c",
+  "tested_source_sha256": {
+    "semantic_host.lua": "c8747a22a872d538de9f9e14ff0677fa39fa939eb3e7b46f6389c9747aa95dce",
+    "native/options_oracle.cpp": "7a978d5169435358558978e0924b85fee1af039f7b54a9a30a3ac6c01c1896ec",
+    "native/runtime_stubs.cpp": "a82a387db7e43f107f9f74831331fc045506df574d086bfa18bd9d9e40dffb0b",
+    "native/actor_oracle.cpp": "0a93cf508bcf33bea9a42cca54d54ebbb4d5cd7a61b8c51fc324e86029deee74",
+    "src/song_lua_headless.rs": "a03f2d9313cfa2849750253b27c378f9ae0e6cf349746f90fd2c42c826ceb89a",
+    "src/actor_conformance.rs": "284237350f1def423ecd7dde02572e3dc40f903ba78a3129ca9348252fe06fe8",
+    "Cargo.toml": "4bb4006dede78caf12a57deb99ce80df449d5872a48edc9c8a211fe6d9acb2af",
+    "Cargo.lock": "e0397156d11818f7051ab8ff2ee58564930c2211dbcdc9fb699547e44ad13b85"
+  },
+  "reference_sources_unchanged": true,
+  "independence_limit": "The standalone control calls compiled native option methods and ModsGroup without semantic_host or DeadSync. Song captures still load Lua through semantic_host. Whole native C++ song loading, audio playback clock parity, broad ArrowEffects and framebuffer parity remain separate checks.",
+  "deadsync_current_options_parity_complete": false,
+  "full_corpus_complete": false
+}

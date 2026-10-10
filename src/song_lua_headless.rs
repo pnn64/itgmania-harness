@@ -3213,6 +3213,27 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn current_options_remain_distinct_from_song_targets() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless").canonicalize().expect("headless fixtures");
+        let entry = song_dir.join("current-options.lua");
+        let bpms = [BpmSegment { beat: 0.0, bpm: 60.0 }];
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Current and Song options",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single",
+            description: "", max_beat: 1.0, bpm: 60.0, bpm_segments: &bpms,
+            beat_step: 0.25, max_events: 10000, random_seed: 1,
+        };
+        let trace = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).expect("native Current options");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        assert_eq!(trace["update_frames"].as_array().expect("frames").len(), 61);
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn noteskin_writes_use_native_strings_on_every_frame() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

@@ -1593,6 +1593,8 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
     const int stack = lua_gettop(state);
     luaL_openlibs(state);
     harness_register_lua_globals(state);
+    const bool option_control = request.get("option_control", false).asBool();
+    if (option_control) install_option_queries(state);
     ActorFrameTexture frozen, collision, unused;
     Actor target;
     ActorProxy proxy;
@@ -1615,6 +1617,7 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
       lua_setglobal(state, name);
     }
     lua_settop(state, stack);
+    if (option_control) clear_option_queries(state);
     LUA->Release(state);
     if (failed) throw std::runtime_error(error);
     if (!balanced) throw std::runtime_error("actor assertions leaked Lua stack entries");
