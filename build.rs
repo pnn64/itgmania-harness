@@ -650,7 +650,14 @@ fn compile_bundled_lua(root: &Path, target_os: &str) {
     let mut build = cc::Build::new();
     build.warnings(false).include(&lua);
     if target_os == "windows" {
-        build.define("_CRT_SECURE_NO_WARNINGS", None);
+        // ITGmania's CMakeProject-lua.cmake selects CXX on MSVC. C longjmp
+        // across native C++ bindings can corrupt their temporary objects.
+        build
+            .cpp(true)
+            .std("c++17")
+            .flag("/TP")
+            .flag("/EHsc")
+            .define("_CRT_SECURE_NO_WARNINGS", None);
     }
     for source in LUA_SOURCES {
         println!("cargo:rerun-if-changed={}", lua.join(source).display());
@@ -757,15 +764,17 @@ fn write_compat_headers(out: &Path, target_os: &str) {
 "#
     };
     fs::write(out.join("config.hpp"), config).unwrap();
-    fs::write(
-        out.join("lua_compat.hpp"),
+    let lua_header = if target_os == "windows" {
+        // MSVC Lua and its callers share native C++ linkage and exceptions.
+        "#pragma once\n#include \"lua.h\"\n#include \"lauxlib.h\"\n#include \"lualib.h\"\n"
+    } else {
         r#"#pragma once
 extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
 }
-"#,
-    )
-    .unwrap();
+"#
+    };
+    fs::write(out.join("lua_compat.hpp"), lua_header).unwrap();
 }

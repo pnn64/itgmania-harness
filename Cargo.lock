@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "itgmania-harness-rs"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "cc",
  "md5",

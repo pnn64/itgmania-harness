@@ -1,0 +1,4 @@
+{
+  "option_control": true,
+  "lua_assertions": "for _ = 1, 64 do\n    local ok, message = pcall(_ITG_OPTIONS_LEVEL, nil)\n    assert(not ok and message:find('Expected ModsLevel; got nil', 1, true))\n    assert(not pcall(_ITG_OPTIONS_LEVEL, 'not a level'))\n    assert(_ITG_OPTIONS_LEVEL('ModsLevel_Current') == 'ModsLevel_Current')\n    assert(_ITG_OPTIONS_AT(0, 'ModsLevel_Current', 'XMod') == 1)\nend\n"
+}

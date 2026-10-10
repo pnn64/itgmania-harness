@@ -11,6 +11,15 @@ the selected ITGmania translation units. It is not the source of parsed or
 calculated baseline fields. Those fields must continue to come from the
 ITGmania sources selected in `build.rs` and called by `oracle_bridge.cpp`.
 
+On Windows the bundled Lua sources compile as C++, matching
+`extern/CMakeProject-lua.cmake:65-68`. Lua's native C++ exception path must
+unwind native binding temporaries before `pcall` returns an error. A C build
+used longjmp instead and corrupted the release heap on a nil ModsLevel
+argument. `enum-errors.json` exercises repeated invalid enum arguments and
+valid queries afterward; it must pass in the release test profile as well.
+Lua's Windows linkage is C++, matching its native build; the Rust bridge
+entry points keep their C ABI. The non-Windows Lua build remains C.
+
 Font and song-Lua texture probing are the explicit exception for texture metadata. The harness has
 no display backend, so its headless `RageTexture` reads PNG IHDR or JPEG frame
 header dimensions and

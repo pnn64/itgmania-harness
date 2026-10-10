@@ -170,6 +170,16 @@ mod tests {
     }
 
     #[test]
+    fn native_enum_errors_preserve_heap() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/actors/enum-errors.json");
+        let native = evaluate(&fixture).expect("native enum errors");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+        assert_eq!(native["diagnostics"], serde_json::json!([]));
+        assert_eq!(native, evaluate(&fixture).expect("repeat after native errors"));
+    }
+
+    #[test]
     fn indexed_headers_match_native_bitmap_and_regular_model() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/actors");
         let headers = evaluate(&root.join("indexed-texture-headers.json")).expect("native headers");

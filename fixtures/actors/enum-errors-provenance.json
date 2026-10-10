@@ -1,0 +1,132 @@
+{
+  "contract": "Windows Lua uses the same C++ compilation, linkage and exception unwinding as ITGmania",
+  "reference_sources": [
+    {
+      "path": "extern\\CMakeProject-lua.cmake",
+      "sha256": "d023f5b33a95b00aebae604a206c02fde7f082c70ec12e01cfed9d09d4a0704b"
+    },
+    {
+      "path": "extern\\lua-5.1\\src\\luaconf.h",
+      "sha256": "6ff033e78de02d724027cb697ed22a28fb1cb4aa4758c90fcb84a787074e44db"
+    },
+    {
+      "path": "src\\EnumHelper.cpp",
+      "sha256": "3f4b9f2049a7b5f0d5c1c46d41186dda482bf0afc2749b5ce813640aebd4635c"
+    }
+  ],
+  "source_lines": {
+    "extern/CMakeProject-lua.cmake": [
+      65,
+      68
+    ],
+    "extern/lua-5.1/src/luaconf.h": [
+      599,
+      625
+    ],
+    "src/EnumHelper.cpp": [
+      15,
+      21
+    ]
+  },
+  "before": {
+    "source_commit": "70612e17a1cad6855a3bcca5fff9ef3a6c1d6fe5",
+    "binary_sha256": "95308bf4d2ccd4f0f673954b3a109e8fa6c4972f3b55671ee18d4d38876afd52",
+    "original_fixture_sha256": "2ea95d0aed23a9c4dcf21697050bb4674f6206fb42d47b40979dbb678e7f27d4",
+    "prefixes": [
+      {
+        "lines": 6,
+        "last_line": "end",
+        "exit_code": 0,
+        "request_sha256": "d9468aa9715d28b911632236f12d78b480159b31b925adb3574d119e9fd7799d",
+        "result_written": true
+      },
+      {
+        "lines": 7,
+        "last_line": "assert(not pcall(_ITG_OPTIONS_LEVEL, 'not a level'))",
+        "exit_code": 0,
+        "request_sha256": "ad4b0a577e3612d8c1d79f041f164eb9053a36b71991222dacddbece418437d6",
+        "result_written": true
+      },
+      {
+        "lines": 8,
+        "last_line": "assert(not pcall(_ITG_OPTIONS_LEVEL, nil))",
+        "exit_code": 3221226356,
+        "request_sha256": "75624f86de2acdd20b3c133b5f4e029099dfb8d0664e30d7723d01b9172a3fc3",
+        "result_written": false
+      }
+    ]
+  },
+  "unchanged_current_fixture_before": {
+    "request_sha256": "2ea95d0aed23a9c4dcf21697050bb4674f6206fb42d47b40979dbb678e7f27d4",
+    "results": [
+      {
+        "label": "before",
+        "binary_sha256": "041e2514c2971d6393bc2b3ae1655dec2580f6ae0f05bc276ce42004bfe43d9c",
+        "source_commit": "39e8d831d16360fdf251af08da524cf59d1f9166",
+        "exit_code": 3221226356,
+        "elapsed_seconds": 23.401504199951887,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "result_written": false,
+        "current_worktree_used_for_frozen_baseline": false
+      },
+      {
+        "label": "after",
+        "binary_sha256": "95308bf4d2ccd4f0f673954b3a109e8fa6c4972f3b55671ee18d4d38876afd52",
+        "source_commit": "70612e17a1cad6855a3bcca5fff9ef3a6c1d6fe5",
+        "exit_code": 3221226356,
+        "elapsed_seconds": 22.593279300257564,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "result_written": false,
+        "current_worktree_used_for_frozen_baseline": false
+      }
+    ]
+  },
+  "after_cli": {
+    "binary_sha256": "9b7ca8237071cb6989345ea9e21c1b95d6adcca036b2b41473a6d81b484dbe8e",
+    "source_commit": "70612e17a1cad6855a3bcca5fff9ef3a6c1d6fe5",
+    "source_pending_commit": true,
+    "checks": [
+      {
+        "fixture": "fixtures\\actors\\current-options.json",
+        "fixture_sha256": "2ea95d0aed23a9c4dcf21697050bb4674f6206fb42d47b40979dbb678e7f27d4",
+        "exit_code": 0,
+        "script_errors": 0,
+        "diagnostics": 0,
+        "result_sha256": "75e375eb39a1a41ec7b483042b26f43f070281053fafc39e603c550dec2aa5a0",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "elapsed_seconds": 0.05431869998574257
+      },
+      {
+        "fixture": "fixtures\\actors\\enum-errors.json",
+        "fixture_sha256": "f2f1d6619c4d93e87229a7dc2f7acfba7dadb1a38b598154d49cb2b70a5f9792",
+        "exit_code": 0,
+        "script_errors": 0,
+        "diagnostics": 0,
+        "result_sha256": "75e375eb39a1a41ec7b483042b26f43f070281053fafc39e603c550dec2aa5a0",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "elapsed_seconds": 0.23235740000382066
+      }
+    ]
+  },
+  "after_unit_tests": [
+    {
+      "binary_sha256": "d18291c725f2855a905d3bba24d0150004679e5585a48746e1555d8974493028",
+      "exit_code": 0,
+      "log_sha256": "100bc537e8ac12aad2be72b1cc2e8a788b4388c156dbe36b907d9103c00d704d",
+      "result_lines": [
+        "test result: ok. 179 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 95.05s"
+      ],
+      "profile": "release"
+    },
+    {
+      "binary_sha256": "2eb4535cc9070e2c158c8f039fdf14032cf614e26cb80ac7eea4cdbb418297dd",
+      "exit_code": 0,
+      "log_sha256": "96c743d991bfd25676dcfa1251c8dba5442b5a72e47c98abff48f1aa3ba7373e",
+      "result_lines": [
+        "test result: ok. 179 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 244.27s"
+      ],
+      "profile": "debug"
+    }
+  ],
+  "full_song_parity_complete": false
+}
