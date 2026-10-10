@@ -2741,6 +2741,64 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn rage_file_uses_reference_lua_binding() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let dir = root.join("target/native-rage-file-control");
+        std::fs::create_dir_all(&dir).expect("isolated file control directory");
+        let input = dir.join("input.bin");
+        let output = dir.join("output.txt");
+        std::fs::write(&input, b"alpha\r\n\nbeta\rZ\0tail").expect("file control bytes");
+        let lua = format!(r#"
+local file = RageFileUtil.CreateRageFile()
+assert(not file:Open({missing}, 1))
+assert(#file:GetError() > 0)
+assert(not pcall(function() file:GetLine() end))
+assert(file:Flush() == file and file:GetError() == "Not open")
+assert(not file:Open({input}, 0))
+assert(file:GetError() == 'Neither reading nor writing specified')
+assert(not file:Open({input}, 3))
+assert(file:GetError() == 'Reading and writing are mutually exclusive')
+assert(file:Open({input}, 1))
+assert(file:GetLine() == 'alpha' and file:Tell() == 7 and not file:AtEOF())
+assert(file:GetLine() == '' and file:Tell() == 8 and not file:AtEOF())
+assert(file:GetLine() == 'beta\rZ' and file:Tell() == 19 and not file:AtEOF())
+assert(file:GetLine() == '' and file:AtEOF())
+assert(file:Seek(file:Tell()) == 19 and file:AtEOF())
+assert(file:Seek(0) == 0 and not file:AtEOF())
+assert(file:ReadBytes(7) == 'alpha\r\n' and file:Tell() == 7)
+assert(file:ReadBytes(0) == '' and not file:AtEOF())
+assert(file:Read() == '\nbeta\rZ' and file:AtEOF())
+assert(not pcall(function() file:Write('x') end))
+assert(file:Flush() == file)
+-- The reference returns one value without pushing in these three methods.
+-- Lua 5.1 exposes the calling function when there are no explicit arguments.
+assert(file:ClearError() == file.ClearError)
+assert(file:Close() == file.Close)
+assert(file:Open({output}, 2))
+assert(file:Write('abc') == 3 and file:PutLine('def') == 2)
+assert(file:Flush() == file)
+assert(not pcall(function() file:Read() end))
+file:Close()
+assert(file:Open({output}, 1) and file:Read() == 'abcdef\r\n')
+file:Close()
+assert(file:destroy() == file.destroy)
+"#,
+            input = serde_json::to_string(&input.to_string_lossy()).expect("input path"),
+            missing = serde_json::to_string(&dir.join("missing.txt").to_string_lossy()).expect("missing path"),
+            output = serde_json::to_string(&output.to_string_lossy()).expect("output path"));
+        let request = dir.join("contract.json");
+        std::fs::write(&request, serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1, "name": "native RageFile Lua binding", "lua_assertions": lua
+        })).expect("native contract JSON")).expect("write native file request");
+        let native = crate::actor_conformance::evaluate(&request).expect("reference RageFile control");
+        std::fs::write(dir.join("result.json"), serde_json::to_vec_pretty(&native).expect("native result JSON")).expect("retain independent control result");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+        assert_eq!(native["diagnostics"], serde_json::json!([]));
+        assert_eq!(std::fs::read(&output).expect("native output"), b"abcdef\r\n");
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn combo_children_keep_native_classes() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/combo-child.json"))

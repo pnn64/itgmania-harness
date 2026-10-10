@@ -287,3 +287,16 @@ Harness 0.1.45 allows surface dimensions up to 4096 so native Model
 2048-size caps can be exercised. A combined input/output budget of
 262144 pixels replaces independent small dimension limits. Oversized
 requests fail before resizing; native surface algorithms are unchanged.
+
+Song file calls now invoke the unchanged `LunaRageFile` class and registration
+from the compiled `src/RageFile.cpp`. This replaces the translated Lua methods
+and deletes the copied outer RageFile implementation, whose `Flush`, return
+values and closed-file checks diverged.
+The independent actor oracle exercises this actual registered binding without
+`semantic_host.lua`, including binary reads, CRLF lines, cursor/EOF, invalid
+modes and writes in a private control directory. `RageFileBasic.cpp` still
+owns the read buffer and EOF behavior; the OS file adapter is a headless
+`std::fstream` implementation, not the native mounted/direct driver. Ordinary
+song captures remain read-only; explicit isolated write-root captures permit
+writes within that song copy. This establishes the Lua and byte-read contract,
+not mounted-path protection or safe-write/streamed driver equivalence.

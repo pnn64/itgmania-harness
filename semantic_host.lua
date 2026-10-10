@@ -2301,7 +2301,9 @@ ArrowEffects = setmetatable({}, { __index = function(_, name)
 end })
 RageFileUtil = { CreateRageFile = function()
     local file = { handle = _ITG_FILE_CREATE() }
-    return setmetatable(file, { __index = function(_, method) return function(self, ...)
+    for method, native_method in pairs(RageFile) do
+      if type(native_method) == "function" then
+        file[method] = function(self, ...)
         local args = {...}
         local value = _ITG_FILE_CALL(self.handle, method, ...)
         if method == "Open" then
@@ -2315,8 +2317,13 @@ RageFileUtil = { CreateRageFile = function()
         elseif method == "Write" or method == "PutLine" then
             file_observations.writes[#file_observations.writes + 1] = { path=self.path, operation=method, text=args[1], result=value }
         end
+        if method == "Flush" then return self end
+        if value == native_method then return file[method] end
         return value
-    end end })
+        end
+      end
+    end
+    return file
 end }
 
 function GetTimeSinceStart() return current_seconds end

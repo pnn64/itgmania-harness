@@ -69,6 +69,7 @@ const ITG_SOURCES: &[&str] = &[
     "src/RageTextureRenderTarget.cpp",
     "src/RageTextureID.cpp",
     "src/RageFileBasic.cpp",
+    "src/RageFile.cpp",
     "src/RageSoundReader.cpp",
     "src/RageSoundReader_WAV.cpp",
     "src/RageSoundReader_Vorbisfile.cpp",
@@ -516,18 +517,7 @@ fn write_song_stats(root: &Path, out: &Path) {
         + start;
     fs::write(out.join("song_stats.inc"), &source[start..end])
         .expect("write native song stats method");
-    let path = root.join("src/RageFile.cpp");
-    println!("cargo:rerun-if-changed={}", path.display());
-    let source = fs::read_to_string(path).expect("read native file helpers");
-    let start = source
-        .find("void FileReading::ReadBytes(")
-        .expect("native binary file readers");
-    let end = source[start..]
-        .find("// lua start")
-        .expect("end of native binary file readers")
-        + start;
-    fs::write(out.join("file_reading.inc"), &source[start..end])
-        .expect("write native file readers");
+
 }
 
 fn write_player_option_methods(root: &Path, out: &Path) {

@@ -542,9 +542,8 @@ void install_song_io(lua_State* state, const std::string& song_dir) {
   lua_pushcclosure(state, [](lua_State* L) -> int {
     auto** handle = static_cast<RageFile**>(luaL_checkudata(L, 1, "itgmania.song-file"));
     const std::string method = luaL_checkstring(L, 2);
-    if (method == "destroy") { delete *handle; *handle = nullptr; return 0; }
     if (!*handle) return luaL_error(L, "RageFile has been destroyed");
-    RageFile& file = **handle;
+    RageFile* file = *handle;
     if (method == "Open") {
       const std::string path = luaL_checkstring(L, 3);
       const int mode = static_cast<int>(luaL_checkinteger(L, 4));
@@ -555,28 +554,19 @@ void install_song_io(lua_State* state, const std::string& song_dir) {
           lua_pushboolean(L, false); return 1;
         }
       }
-      lua_pushboolean(L, file.Open(path, mode)); return 1;
     }
-    if (method == "Close") { file.Close(); return 0; }
-    if (method == "GetError") { lua_pushstring(L, file.GetError().c_str()); return 1; }
-    if (method == "ClearError") { file.ClearError(); return 0; }
-    if (!file.IsOpen()) return luaL_error(L, "RageFile is not open");
-    if (method == "PutLine" || method == "Write" || method == "Flush") {
-      if (!(file.GetMode() & RageFile::WRITE)) return luaL_error(L, "RageFile is not open for writing");
-      if (method == "Flush") { file.Flush(); return 0; }
-      const std::string text = luaL_checkstring(L, 3);
-      lua_pushinteger(L, method == "PutLine" ? file.PutLine(text) : file.Write(text.data(), text.size())); return 1;
-    }
-    if (!(file.GetMode() & RageFile::READ)) return luaL_error(L, "RageFile is not open for reading");
-    if (method == "AtEOF") { lua_pushboolean(L, file.AtEOF()); return 1; }
-    if (method == "Seek") { lua_pushinteger(L, file.Seek(static_cast<int>(luaL_checkinteger(L, 3)))); return 1; }
-    if (method == "Tell") { lua_pushinteger(L, file.Tell()); return 1; }
-    std::string text;
-    if (method == "GetLine") file.GetLine(text);
-    else if (method == "Read") file.Read(text);
-    else if (method == "ReadBytes") file.Read(text, static_cast<int>(luaL_checkinteger(L, 3)));
-    else return luaL_error(L, "unavailable RageFile method %s", method.c_str());
-    lua_pushstring(L, text.c_str()); return 1;
+    // Call the registered reference thunk with its real native userdata.
+    // In particular, preserve the reference's no-argument return stack.
+    const int arguments = lua_gettop(L) - 2;
+    lua_getglobal(L, "RageFile");
+    lua_getfield(L, -1, method.c_str());
+    lua_remove(L, -2);
+    if (!lua_isfunction(L, -1)) return luaL_error(L, "unavailable RageFile method %s", method.c_str());
+    file->PushSelf(L);
+    for (int i = 0; i < arguments; ++i) lua_pushvalue(L, 3 + i);
+    if (method == "destroy") *handle = nullptr;
+    lua_call(L, arguments + 1, LUA_MULTRET);
+    return lua_gettop(L) - arguments - 2;
   }, 1);
   lua_setglobal(state, "_ITG_FILE_CALL");
   lua_pushcfunction(state, [](lua_State* L) -> int {

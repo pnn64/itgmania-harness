@@ -1,0 +1,89 @@
+{
+  "problem": "Bad Trails cannot read its saved data through DeadSync RageFile. The harness translated Flush, closed-file checks and method results incorrectly.",
+  "change": "Compile unchanged RageFile.cpp, dispatch song file calls through its registered Lua methods, and delete the copied outer RageFile and translated method implementations.",
+  "source_parent_commit": "7d01b8d27dddc821b508231c663978bcdd274626",
+  "harness_version": "0.1.64",
+  "reference_sources": {
+    "RageFile.cpp": {
+      "workspace_sha256": "41aae2a713b2765938eb0e70a3a9bb9b299f38b28df2e3d713f4c6e8aabf5b44",
+      "native_source_sha256": "41aae2a713b2765938eb0e70a3a9bb9b299f38b28df2e3d713f4c6e8aabf5b44",
+      "lines": [
+        [
+          51,
+          91
+        ],
+        [
+          138,
+          158
+        ],
+        [
+          199,
+          206
+        ],
+        [
+          323,
+          470
+        ]
+      ]
+    },
+    "RageFileBasic.cpp": {
+      "workspace_sha256": "86b1a70ac0dcf67b41d441d6f47480d4ae1e6b0bdc26d93ca28d0421b722e8a8",
+      "native_source_sha256": "86b1a70ac0dcf67b41d441d6f47480d4ae1e6b0bdc26d93ca28d0421b722e8a8",
+      "lines": [
+        [
+          65,
+          88
+        ],
+        [
+          100,
+          189
+        ],
+        [
+          324,
+          421
+        ]
+      ]
+    },
+    "LuaBinding.h": {
+      "workspace_sha256": "b7bc6584d259d016a1b762be51759ab5915045d02c2856fc00cf09023e8deb2d",
+      "native_source_sha256": "b7bc6584d259d016a1b762be51759ab5915045d02c2856fc00cf09023e8deb2d",
+      "lines": [
+        [
+          102,
+          109
+        ]
+      ]
+    }
+  },
+  "independent_native_control": {
+    "request_sha256": "46f72904a6d3dab339624b3152a749905fc883e997353d7e345dbaf2db19ca34",
+    "result_sha256": "75e375eb39a1a41ec7b483042b26f43f070281053fafc39e603c550dec2aa5a0",
+    "result": {
+      "allocations": [],
+      "diagnostics": [],
+      "provenance": {
+        "execution": "embedded_native_sources",
+        "git_dirty": "false",
+        "git_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+        "source_root": "C:\\GitHub\\itgmania-harness\\vendor/itgmania"
+      },
+      "script_errors": []
+    },
+    "input_bytes_sha256": "48c7c54998864a8f88151c9c4727bb1600a7c55d2768657f8b6194acf970dbf7",
+    "output_bytes_sha256": "f908c6d716117609c77e22b0d65a455b46357b7f58cb06321b5aef2be89ddaeb",
+    "assertions": "Missing and invalid opens; errors and closed Flush; CRLF, empty and NUL-containing lines; cursor and delayed EOF; exact/zero/all reads; wrong-mode reads/writes; self Flush and native no-argument returns; write and reopen byte contents."
+  },
+  "units": {
+    "receipt_sha256": "01fde2dfda049a3563d166bfc31ed62f402ba6aaee01847438754784372bdf36",
+    "binary_sha256": "c47b09b2c3183ac114249a1c2328493f76220eb5a1389134044d9d8dca61636b",
+    "log_sha256": "e3db9701fefdeb69d7edf38a0b0a8b90517c6b96e90768b1256fb668ddca1c30",
+    "result_lines": [
+      "test result: ok. 183 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 115.27s"
+    ]
+  },
+  "limits": [
+    "OS access still uses the headless std::fstream driver; mounted paths, path protection, safe writes and STREAMED visibility are not established by this control.",
+    "Ordinary captures remain read-only; explicit isolated song copies are writable.",
+    "Full-song coverage and gameplay framebuffer parity remain incomplete."
+  ]
+}

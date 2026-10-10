@@ -845,7 +845,6 @@ void GetDirListing(const RString& path, std::vector<RString>& out, bool onlyDirs
 	else out.clear();
 }
 
-#include "file_reading.inc"
 
 RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(RString, RString& error, bool*) { error = ""; return nullptr; }
 
@@ -948,77 +947,7 @@ class RageFileStd final : public RageFileObj {
     std::unique_ptr<std::fstream> m_stream;
 };
 
-RageFile::RageFile() : m_File(nullptr), m_Mode(0) {}
-RageFile::RageFile(const RageFile& cpy) : RageFileBasic(cpy) {
-	m_File = nullptr;
-	m_Path = cpy.m_Path;
-	m_Mode = cpy.m_Mode;
-	if (cpy.m_File) {
-		m_File = cpy.m_File->Copy();
-	}
-}
-RageFile* RageFile::Copy() const { return new RageFile(*this); }
-RString RageFile::GetPath() const { return m_Path; }
-bool RageFile::Open(const RString& path, int mode) {
-	Close();
-	if ((mode & READ) && (mode & WRITE)) {
-		SetError("Reading and writing are mutually exclusive");
-		return false;
-	}
-	if (!(mode & READ) && !(mode & WRITE)) {
-		SetError("Neither reading nor writing specified");
-		return false;
-	}
-	m_Mode = mode;
-	auto* f = new RageFileStd;
-	if (!f->Open(path, mode)) {
-		SetError(f->GetError());
-		delete f;
-		return false;
-	}
-	m_File = f;
-	m_Path = path;
-	return true;
-}
-void RageFile::Close() {
-	if (m_File) {
-		if (m_Mode & WRITE) {
-			m_File->Flush();
-		}
-		delete m_File;
-		m_File = nullptr;
-	}
-}
-int RageFile::GetLine(RString& out) { return m_File ? m_File->GetLine(out) : -1; }
-int RageFile::PutLine(const RString& s) { return m_File ? m_File->PutLine(s) : -1; }
-void RageFile::EnableCRC32(bool on) { if (m_File) m_File->EnableCRC32(on); }
-bool RageFile::GetCRC32(uint32_t* out) { return m_File && m_File->GetCRC32(out); }
-int RageFile::Read(void* buffer, size_t bytes) { return m_File ? m_File->Read(buffer, bytes) : -1; }
-int RageFile::Read(RString& buffer, int bytes) { return m_File ? m_File->Read(buffer, bytes) : -1; }
-int RageFile::Read(void* buffer, size_t bytes, int nmemb) {
-	return m_File ? m_File->Read(buffer, bytes, nmemb) : -1;
-}
-int RageFile::Write(const void* buffer, size_t bytes) { return m_File ? m_File->Write(buffer, bytes) : -1; }
-int RageFile::Write(const void* buffer, size_t bytes, int nmemb) {
-	return m_File ? m_File->Write(buffer, bytes, nmemb) : -1;
-}
-int RageFile::Flush() { return m_File ? m_File->Flush() : -1; }
-int RageFile::Seek(int offset) { return m_File ? m_File->Seek(offset) : -1; }
-int RageFile::Seek(int offset, int whence) { return m_File ? m_File->Seek(offset, whence) : -1; }
-int RageFile::Tell() const { return m_File ? m_File->Tell() : -1; }
-int RageFile::GetFileSize() const { return m_File ? m_File->GetFileSize() : -1; }
-int RageFile::GetFD() { return -1; }
-RString RageFile::GetError() const {
-    if (m_File && !m_File->GetError().empty()) return m_File->GetError();
-    return m_sError;
-}
-void RageFile::ClearError() {
-    if (m_File) m_File->ClearError();
-    m_sError.clear();
-}
-bool RageFile::AtEOF() const { return m_File ? m_File->AtEOF() : true; }
-void RageFile::SetError(const RString& err) { m_sError = err; }
-void RageFile::PushSelf(lua_State*) {}
+
 
 // ---------------------------------------------------------------------------
 // RageFileManager (std::filesystem backed)
