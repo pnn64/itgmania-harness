@@ -670,12 +670,16 @@ local function state_value(state, key)
 end
 
 local function set_tween_value(actor, key, value)
+	-- LunaActor converts scalar arguments to float before Actor stores them.
+	-- Keep that rounding visible to subsequent Lua getters and branch tests.
+	if type(value) ~= "table" then value = _ITG_FLOAT(value) end
 	dest_state(actor)[key] = value
 end
 
 local function add_tween_value(actor, key, value)
 	local state = dest_state(actor)
-	state[key] = (tonumber(state_value(state, key)) or 0) + (tonumber(value) or 0)
+	-- Native AddX/AddRotation first narrow their argument, then add two floats.
+	state[key] = _ITG_FLOAT(_ITG_FLOAT(state_value(state, key)) + _ITG_FLOAT(value))
 end
 
 local function tween_time_left(actor)
@@ -1227,7 +1231,7 @@ local function actor_call(actor, name, ...)
 			-- SetDiffuseAlpha and SetDiffuseColor update the destination color;
 			-- neither creates an independent alpha channel that survives diffuse.
 			local color = copy_value(state_value(dest_state(actor), "diffuse"))
-			if name == "diffusealpha" then color[4] = first
+			if name == "diffusealpha" then color[4] = _ITG_FLOAT(first)
 			else
 				local rgb = _ITG_COLOR(...)
 				for index = 1, 3 do color[index] = rgb[index] end

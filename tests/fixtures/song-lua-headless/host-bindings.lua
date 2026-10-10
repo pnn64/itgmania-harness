@@ -24,7 +24,9 @@ return Def.ActorFrame {
         assert(GAMESTATE:IsEventMode())
         assert(type(PREFSMAN:GetPreference("LastSeenVideoDriver")) == "string")
         assert(SCREENMAN:GetTopScreen():GetPlayerInfo(0):GetLifeMeter():GetLife() == 0.5)
-        self:xy(nil, 7)
+        -- Actor.cpp xy uses FArg, which rejects nil via luaL_checknumber.
+        assert(not pcall(function() self:xy(nil, 7) end))
+        self:xy(0, 7)
         local file = RageFileUtil.CreateRageFile()
         assert(file:Open(GAMESTATE:GetCurrentSong():GetSongDir() .. "host-data.txt", 1))
         assert(file:GetLine() == "alpha")

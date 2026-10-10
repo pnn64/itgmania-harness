@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "name": "native-scalar-floats",
+  "samples": [
+    0
+  ],
+  "root": {
+    "kind": "frame",
+    "name": "Root",
+    "children": [
+      {
+        "kind": "sprite",
+        "name": "Numbers",
+        "size": [
+          32,
+          32
+        ],
+        "state": {
+          "position": [
+            0.1,
+            0.2,
+            0.3
+          ],
+          "rotation": [
+            0.1,
+            0.2,
+            0.3
+          ]
+        }
+      }
+    ]
+  }
+}

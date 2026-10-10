@@ -1375,6 +1375,27 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn actor_setters_keep_native_floats() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("song fixture folder");
+        let entry = song_dir.join("scalar-floats.lua");
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Native scalar floats",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 0.2, bpm: 60.0, bpm_segments: &[], beat_step: 0.1,
+            max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry { path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0 }],
+            &context,
+        ).expect("scalar state capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn foreground_init_precedes_next_file() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
@@ -1870,7 +1891,8 @@ mod tests {
                 .find(|sample| sample[0].as_u64() == Some(frame))
                 .unwrap_or_else(|| panic!("missing frame {frame}: {samples:?}"));
             assert!(
-                (sample[1].as_f64().unwrap() - alpha).abs() < 1e-9,
+                // LunaActor::diffusealpha narrows FArg to float before storage.
+                (sample[1].as_f64().unwrap() - alpha as f32 as f64).abs() < 1e-9,
                 "frame {frame}: {sample}"
             );
             assert_eq!(sample[2], visible, "frame {frame}");
