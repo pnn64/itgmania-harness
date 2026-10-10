@@ -1,0 +1,138 @@
+{
+  "problem": "The external Combo model fabricated Number as an ActorFrame and created missing children on lookup.",
+  "change": "Keep Combo as an ActorFrame, Number as BitmapText, and unknown Combo child lookups absent.",
+  "harness_version": "0.1.63",
+  "source_parent_commit": "fa557b90fd9dd1b33126e44a9ec32ebbb0be272e",
+  "reference_sources": {
+    "Player.cpp": {
+      "workspace_sha256": "fb9fbc6ead8073b26cc8ff9097068ed2c33b8d8c2bea58b43eb61e0384ae1935",
+      "native_source_sha256": "fb9fbc6ead8073b26cc8ff9097068ed2c33b8d8c2bea58b43eb61e0384ae1935",
+      "lines": [
+        [
+          561,
+          564
+        ]
+      ]
+    },
+    "ActorFrame.cpp": {
+      "workspace_sha256": "6dd9ea82229994cf1406dce363ce58a4414d429320fc75da0d1c543696ebf1ac",
+      "native_source_sha256": "6dd9ea82229994cf1406dce363ce58a4414d429320fc75da0d1c543696ebf1ac",
+      "lines": [
+        [
+          392,
+          408
+        ],
+        [
+          617,
+          623
+        ]
+      ]
+    }
+  },
+  "simply_love_source": {
+    "path": "C:\\GitHub\\rework\\itgmania\\Themes\\Simply-Love-SM5\\Graphics\\Player combo.lua",
+    "sha256": "1ac6bca203c002e302b8e8e201a807168d8682ce49d0f9229c2a4120c0066e3f",
+    "lines": [
+      [
+        23,
+        34
+      ],
+      [
+        46,
+        59
+      ]
+    ]
+  },
+  "native_contract": {
+    "allocations": [],
+    "diagnostics": [],
+    "provenance": {
+      "execution": "embedded_native_sources",
+      "git_dirty": "false",
+      "git_revision": "5c737928d93778c2c9f68e276052b220b43a468f",
+      "source_root": "C:\\GitHub\\itgmania-harness\\vendor/itgmania"
+    },
+    "script_errors": []
+  },
+  "native_contract_binary_sha256": "3b77334a0d49441265a3e298966e50a7208b779024b5ab7dfc8dc53eb832097b",
+  "native_contract_request_sha256": "a297e27dcedf8760bf90cc21c094bfb11e1a86d69c0f775a60a6c608b50e2975",
+  "before": {
+    "command": [
+      "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass224-native-default-depth-cli-v3.exe",
+      "song-lua-semantic-baseline",
+      "C:\\GitHub\\deadsync\\save\\song-lua-validation\\pass178\\combo-control-corpus",
+      "--simfile",
+      "Combo Control/control.sm",
+      "--out",
+      "C:\\GitHub\\deadsync\\save\\song-lua-validation\\pass178\\combo-child-host-before",
+      "--max-events",
+      "1000"
+    ],
+    "source_commit": "fa557b90fd9dd1b33126e44a9ec32ebbb0be272e",
+    "source_pending_commit": false,
+    "binary_sha256": "f701e64d955c9c397b2e200062d73747ab473c9bdd14d37b8d491760c37d2c91",
+    "trace_path": "C:\\GitHub\\deadsync\\save\\song-lua-validation\\pass178\\combo-child-host-before\\Combo Control\\control.sm.semantic.json",
+    "trace_sha256": "6a0e5370750f1fdd301641e8689484fa656c1fb41d2e056bfc7f575160e98ec6",
+    "runtime_errors": [
+      {
+        "actor": "def-0001",
+        "beat": 0.5,
+        "callback": "SetUpdateFunction",
+        "definition_id": "def-0001",
+        "line": 4,
+        "message": "C:/GitHub/deadsync/save/song-lua-validation/pass178/combo-control-corpus/Combo Control/default.lua:12: assertion failed!",
+        "name": "SetUpdateFunction",
+        "operation": "callback.error",
+        "seconds": 0.5,
+        "source": "song:/default.lua"
+      }
+    ],
+    "dropped_events": 0,
+    "original_chart_modified": false,
+    "fixture_lua_sha256": "335434b8ae1daf040bf4d66d7a1db34587e0f45c6c0f6fe13fb2518677bd7fa0"
+  },
+  "after": {
+    "command": [
+      "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass231-combo-child-cli-v2.exe",
+      "song-lua-semantic-baseline",
+      "C:\\GitHub\\deadsync\\save\\song-lua-validation\\pass178\\combo-control-corpus",
+      "--simfile",
+      "Combo Control/control.sm",
+      "--out",
+      "C:\\GitHub\\deadsync\\save\\song-lua-validation\\pass178\\combo-child-host-after",
+      "--max-events",
+      "1000"
+    ],
+    "source_commit": "fa557b90fd9dd1b33126e44a9ec32ebbb0be272e",
+    "source_pending_commit": true,
+    "binary_sha256": "3b77334a0d49441265a3e298966e50a7208b779024b5ab7dfc8dc53eb832097b",
+    "trace_path": "C:\\GitHub\\deadsync\\save\\song-lua-validation\\pass178\\combo-child-host-after\\Combo Control\\control.sm.semantic.json",
+    "trace_sha256": "e0cee67c493cbeb00c6633365519df418ceaf707e56fe118354084e5d6cdd339",
+    "runtime_errors": [],
+    "dropped_events": 0,
+    "original_chart_modified": false,
+    "fixture_lua_sha256": "335434b8ae1daf040bf4d66d7a1db34587e0f45c6c0f6fe13fb2518677bd7fa0",
+    "actual_final_player_x": [
+      300,
+      400
+    ]
+  },
+  "unit_regressions": {
+    "source_commit": "fa557b90fd9dd1b33126e44a9ec32ebbb0be272e",
+    "source_pending_commit": true,
+    "binary_sha256": "58b23724b5011d27a6bfa771d9d22ba982f16015671f78d9a329946cda12f284",
+    "exit_code": 0,
+    "elapsed_seconds": 95.40477540018037,
+    "log": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass231-combo-child-units-v2.log",
+    "log_sha256": "ac54cfcda030b07bfd813193ae64f579e8360251210ac98780ea2fa67fed56b3",
+    "result_lines": [
+      "test result: ok. 182 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 94.94s"
+    ]
+  },
+  "regression_observation": "Lua assertions verify type and ownership; exact final per-frame Player transforms prove the callback continues after Number is hidden. Operation samples are deliberately not treated as exhaustive callback events.",
+  "existing_parity_tolerances_changed": false,
+  "original_charts_or_lua_modified": false,
+  "full_corpus_complete": false,
+  "full_theme_or_framebuffer_parity_proven": false,
+  "remaining_theme_scope": "Profile-dependent hidden Combo, font resources, milestone actors, Number-only presentation writes, and full theme rendering still require native gameplay verification."
+}

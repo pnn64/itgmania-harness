@@ -2017,6 +2017,11 @@ for index, player in ipairs(tracked_players) do
     -- The theme loads its profile-selected graphic during Init, before the
     -- song tree runs. This initial resource is not a song Sprite.Load event.
     sprite.state.texture = _ITG_SONG_JUDGMENT
+    -- Simply Love's Player combo.lua creates an ActorFrame with a BitmapText
+    -- named Number. Lookup must not fabricate ActorFrames for unknown names.
+    local combo = actor_child(player, "Combo")
+    combo.child_lookup_exact = true
+    typed_child(combo, "Number", "BitmapText")
 end
 SCREENMAN = {
 	GetTopScreen = function() return top_screen end,

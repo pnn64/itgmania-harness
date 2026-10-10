@@ -2741,6 +2741,37 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn combo_children_keep_native_classes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let native = crate::actor_conformance::evaluate(&root.join("fixtures/actors/combo-child.json"))
+            .expect("native ActorFrame lookup and BitmapText methods");
+        assert_eq!(native["script_errors"], serde_json::json!([]));
+        assert_eq!(native["diagnostics"], serde_json::json!([]));
+        let song_dir = root.join("tests/fixtures/song-lua-headless")
+            .canonicalize().expect("combo child fixture directory");
+        let entry = song_dir.join("combo-child.lua");
+        let context = Context {
+            simfile: &entry, song_dir: &song_dir, title: "Combo Child Callback",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 2.0, bpm: 60.0, bpm_segments: &[], beat_step: 0.25,
+            max_events: 1000, random_seed: 1,
+        };
+        let trace = evaluate_with_noteskin(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context, None).expect("combo child callback");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        // Callback calls may be compacted or fall between operation samples.
+        // Player transform tracks retain the actual state on every update.
+        for (index, x) in [300, 400].into_iter().enumerate() {
+            let samples = trace["player_render_tracks"][index]["transform_samples"]
+                .as_array().expect("player transform samples");
+            assert_eq!(samples.last().expect("final player transform")[1], x);
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn initial_judgment_is_loaded_before_song_lua() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
