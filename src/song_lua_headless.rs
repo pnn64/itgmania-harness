@@ -4027,6 +4027,52 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn rejected_parts_keep_native_float_state() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("native Lua fixture directory");
+        let entry = song_dir.join("rejected-option-parts.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Rejected modifier parts",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 1.0,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 0.25,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        let trace = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).expect("native rejected-part reference");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        let parts = trace["events"].as_array().expect("native events").iter()
+            .find_map(|event| event["detail"]["rejected_parts"].as_array())
+            .expect("retained parser rejection evidence");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["key"], "bumpperiod");
+        assert_eq!(parts[1]["key"], "completely_unknown");
+        for part in parts {
+            assert_eq!(part["accepted"], false);
+            assert_eq!(part["unchanged"], true);
+            let values = part["values"].as_array().expect("native field snapshot");
+            assert!(values.len() > 100);
+            for (key, amount, speed) in [("bumpyperiod", -0.66, 7.0), ("drunk", 0.25, 3.0)] {
+                let value = values.iter().find(|value| value[0] == key)
+                    .expect("native option amount and approach speed");
+                assert!((value[1].as_f64().expect("native amount") - amount).abs() < 0.000001);
+                assert_eq!(value[2], speed);
+            }
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn indexed_noops_keep_native_field_snapshots() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

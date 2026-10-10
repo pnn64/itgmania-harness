@@ -1616,6 +1616,19 @@ local function indexed_option_noops(options, text)
 	end
 	return #out > 0 and out or nil
 end
+local function rejected_option_parts(options, text)
+	local parts = _ITG_OPTIONS_REJECTED(options.native_index, text)
+	if #parts == 0 then return nil end
+	local values = {}
+	for _, method in ipairs(_ITG_PLAYER_OPTION_FLOATS) do
+		local amount, speed = _ITG_OPTIONS_UPDATE(options.native_index, method, nil)
+		if type(amount) == "number" then
+			values[#values + 1] = { method:lower(), amount, speed }
+		end
+	end
+	for _, part in ipairs(parts) do part.values = values end
+	return parts
+end
 player_options_mt.__index = function(options, name)
 	if not rawget(options, "allow_unknown") and not _ITG_PLAYER_OPTION_METHODS[name] then return nil end
 	if name == "GetReversePercentForColumn" then return function(self, column)
@@ -1688,6 +1701,7 @@ player_options_mt.__index = function(options, name)
 			local noops = indexed_option_noops(self, (...))
 			if event then event.detail = {
 				indexed_noops = noops,
+				rejected_parts = rejected_option_parts(self, (...)),
 				noteskin_option = {
 					previous = skin_before,
 					current = _ITG_OPTIONS_UPDATE(self.native_index, "NoteSkin"),

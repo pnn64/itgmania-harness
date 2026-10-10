@@ -575,6 +575,28 @@ fn write_player_option_methods(root: &Path, out: &Path) {
         lua.push_str(&format!("  [\"{method}\"] = true,\n"));
     }
     lua.push_str("}\n");
+    let mut floats = vec!["XMod".to_owned(), "CMod".to_owned(), "MMod".to_owned()];
+    for (token, columns) in [
+        ("  FLOAT_INTERFACE(", false),
+        ("  FLOAT_NO_SPEED_INTERFACE(", false),
+        ("  MULTICOL_FLOAT_INTERFACE(", true),
+    ] {
+        for definition in source.split(token).skip(1) {
+            let name = definition.split(',').next().expect("native option name").trim();
+            if columns {
+                floats.extend((1..=16).map(|column| format!("{name}{column}")));
+            } else {
+                floats.push(name.to_owned());
+            }
+        }
+    }
+    floats.sort();
+    floats.dedup();
+    lua.push_str("_ITG_PLAYER_OPTION_FLOATS = {\n");
+    for method in floats {
+        lua.push_str(&format!("  \"{method}\",\n"));
+    }
+    lua.push_str("}\n");
     fs::write(out.join("player_option_methods.lua"), lua)
         .expect("could not write generated PlayerOptions Lua method table");
 }

@@ -142,6 +142,42 @@ void install_option_queries(lua_State* L) {
   lua_pushcclosure(L, [](lua_State* L) -> int {
     auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
     const int player = static_cast<int>(luaL_checkinteger(L, 1));
+    if (player < 0 || player > 1) return luaL_error(L, "invalid player");
+    std::vector<std::string> parts;
+    split(luaL_checkstring(L, 2), ",", parts, true);
+    lua_newtable(L);
+    int index = 0;
+    for (std::string part : parts) {
+      Trim(part);
+      if (part.empty()) continue;
+      std::string lower = part;
+      MakeLower(lower);
+      std::vector<std::string> words;
+      split(lower, " ", words, true);
+      if (words.empty()) continue;
+      const std::string& key = words.back();
+      // Do not consume RNG again or classify native skin branches as errors.
+      if (key == "random" || NOTESKIN->DoesNoteSkinExist(key) ||
+          NOTESKIN->DoesNoteSkinExist(lower)) continue;
+      const PlayerOptions& current = state->players[player].GetSong();
+      PlayerOptions probe = current;
+      std::string error;
+      if (probe.FromOneModString(part, error)) continue;
+      lua_newtable(L);
+      LuaHelpers::Push(L, part); lua_setfield(L, -2, "part");
+      LuaHelpers::Push(L, key); lua_setfield(L, -2, "key");
+      lua_pushboolean(L, false); lua_setfield(L, -2, "accepted");
+      lua_pushboolean(L, probe == current); lua_setfield(L, -2, "unchanged");
+      LuaHelpers::Push(L, error); lua_setfield(L, -2, "error");
+      lua_rawseti(L, -2, ++index);
+    }
+    return 1;
+  }, 1);
+  lua_setglobal(L, "_ITG_OPTIONS_REJECTED");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const int player = static_cast<int>(luaL_checkinteger(L, 1));
     const std::string modifiers = luaL_checkstring(L, 2);
     if (player < 0 || player > 1) return luaL_error(L, "invalid player");
     // GameState::ApplyStageModifiers calls the native ModsGroup at Stage.
