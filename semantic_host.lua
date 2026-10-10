@@ -2842,9 +2842,7 @@ local function sample_signature(visible, alpha, vertices, camera, effects, diffu
 	if not visible or (alpha <= 0.000001 and glow[4] <= 0.000001) then return { 0, alpha } end
 	local values = { 1, alpha }
 	for _, vertex in ipairs(vertices) do
-		values[#values + 1] = vertex[1]
-		values[#values + 1] = vertex[2]
-		values[#values + 1] = vertex[3] or 0
+		for _, value in ipairs(vertex) do values[#values + 1] = value end
 	end
 	for _, value in ipairs(camera) do values[#values + 1] = value end
 	for _, effect in ipairs(effects) do
@@ -2922,7 +2920,21 @@ local function record_projected_actor(actor)
 	end
 	local world = actor_world_matrix(actor, width, height)
 	local view, projection, fov, vanish_x, vanish_y, distance
-	if camera then view, projection, fov, vanish_x, vanish_y, distance = menu_projection(camera) end
+	if camera then
+		view, projection, fov, vanish_x, vanish_y, distance = menu_projection(camera)
+	else
+		-- LoadMenuPerspective(0) also applies the native -1000/+1000 depth.
+		-- Share each viewport's matrices in the existing frame-local cache.
+		local key = viewport_width .. ":" .. viewport_height
+		local cached = projection_cache[key]
+		if not cached then
+			view, projection = _ITG_MENU_MATRICES(viewport_width, viewport_height, 0,
+				viewport_width / 2, viewport_height / 2)
+			cached = { view, projection }
+			projection_cache[key] = cached
+		end
+		view, projection = unpack(cached)
+	end
 	local local_vertices = {
 		{ -width / 2, -height / 2, 0, 1 }, { width / 2, -height / 2, 0, 1 },
 		{ width / 2, height / 2, 0, 1 }, { -width / 2, height / 2, 0, 1 },
@@ -2931,23 +2943,14 @@ local function record_projected_actor(actor)
 	for index, vertex in ipairs(local_vertices) do
 		local world_vertex = vec_transform(vertex, world)
 		world_vertices[index] = { world_vertex[1], world_vertex[2], world_vertex[3] }
-		if camera then
-			local clip = vec_transform(vec_transform(world_vertex, view), projection)
-			clip_vertices[index] = { clip[1], clip[2], clip[3], clip[4] }
-			if clip[4] == 0 then return end
-			screen_vertices[index] = _ITG_SCREEN_VERTEX(clip, viewport_width, viewport_height)
-		else
-			clip_vertices[index] = {
-				world_vertex[1] * 2 / viewport_width - 1,
-				1 - world_vertex[2] * 2 / viewport_height,
-				world_vertex[3], 1,
-			}
-			screen_vertices[index] = { world_vertex[1], world_vertex[2] }
-		end
+		local clip = vec_transform(vec_transform(world_vertex, view), projection)
+		clip_vertices[index] = { clip[1], clip[2], clip[3], clip[4] }
+		if clip[4] == 0 then return end
+		screen_vertices[index] = _ITG_SCREEN_VERTEX(clip, viewport_width, viewport_height)
 	end
 	local camera_sample = camera and { fov, vanish_x, vanish_y, distance }
 		or { 0, viewport_width / 2, viewport_height / 2, 0 }
-	local signature = sample_signature(visible, alpha, screen_vertices, camera_sample, effects, diffuse, glow)
+	local signature = sample_signature(visible, alpha, clip_vertices, camera_sample, effects, diffuse, glow)
 	for _, value in ipairs(crop) do signature[#signature + 1] = value end
 	for _, value in ipairs(shadow) do signature[#signature + 1] = value end
 	if same_sample(projected_signature_by_actor[actor], signature) then return end

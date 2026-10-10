@@ -783,6 +783,67 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn default_depth_matches_native_draws() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let song_dir = root.join("tests/fixtures/song-lua-headless");
+        let entry = song_dir.join("default-depth.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "default orthographic depth",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 1.0,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 1.0 / 60.0,
+            max_events: 5000,
+            random_seed: 1,
+        };
+        let trace = evaluate(&[Entry {
+            path: entry.clone(), layer: "foreground", index: 0, start_beat: 0.0,
+        }], &context).expect("default depth song capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let native = crate::actor_conformance::evaluate(
+            &root.join("fixtures/actors/default-depth.json"),
+        ).expect("independent native Actor::Draw depth");
+        for sample in native["samples"].as_array().expect("native samples") {
+            let time = sample["time"].as_f64().expect("native time");
+            for name in ["Flat", "Nested"] {
+                let actor = trace["runtime_actors"].as_array().expect("runtime actors")
+                    .iter().find(|actor| actor["name"] == name).expect("depth actor");
+                let track = trace["projected_vertex_tracks"].as_array().expect("tracks")
+                    .iter().find(|track| track["actor"] == actor["id"]).expect("depth track");
+                let actual = track["samples"].as_array().expect("host samples").iter()
+                    .find(|row| (row[1].as_f64().expect("host time") - time).abs() < 1e-6)
+                    .expect("Z-only changes must produce a sample");
+                let drawn = sample["actors"].as_array().expect("drawn actors")
+                    .iter().find(|actor| actor["name"] == name).expect("native depth actor");
+                for corner in 0..4 {
+                    let vertex = &drawn["draws"][0]["vertices"][[0, 3, 2, 1][corner]];
+                    for axis in 0..4 {
+                        let expected = vertex["clip"][axis].as_f64().expect("native clip");
+                        let actual = actual[5][corner][axis].as_f64().expect("host clip");
+                        assert!((actual - expected).abs() < 1e-6,
+                            "{name} at {time}, corner {corner}/{axis}: {actual} vs {expected}");
+                    }
+                    for axis in 0..2 {
+                        let actual = actual[6][corner][axis].as_f64().expect("host screen axis");
+                        let expected = vertex["screen"][axis].as_f64().expect("native screen axis");
+                        // The song host advances at 60 Hz; this draw control
+                        // advances a native tween in quarter-second steps.
+                        assert!((actual - expected).abs() < 0.0001,
+                            "native viewport for {name} at {time}: {actual} vs {expected}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn zero_fov_resets_native_parent_perspective() {
         let song_dir =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/song-lua-headless");
@@ -4057,16 +4118,18 @@ mod tests {
                 .unwrap();
             assert_eq!(track["texture_size"], serde_json::json!([64, 32]));
             assert!(track["texture"].as_str().unwrap().ends_with("fit-rect.png"));
-            let vertices = track["samples"].as_array().unwrap().last().unwrap()[6]
+            // Exact logical sizes belong to world space; native projection
+            // rounds screen coordinates through its float viewport mapping.
+            let vertices = track["samples"].as_array().unwrap().last().unwrap()[4]
                 .as_array()
                 .unwrap();
             assert_eq!(
                 vertices[0],
-                serde_json::json!([center - 32, 100 - half_height])
+                serde_json::json!([center - 32, 100 - half_height, 0])
             );
             assert_eq!(
                 vertices[2],
-                serde_json::json!([center + 32, 100 + half_height])
+                serde_json::json!([center + 32, 100 + half_height, 0])
             );
             let bindings = track["texture_samples"].as_array().unwrap();
             assert_eq!(bindings.len(), if id == "def-0003" { 2 } else { 1 });
@@ -6032,7 +6095,7 @@ mod tests {
         assert_eq!(track["camera_actor"], "orthographic-screen");
         assert_eq!(track["sample_layout"][8], "effect_chain");
         let sample = &track["samples"][0];
-        let vertices = sample[6].as_array().unwrap();
+        let vertices = sample[4].as_array().unwrap();
         let center = vertices.iter().fold([0.0; 2], |mut center, vertex| {
             center[0] += vertex[0].as_f64().unwrap() / 4.0;
             center[1] += vertex[1].as_f64().unwrap() / 4.0;

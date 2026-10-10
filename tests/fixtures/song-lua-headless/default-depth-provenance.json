@@ -1,0 +1,93 @@
+{
+  "problem": "Default-camera song traces wrote world Z as clip depth and suppressed Z-only geometry changes.",
+  "change": "Use native LoadMenuPerspective(0) and native viewport mapping for default and AFT viewports. Compare all four clip coordinates when sampling. Remove the hand-written default projection bypass.",
+  "harness_version": "0.1.62",
+  "source_parent_commit": "602c5004f1b7d83372b375e1bde714e67660385e",
+  "reference_sources": {
+    "RageDisplay.cpp": {
+      "sha256": "79292ce583c1d0a3401419bd4fa752f517269eb1ff19d948b86c6207d6e51370",
+      "lines": [
+        [
+          498,
+          506
+        ],
+        [
+          604,
+          609
+        ]
+      ]
+    },
+    "RageTextureRenderTarget.cpp": {
+      "sha256": "d5911060381d914e43562fc84968ac11398303acd245803e6939a098bbe41ff8",
+      "lines": [
+        [
+          44,
+          58
+        ]
+      ]
+    }
+  },
+  "independent_native_test": "default_depth_matches_native_draws evaluates the C++ Actor::Draw oracle separately from the song host, including a Z-only tween and a translated, rotated, scaled parent.",
+  "before": {
+    "source_commit": "602c5004f1b7d83372b375e1bde714e67660385e",
+    "source_pending_commit": true,
+    "binary_sha256": "6fe782a40d65f6b6e9373966b52e1f1bb2faf17feeeb9fda4353accd8e50d391",
+    "exit_code": 101,
+    "elapsed_seconds": 95.84395200014114,
+    "log": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass221-default-depth-unfixed-tests-v1.log",
+    "log_sha256": "58f0a27654234defd0882a21f98c799a89b6ae221f7e706a2c6e1682a336ecb7",
+    "result_lines": [
+      "test result: FAILED. 180 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 95.45s"
+    ]
+  },
+  "after": {
+    "source_commit": "602c5004f1b7d83372b375e1bde714e67660385e",
+    "source_pending_commit": true,
+    "binary_sha256": "0174e4c411df920a21a305b9464f301ba8150c1e298f2248aa82d07052329ec9",
+    "exit_code": 0,
+    "seconds": 97.24040909996256,
+    "log": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass224-default-depth-all-units-v3.log",
+    "log_sha256": "03594cfa30b991509e1720972ca9281bc37c2b02fbf76aa8b8d4b204bc7212bc",
+    "result_lines": [
+      "test result: ok. 181 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 96.82s"
+    ]
+  },
+  "corrected_control": {
+    "trace_path": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass225-native-screen-parent-depth-v2\\traces\\control\\control.ssc.semantic.json",
+    "trace_sha256": "b7fc73c1b0d936028eb425a0c1e245698ec0e508dca865290b3698c1660b150e",
+    "runtime_errors": 0,
+    "dropped_events": 0,
+    "capture_exit_code": 0,
+    "binary_sha256": "f701e64d955c9c397b2e200062d73747ab473c9bdd14d37b8d491760c37d2c91",
+    "control_sha256": "b47a8deaea2fe1f14c947af568fd662e7fcb4c766dabb2d5291817a57a95b5d3",
+    "update_frames": 241,
+    "source_commit": "602c5004f1b7d83372b375e1bde714e67660385e",
+    "source_pending_commit": true,
+    "capture_complete": true,
+    "archive_path": "C:\\GitHub\\itgmania-harness\\target\\song-lua-repair\\pass225-native-screen-parent-depth-v2\\archives\\b693934192f92214a7ffa4818aa05808c6b805a38c8ed25afbaa20e40c8df0e8.tar.zst",
+    "archive_sha256": "b693934192f92214a7ffa4818aa05808c6b805a38c8ed25afbaa20e40c8df0e8",
+    "archive_entry": {
+      "title": "Native screen-parent-depth control",
+      "source_simfile": "control/control.ssc",
+      "harness_version": "0.1.62",
+      "archive": "b693934192f92214a7ffa4818aa05808c6b805a38c8ed25afbaa20e40c8df0e8.tar.zst",
+      "sha256": "b693934192f92214a7ffa4818aa05808c6b805a38c8ed25afbaa20e40c8df0e8",
+      "compressed_bytes": 14401
+    }
+  },
+  "independent_screen_cases": {
+    "independent_native_corner_count": 32,
+    "pre_fix_host_clip_depth_mismatches": 32,
+    "world_vertices_max_error": 0,
+    "native_draws_sha256": "5282fd7aa74f620260efbb420fb1bf3145048c7604938e36e2903fb89300d960"
+  },
+  "world_size_tests": "Keep exact size and center checks in world space; native viewport floats are independently compared in the new draw test.",
+  "new_test_limits": {
+    "clip_coordinate_error": 1e-06,
+    "screen_pixel_error": 0.0001,
+    "reason": "The host advances tweens at 60 Hz; the independent scene samples quarter-second updates."
+  },
+  "existing_parity_tolerances_changed": false,
+  "original_charts_or_lua_modified": false,
+  "full_corpus_complete": false
+}
