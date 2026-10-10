@@ -247,7 +247,7 @@ local function emit(kind, actor, operation, args, detail)
 		and operation ~= "Sprite.Load"
 		-- Boolean getter/return audits compare every write, including repeated
 		-- values. Their sequence must not use the setter sampling cadence.
-		and not (detail and (detail.boolean_option or detail.noteskin_option))
+		and not (detail and (detail.boolean_option or detail.noteskin_option or detail.speed_option))
 		and (active_context.command == "UpdateCommand" or active_context.callback == "SetUpdateFunction"
 			or active_context.callback == "SetDrawFunction" or active_context.recurring) then
 		return
@@ -1599,11 +1599,35 @@ local player_options_mt = {}
 function manual.option_call(options, name, ...)
 	return _ITG_OPTIONS_AT(options.native_index, options.native_level, name, ...)
 end
+manual.speed_methods = { TimeSpacing = true, ScrollSpeed = true, ScrollBPM = true,
+	MaxScrollBPM = true, XMod = true, CMod = true, MMod = true }
+local function option_returns(...) return { n = select("#", ...), ... } end
+function manual.speed_fields(options)
+	local fields = {}
+	for _, name in ipairs({ "TimeSpacing", "ScrollSpeed", "ScrollBPM", "MaxScrollBPM" }) do
+		local amount, speed = manual.option_call(options, name)
+		fields[#fields + 1] = { amount, speed }
+	end
+	return fields
+end
+function manual.speed_call(options, name, event, ...)
+	local before = manual.speed_fields(options)
+	-- Native setters may change the amount before rejecting an approach speed.
+	-- Observe their real post-error fields, then propagate the same error.
+	local results = option_returns(pcall(manual.option_call, options, name, ...))
+	local ok = results[1]
+	if event then
+		event.detail = event.detail or {}
+		event.detail.speed_option = { previous = before, current = manual.speed_fields(options),
+			failed = not ok, chained = select("#", ...) > 0 and select(select("#", ...), ...) == true }
+	end
+	if not ok then error(results[2], 0) end
+	return unpack(results, 2, results.n)
+end
 manual.song_methods = { AutosyncSetting = true, AssistClap = true, AssistMetronome = true,
 	StaticBackground = true, RandomBGOnly = true, SaveScore = true, SaveReplay = true, MusicRate = true, Haste = true }
 manual.song_bools = { AssistClap = true, AssistMetronome = true, StaticBackground = true,
 	RandomBGOnly = true, SaveScore = true, SaveReplay = true }
-local function option_returns(...) return { n = select("#", ...), ... } end
 local function indexed_option_noops(options, text)
 	local out = {}
 	local methods = { confusionoffset = "ConfusionOffset", movex = "MoveX", movey = "MoveY" }
@@ -1681,17 +1705,22 @@ player_options_mt.__index = function(options, name)
 			local skin_write = name == "NoteSkin" and count > 0
 				and (type(select(1, ...)) == "string" or type(select(1, ...)) == "number")
 			local skin_before = skin_write and manual.option_call(self, "NoteSkin") or nil
+			local speed_call = self.kind == "PlayerOptions" and manual.speed_methods[name]
+				and count > 0 and (select(1, ...) ~= nil or tonumber((select(2, ...))) ~= nil)
 			local event
 			-- A nil enum argument only queries; it may request chaining as well.
 			-- BOOL_INTERFACE only writes when its first argument is a boolean.
-			if count > 0 and select(1, ...) ~= nil and (not bool_option or type(select(1, ...)) == "boolean")
+			if count > 0 and (select(1, ...) ~= nil or speed_call) and (not bool_option or type(select(1, ...)) == "boolean")
 				and (name ~= "ModTimerSetting" or select(1, ...) ~= nil) then
 				event = emit("modifier", self, self.kind .. "." .. name, safe_args(...),
-					bool_write and { boolean_option = {} } or skin_write and { noteskin_option = {} } or nil)
+					bool_write and { boolean_option = {} } or skin_write and { noteskin_option = {} }
+					or speed_call and { speed_option = {} } or nil)
 			end
 			-- Native getters return amounts and speeds (or inactive alias nils).
 			-- Setters return previous values unless the last boolean requests chaining.
-			local values = option_returns(manual.option_call(self, name, ...))
+			local values
+			if speed_call then values = option_returns(manual.speed_call(self, name, event, ...))
+			else values = option_returns(manual.option_call(self, name, ...)) end
 			if bool_write and event then
 				event.detail = { boolean_option = {
 					previous = previous == true,
@@ -1714,6 +1743,7 @@ player_options_mt.__index = function(options, name)
 			and manual.option_call(self, "NoteSkin") or nil
 		local event = emit("modifier", self, self.kind .. "." .. name, safe_args(...),
 			skin_before and { noteskin_option = {} } or nil)
+		local speed_before = self.kind == "PlayerOptions" and manual.speed_fields(self) or nil
 		manual.option_call(self, name, ...)
 		if self.kind == "PlayerOptions" and name == "FromString" then
 			local noops = indexed_option_noops(self, (...))
@@ -1725,6 +1755,9 @@ player_options_mt.__index = function(options, name)
 					current = manual.option_call(self, "NoteSkin"),
 					parts = _ITG_OPTIONS_SKINS(self.native_index, (...), self.native_level),
 				},
+			} end
+			if event then event.detail.speed_option = {
+				previous = speed_before, current = manual.speed_fields(self), failed = false, chained = true,
 			} end
 		end
 		return self

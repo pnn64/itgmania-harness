@@ -3213,6 +3213,63 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn speed_fields_keep_unsampled_frames() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("headless fixtures");
+        let entry = song_dir.join("speed-frames.lua");
+        let bpms = [BpmSegment {
+            beat: 0.0,
+            bpm: 120.0,
+        }];
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "speed frame capture",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.25,
+            bpm: 120.0,
+            bpm_segments: &bpms,
+            beat_step: 0.5,
+            max_events: 800,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("native speed frame capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let frames = trace["update_frames"].as_array().expect("reference frames");
+        let events = trace["events"].as_array().expect("setter events");
+        let writes = events.iter().filter(|event| event["detail"]["speed_option"].is_object())
+            .collect::<Vec<_>>();
+        assert_eq!(frames.len(), 9);
+        assert_eq!(writes.len(), 12, "retain startup and every repeated raw speed write");
+        assert_eq!(writes[0]["detail"]["speed_option"]["previous"], serde_json::json!([[0,1],[1,1],[200,1],[0,1]]));
+        assert_eq!(writes[0]["detail"]["speed_option"]["current"], serde_json::json!([[0,7],[1,7],[200,7],[200,7]]));
+        assert_eq!(writes[1]["detail"]["speed_option"]["current"], serde_json::json!([[0,7],[1,7],[200,7],[0,3]]));
+        for (write, frame) in writes[3..].iter().zip(frames) {
+            assert_eq!(write["beat"], frame[0]);
+            assert_eq!(write["seconds"], frame[1]);
+            assert_eq!(write["detail"]["speed_option"], serde_json::json!({
+                "previous":[[0,7],[4,2],[200,7],[0,3]], "current":[[0,7],[4,2],[200,7],[0,3]],
+                "failed":false,"chained":false,
+            }));
+        }
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn current_options_remain_distinct_from_song_targets() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless").canonicalize().expect("headless fixtures");
