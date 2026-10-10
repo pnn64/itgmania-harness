@@ -3632,6 +3632,9 @@ mod tests {
             assert_eq!(document["style"], style);
             assert_eq!(document["enabled_players"], serde_json::json!(enabled));
             assert_eq!(document["actor_definitions"][0]["name"], "style-verified");
+            let actors = document["external_actors"].as_array().expect("external actors");
+            assert_eq!(actors.iter().any(|actor| actor["path"] == "ScreenGameplay/PlayerP2"),
+                enabled[1], "disabled players must not enter the screen actor tree");
         }
     }
 

@@ -896,6 +896,10 @@ local function actor_call(actor, name, ...)
     if name == "GetLife" and actor.class == "LifeMeterBar" then return 0.5 end
 	if name == "GetChild" then
         local child_name = (...)
+        -- ScreenGameplay::Init adds only enabled PlayerInfo actors. A missing
+        -- double-mode PlayerP2 must stay absent, including repeated lookups.
+        if actor.class == "Screen" and child_name:match("^PlayerP[12]$")
+            and not actor.children_by_name[child_name] then return nil end
         -- Song ActorFrames already own their complete child list. Native
         -- ActorFrame::PushChildTable returns nil and creates no missing child.
         if (rawget(actor, "definition_id") or rawget(actor, "child_lookup_exact"))
@@ -1915,8 +1919,10 @@ GAMESTATE = {
 }
 
 local top_screen = external_actor("ScreenGameplay", "Screen")
-for _, name in ipairs({ "PlayerP1", "PlayerP2", "Overlay", "Underlay", "SongBackground", "SongForeground", "In" }) do
-    typed_child(top_screen, name, name:match("^PlayerP[12]$") and "Player" or "ActorFrame")
+tracked_players = { typed_child(top_screen, "PlayerP1", "Player") }
+if not is_double then tracked_players[2] = typed_child(top_screen, "PlayerP2", "Player") end
+for _, name in ipairs({ "Overlay", "Underlay", "SongBackground", "SongForeground", "In" }) do
+    typed_child(top_screen, name, "ActorFrame")
 end
 -- ScreenWithMenuElements keeps In as a separate Transition child. Simply
 -- Love's in/default.lua retains its Stage/Event text after the visual lead-in
@@ -1927,7 +1933,6 @@ end
 for _, name in ipairs({ "LifeP1", "LifeP2", "ScoreP1", "ScoreP2", "StepsDisplayP1", "StepsDisplayP2" }) do
     actor_child(top_screen, name).hibernate_seconds = math.huge
 end
-tracked_players = { actor_child(top_screen, "PlayerP1"), actor_child(top_screen, "PlayerP2") }
 local fallback_player_x = {
 	math.floor((0.85 / 3) * harness.screen_width),
 	math.floor((2.15 / 3) * harness.screen_width),
@@ -1935,7 +1940,6 @@ local fallback_player_x = {
 for index, player in ipairs(tracked_players) do
 	player.state.x = is_double and harness.screen_width / 2 or fallback_player_x[index]
 	player.state.y = harness.screen_height / 2
-	if is_double and index == 2 then player.state.visible = false end
 	typed_child(player, "NoteField", "NoteField").state.y = 10
     -- Player::Init renames the Simply Love frame Judgment; its graphic is a
     -- Sprite named JudgmentWithOffsets. Unknown children must stay absent.
