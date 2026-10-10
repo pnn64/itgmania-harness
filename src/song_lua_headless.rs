@@ -1375,6 +1375,34 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn foreground_init_precedes_next_file() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("song fixture folder");
+        let first = song_dir.join("load-first.lua");
+        let context = Context {
+            simfile: &first, song_dir: &song_dir, title: "Foreground load order",
+            difficulty: "Difficulty_Challenge", steps_type: "dance-single", description: "",
+            max_beat: 0.2, bpm: 60.0, bpm_segments: &[], beat_step: 0.1,
+            max_events: 1000, random_seed: 1,
+        };
+        // Foreground.cpp:36-62 loads and initializes each actor before the next
+        // file. ActorFrame.cpp:89-94 initializes children before the frame.
+        let trace = evaluate(
+            &[
+                Entry { path: first.clone(), layer: "foreground", index: 0, start_beat: 0.0 },
+                Entry { path: song_dir.join("load-second.lua"), layer: "foreground", index: 1, start_beat: 0.1 },
+            ], &context,
+        ).expect("foreground capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        assert_eq!(trace["roots"].as_array().expect("roots").len(), 2);
+        assert_eq!(trace["actor_definitions"].as_array().expect("definitions").len(), 3);
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn init_queues_wait_for_on_commands() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")

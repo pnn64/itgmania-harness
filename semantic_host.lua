@@ -3080,6 +3080,11 @@ local function record_player_render(player_index, player)
 end
 
 local loaded_roots = {}
+local function init(actor)
+	for _, child in ipairs(actor.children) do init(child) end
+	run_command(actor, "Init")
+end
+
 for _, entry in ipairs(harness.entries) do
 	local result = execute_file(normalize(entry.path))
 	if type(result) ~= "table" then result = Def.ActorFrame {} end
@@ -3087,35 +3092,21 @@ for _, entry in ipairs(harness.entries) do
 	result._HarnessLayerIndex = entry.index
 	result._HarnessStartBeat = entry.start_beat
 	local definition = register_definition(result)
-	local actor = instantiate(result)
+	local parent_name = entry.layer == "foreground" and "SongForeground" or "SongBackground"
+	local parent = actor_child(top_screen, parent_name)
+	local actor = instantiate(result, parent)
+	-- Foreground::LoadFromSong initializes each MakeActor result before loading
+	-- the next file and before AddChild. Later scripts may consume the same RNG
+	-- or read globals set by this root's InitCommand.
+	init(actor)
+	parent.children[#parent.children + 1] = actor
+	local child_name = actor.__songlua_name
+	parent.children_by_name[child_name] = parent.children_by_name[child_name] or {}
+	table.insert(parent.children_by_name[child_name], actor)
 	loaded_roots[#loaded_roots + 1] = { actor = actor, definition = definition, entry = entry }
 	roots[#roots + 1] = { actor = actor, definition_id = definition.id, layer = entry.layer, layer_index = entry.index, start_beat = entry.start_beat }
 end
 
-local function attach_screen_layers(name, predicate)
-	local screen_frame = actor_child(top_screen, name)
-	screen_frame.children, screen_frame.children_by_name = {}, {}
-	for _, root in ipairs(loaded_roots) do
-		if predicate(root.entry.layer) then
-			root.actor.parent = screen_frame
-			screen_frame.children[#screen_frame.children + 1] = root.actor
-			local child_name = root.actor.__songlua_name
-			screen_frame.children_by_name[child_name] = screen_frame.children_by_name[child_name] or {}
-			table.insert(screen_frame.children_by_name[child_name], root.actor)
-		end
-	end
-end
-
-attach_screen_layers("SongBackground", function(layer) return layer == "background1" or layer == "background2" end)
-attach_screen_layers("SongForeground", function(layer) return layer == "foreground" end)
-
-do
-    local function init(actor)
-        for _, child in ipairs(actor.children) do init(child) end
-        run_command(actor, "Init")
-    end
-    for _, root in ipairs(loaded_roots) do init(root.actor) end
-end
 for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "Begin") end) end
 for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "On") end) end
 
