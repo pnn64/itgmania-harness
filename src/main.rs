@@ -163,6 +163,8 @@ fn parse_song_lua_trace_args(
     let mut out = None;
     let mut keep_run_dir = false;
     let mut headless = false;
+    let mut until_gameplay_end = false;
+    let mut autoplay = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -224,6 +226,19 @@ fn parse_song_lua_trace_args(
             Some("--headless") => {
                 return Err(CliError::Usage("--headless may only be provided once".into()));
             }
+            Some("--until-gameplay-end") if !until_gameplay_end => until_gameplay_end = true,
+            Some("--until-gameplay-end") => {
+                return Err(CliError::Usage("--until-gameplay-end may only be provided once".into()));
+            }
+            Some("--autoplay") => {
+                let value = next_utf8(&mut args, "--autoplay")?;
+                let on = match value.as_str() {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err(CliError::Usage("--autoplay requires 0 or 1".into())),
+                };
+                set_once(&mut autoplay, on, "--autoplay")?;
+            }
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -235,6 +250,9 @@ fn parse_song_lua_trace_args(
                 ));
             }
         }
+    }
+    if until_gameplay_end && until_beat.is_some() {
+        return Err(CliError::Usage("--until-gameplay-end and --until-beat are mutually exclusive".into()));
     }
     Ok(SongLuaTraceArgs {
         options: song_lua_runtime::Options {
@@ -248,6 +266,8 @@ fn parse_song_lua_trace_args(
             timeout: timeout.unwrap_or_else(|| std::time::Duration::from_secs(120)),
             keep_run_dir,
             headless,
+            until_gameplay_end,
+            autoplay: autoplay.unwrap_or(true),
         },
         out,
     })
@@ -1217,7 +1237,8 @@ fn print_help() {
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
-             [--keep-run-dir] [--headless]\n\
+             [--keep-run-dir] [--headless] [--autoplay 0|1]\n\
+             [--until-gameplay-end]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
@@ -1367,6 +1388,27 @@ mod tests {
             parse_song_lua_trace_args(args.into_iter()),
             Err(CliError::Usage(_))
         ));
+    }
+
+    #[test]
+    fn trace_requires_one_stop_condition() {
+        let args = [
+            "song.ssc", "--itgmania-bin", "ITGmania.exe",
+            "--until-gameplay-end", "--until-beat", "16",
+        ].map(OsString::from);
+        assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
+    }
+
+    #[test]
+    fn trace_accepts_native_end_without_autoplay() {
+        let args = [
+            "song.ssc", "--itgmania-bin", "ITGmania.exe",
+            "--until-gameplay-end", "--autoplay", "0", "--headless",
+        ].map(OsString::from);
+        let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
+        assert!(trace.options.until_gameplay_end);
+        assert!(trace.options.headless);
+        assert!(!trace.options.autoplay);
     }
 
     #[test]

@@ -164,6 +164,20 @@ scoring and screen replacement. It records Lua semantics without opening a
 render window; it does not produce framebuffer reference images. Omit this
 option to use the install's normal renderer.
 
+Use `--until-gameplay-end` instead of `--until-beat` to keep recording through
+gameplay reloads until the native engine activates a different screen. A
+persistent `ScreenSystemLayer` observer records stage commitment and the
+destination screen. The trace includes stage samples at screen lifecycle
+boundaries and each music second, using native `PlayerStageStats` getters.
+Song Lua queries of possible, current possible and actual dance points also
+record their returned values. Errors or dropped observations reject the
+capture. These traces need archive normalization and a DeadSync comparison
+before they can serve as accepted whole-song fixtures.
+
+`--autoplay 0|1` defaults to `1`. Use `0` to observe real missed-note scoring
+without injecting inputs. Native `Player::HandleTapRowScore` skips scoring
+for autoplay, so autoplay does not advance current possible dance points.
+
 ITGmania publishes the staged JSON trace atomically when `RageFile` closes
 it. The collector stops and reaps the engine on every exit, including
 invalid output and timeouts.
@@ -181,6 +195,8 @@ The control generates silent audio in a temporary directory. It checks that
 the native Lua global survives, the selected difficulty changes from
 Challenge to Easy, stage totals are rebuilt for the smaller chart, and the
 null renderer remains active. It does not create a whole-song archive.
+Add `--until-gameplay-end --autoplay 0` to verify native evaluation, stage
+commitment, missed-row point totals and life changes after the reload.
 
 `ITGMANIA_ROOT` can also select the source tree. If neither the option nor the
 environment variable is present, the CLI uses `vendor/itgmania` relative to this

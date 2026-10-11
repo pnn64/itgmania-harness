@@ -54,7 +54,9 @@ local function configure_song()
 	if cfg.style == "couple" or cfg.style == "routine" then
 		GAMESTATE:SetCurrentSteps(PLAYER_2, selected)
 	end
-	GAMESTATE:GetPlayerState(PLAYER_1):GetPlayerOptions("ModsLevel_Preferred"):PlayerAutoPlay(1)
+	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+		GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred"):PlayerAutoPlay(cfg.autoplay)
+	end
 	return selected, nil
 end
 

@@ -206,6 +206,9 @@ local function call_in_context(context, fn, ...)
 	local previous = active_context
 	active_context = context
 	local result = pack(pcall(fn, ...))
+	if not result[1] then
+		emit("error", nil, "callback.error", {}, {message = tostring(result[2])})
+	end
 	active_context = previous
 	if not result[1] then error(result[2], 0) end
 	return unpack(result, 2, result.n)
@@ -426,6 +429,12 @@ local function assign_result_path(class, method, args, result)
 	elseif class == "PlayerState" and method == "GetPlayerOptions" then
 		actor_paths[result] = (actor_paths[args[1]] or "player-state")
 			.. "/options:" .. tostring(args[2])
+	elseif type(result) == "table" and class == "StatsManager" and method == "GetCurStageStats" then
+		actor_paths[result] = "stage:current"
+	elseif type(result) == "table" and class == "StatsManager" and method == "GetPlayedStageStats" then
+		actor_paths[result] = "stage:played:" .. tostring(args[2])
+	elseif type(result) == "table" and class == "StageStats" and method == "GetPlayerStageStats" then
+		actor_paths[result] = (actor_paths[args[1]] or "stage") .. "/player:" .. tostring(args[2])
 	end
 end
 
@@ -460,7 +469,10 @@ local function install_class_hook(class)
 		original_methods[class][name] = original
 		methods[name] = function(...)
 			local args = pack(...)
-			local should_emit = active_context ~= nil and not query_method(class, name, args.n)
+			local stage_query = class == "PlayerStageStats" and (
+				name == "GetPossibleDancePoints" or name == "GetCurrentPossibleDancePoints"
+				or name == "GetActualDancePoints")
+			local should_emit = active_context ~= nil and (stage_query or not query_method(class, name, args.n))
 			local event_args = should_emit and safe_args(args, 2) or nil
 			local actor_id = nil
 			if should_emit and looks_like_actor(args[1]) then actor_id = external_actor(args[1]) end
@@ -469,10 +481,13 @@ local function install_class_hook(class)
 			end
 			local event = nil
 			if should_emit then
-				event = emit(event_kind(class, name), actor_id or actor_paths[args[1]],
+				event = emit(stage_query and "query" or event_kind(class, name), actor_id or actor_paths[args[1]],
 					class .. "." .. name, event_args)
 			end
 			local result = pack(original(unpack(args, 1, args.n)))
+			if event and stage_query then
+				event.detail = {results = safe_args(result, 1)}
+			end
 			if event and actor_id then
 				local time_left = native_tween_time_left(args[1])
 				if time_left ~= nil then
@@ -523,14 +538,89 @@ local function write_result(document)
 end
 
 local trace = {}
+local stage_samples = {}
+local dropped_stage_samples = 0
+local scene_count = 0
+local stages_before = nil
+local last_screen = nil
 
-function trace.finish()
+function trace.sample_stage(phase, stage)
+	if finished then return end
+	if #stage_samples >= 10000 then
+		dropped_stage_samples = dropped_stage_samples + 1
+		return
+	end
+	stage = stage or STATSMAN:GetCurStageStats()
+	local beat, seconds = position()
+	local gameplay_seconds = stage:GetGameplaySeconds()
+	local players = {}
+	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+		local stats = stage:GetPlayerStageStats(player)
+		local steps = GAMESTATE:GetCurrentSteps(player)
+		-- GetLifeRecord scales over samples-1. Two samples avoid its native
+		-- division by zero and expose the initial and latest recorded life.
+		local life = stats:GetLifeRecord(gameplay_seconds, 2)
+		players[#players + 1] = {
+			player = tostring(player),
+			difficulty = steps and tostring(steps:GetDifficulty()) or nil,
+			description = steps and steps:GetDescription() or nil,
+			meter = steps and steps:GetMeter() or nil,
+			autoplay = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Current"):PlayerAutoPlay(),
+			possible = stats:GetPossibleDancePoints(),
+			current_possible = stats:GetCurrentPossibleDancePoints(),
+			actual = stats:GetActualDancePoints(),
+			score = stats:GetScore(),
+			current_max_score = stats:GetCurMaxScore(),
+			failed = stats:GetFailed(),
+			alive_seconds = stats:GetAliveSeconds(),
+			life_begin = life[1],
+			life_latest = life[2],
+			w1 = stats:GetTapNoteScores("TapNoteScore_W1"),
+			w2 = stats:GetTapNoteScores("TapNoteScore_W2"),
+			misses = stats:GetTapNoteScores("TapNoteScore_Miss"),
+		}
+	end
+	stage_samples[#stage_samples + 1] = {
+		scene = scene_count, phase = phase, beat = beat, seconds = seconds,
+		gameplay_seconds = gameplay_seconds, players = players,
+	}
+end
+
+function trace.scene_init()
+	scene_count = scene_count + 1
+	if stages_before == nil then stages_before = STATSMAN:GetStagesPlayed() end
+	trace.sample_stage("overlay-init")
+end
+
+function trace.screen_changed()
+	local screen = SCREENMAN:GetTopScreen()
+	local name = screen and screen:GetName() or nil
+	if name == "ScreenGameplay" then
+		trace.sample_stage("screen-active")
+	elseif last_screen == "ScreenGameplay" and cfg.until_gameplay_end then
+		local stages_after = STATSMAN:GetStagesPlayed()
+		local committed = stages_after > stages_before
+		trace.sample_stage("gameplay-exit", committed and STATSMAN:GetPlayedStageStats(1) or nil)
+		trace.finish({
+			reason = "gameplay-exit", next_screen = name,
+			stage_committed = committed,
+			stages_played_before = stages_before, stages_played_after = stages_after,
+		})
+	end
+	last_screen = name
+end
+
+function trace.finish(completion)
 	if finished then return end
 	finished = true
 	local roots, live_definitions = reachable_definitions()
 	local song = GAMESTATE:GetCurrentSong()
 	local steps = GAMESTATE:GetCurrentSteps(PLAYER_1)
 	local beat, seconds = position()
+	local weights = {}
+	for _, name in ipairs({"W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo"}) do
+		weights[name] = THEME:GetMetric("ScoreKeeperNormal", "PercentScoreWeight" .. name)
+	end
 	write_result({
 		schema_version = cfg.schema_version,
 		oracle = "itgmania_song_lua_semantic_trace",
@@ -539,6 +629,8 @@ function trace.finish()
 		simfile = song and normalize_path(song:GetSongFilePath()) or nil,
 		title = song and song:GetDisplayFullTitle() or nil,
 		theme = cfg.fallback_theme,
+		game_mode = SL and SL.Global and SL.Global.GameMode or nil,
+		scoring_weights = weights,
 		game = GAMESTATE:GetCurrentGame():GetName(),
 		style = GAMESTATE:GetCurrentStyle():GetName(),
 		steps_type = steps and tostring(steps:GetStepsType()) or nil,
@@ -552,6 +644,8 @@ function trace.finish()
 			logical_height = SCREEN_HEIGHT,
 		},
 		trace_until_beat = cfg.until_beat,
+		completion = completion,
+		input = {autoplay = cfg.autoplay, injected_inputs = false},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
 			actor_definitions = true,
@@ -563,12 +657,16 @@ function trace.finish()
 			modifier_mutations = true,
 			public_tween_time = true,
 			draw_order_calls = true,
+			native_screen_lifecycle = true,
+			native_stage_statistics = true,
 		},
 		roots = roots,
 		actor_definitions = live_definitions,
 		runtime_actors = actors,
 		events = events,
 		dropped_events = dropped_events,
+		stage_samples = stage_samples,
+		dropped_stage_samples = dropped_stage_samples,
 	})
 end
 
@@ -576,6 +674,7 @@ install_definition_hook()
 for _, class in ipairs({
 	"Actor", "ActorFrame", "ActorFrameTexture", "ActorMultiVertex", "ActorProxy",
 	"ActorScroller", "ActorSound", "BitmapText", "Model", "Sprite", "Screen",
+	"ScreenWithMenuElements", "ScreenGameplay", "StatsManager", "StageStats", "PlayerStageStats",
 	"GameState", "MessageManager", "PlayerOptions", "PlayerState", "ScreenManager",
 	"SongOptions",
 }) do

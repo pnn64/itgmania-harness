@@ -10,6 +10,7 @@ const THEME_NAME: &str = "itgmania-harness";
 const RESULT_PATH: &str = "Save/itgmania-harness/song-lua-trace.json";
 const INIT_LUA: &str = include_str!("../probe_theme/ScreenSongLuaHarness overlay.lua");
 const GAMEPLAY_LUA: &str = include_str!("../probe_theme/ScreenGameplay overlay.lua");
+const SYSTEM_LUA: &str = include_str!("../probe_theme/ScreenSystemLayer overlay.lua");
 const TRACE_LUA: &str = include_str!("../probe_theme/SongLuaTrace.lua");
 
 #[derive(Debug)]
@@ -23,6 +24,8 @@ pub struct Options {
     pub timeout: Duration,
     pub keep_run_dir: bool,
     pub headless: bool,
+    pub until_gameplay_end: bool,
+    pub autoplay: bool,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -122,6 +125,19 @@ fn capture_in(
                 && document.pointer("/display/video_renderers").and_then(Value::as_str) != Some("null")
             {
                 return Err(Error::new("ITGmania did not retain the requested null renderer"));
+            }
+            if options.until_gameplay_end {
+                if document.pointer("/completion/reason").and_then(Value::as_str) != Some("gameplay-exit") {
+                    return Err(Error::new("ITGmania did not reach native gameplay exit"));
+                }
+                if document.get("dropped_events").and_then(Value::as_u64).unwrap_or(0) != 0
+                    || document.get("dropped_stage_samples").and_then(Value::as_u64).unwrap_or(0) != 0
+                    || document.get("events").and_then(Value::as_array).is_some_and(|events| {
+                        events.iter().any(|event| event.get("kind").and_then(Value::as_str) == Some("error"))
+                    })
+                {
+                    return Err(Error::new("native gameplay capture contains errors or dropped observations"));
+                }
             }
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
             crate::song_lua_semantics::enrich(&mut document).map_err(|source| {
@@ -252,6 +268,10 @@ fn prepare_install(
         &run_dir.join("Themes/itgmania-harness/BGAnimations/ScreenGameplay overlay.lua"),
         GAMEPLAY_LUA.as_bytes(),
     )?;
+    write(
+        &run_dir.join("Themes/itgmania-harness/BGAnimations/ScreenSystemLayer overlay.lua"),
+        SYSTEM_LUA.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -378,8 +398,11 @@ fn config_lua(options: &Options) -> String {
          \tdifficulty = {},\n\
          \tfallback_theme = {},\n\
          \tbase_gameplay_overlay = {},\n\
+         \tbase_system_overlay = {},\n\
          \tresult_path = \"/Save/itgmania-harness/song-lua-trace.json\",\n\
          \tuntil_beat = {:.9},\n\
+         \tuntil_gameplay_end = {},\n\
+         \tautoplay = {},\n\
          \tmax_events = 250000,\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
@@ -387,7 +410,10 @@ fn config_lua(options: &Options) -> String {
         difficulty,
         lua_quote(&options.fallback_theme),
         lua_quote(&base_overlay),
-        options.until_beat
+        lua_quote(&format!("/Themes/{}/BGAnimations/ScreenSystemLayer overlay", options.fallback_theme)),
+        options.until_beat,
+        options.until_gameplay_end,
+        u8::from(options.autoplay)
     )
 }
 
@@ -571,6 +597,8 @@ mod tests {
             timeout: Duration::from_secs(30),
             keep_run_dir: false,
             headless: false,
+            until_gameplay_end: false,
+            autoplay: true,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -613,6 +641,8 @@ mod tests {
             timeout: Duration::from_secs(30),
             keep_run_dir: false,
             headless: true,
+            until_gameplay_end: false,
+            autoplay: true,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();
