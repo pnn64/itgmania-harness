@@ -1,0 +1,15 @@
+#VERSION:0.83;
+#TITLE:Native missed hold row control;
+#MUSIC:music.wav;
+#BPMS:0=120;
+#FGCHANGES:0=hold-row.lua=1=0=0=1=====;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Challenge;
+#METER:1;
+#NOTES:
+2000
+3000
+0000
+0000
+;

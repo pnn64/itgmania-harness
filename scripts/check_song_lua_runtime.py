@@ -40,6 +40,22 @@ def check_foregrounds(document):
     assert any(event["operation"].endswith("StartTransitioningScreen") for event in document["events"])
 
 
+def check_hold_row(document):
+    events = [event for event in document["events"]
+              if event["operation"] == "MessageManager.Broadcast"
+              and event["args"][0] == "HarnessHoldRow"]
+    assert [event["args"][1]["current_possible"] for event in events] == [0, 5, 10], events
+    # Player::UpdateHoldNotes scores at BeatToNoteRow(song_beat) >= tail_row,
+    # rounded on the fixed 48-row beat grid, before this hold's exact tail beat.
+    tail = events[-1]
+    assert 1 - 0.5 / 48 <= tail["beat"] < 1, tail
+    assert document["completion"]["reason"] == "gameplay-exit", document["completion"]
+    assert document["completion"]["stage_committed"], document["completion"]
+    final = document["stage_samples"][-1]["players"][0]
+    assert final["possible"] == final["current_possible"] == 10, final
+    assert final["misses"] == 1, final
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--itgmania-bin", type=Path, required=True)
@@ -48,7 +64,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
-    parser.add_argument("--fixture", choices=("reload", "foreground"), default="reload")
+    parser.add_argument("--fixture", choices=("reload", "foreground", "hold-row"), default="reload")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -113,8 +129,8 @@ def main():
         assert all(frame["delta"] >= 0 for frame in frames)
         assert all(right["wall_seconds"] >= left["wall_seconds"] for left, right in zip(frames, frames[1:]))
         assert not [event for event in document["events"] if event["kind"] == "error"]
-        if args.fixture == "foreground":
-            check_foregrounds(document)
+        if args.fixture != "reload":
+            {"foreground": check_foregrounds, "hold-row": check_hold_row}[args.fixture](document)
             print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
                               "completion": document["completion"], "update_frames": len(frames)}))
             return
