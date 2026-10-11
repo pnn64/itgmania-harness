@@ -56,6 +56,31 @@ def check_hold_row(document):
     assert final["misses"] == 1, final
 
 
+def check_reload_queue(document):
+    events = [event for event in document["events"]
+              if event["operation"] == "MessageManager.Broadcast"
+              and event["args"][0].startswith("HarnessReloadQueue")]
+    assert [event["args"][0] for event in events] == [
+        "HarnessReloadQueueOn", "HarnessReloadQueueOn",
+        "HarnessReloadQueueTick", "HarnessReloadQueueDone"], events
+    assert [event["args"][1]["count"] for event in events] == [1, 2, 2, 2], events
+    tick, done = events[-2:]
+    assert 0.05 <= tick["seconds"] < 0.08, tick
+    # Queue execution carries the first timer's residual frame time into the
+    # next sleep, so callback timestamps can differ by less than 1.3 seconds.
+    assert 1.27 <= done["seconds"] - tick["seconds"] < 1.33, events
+    assert tick["args"][1]["old_updates"] > 0, tick
+    assert tick["args"][1]["old_updates"] == done["args"][1]["old_updates"], events
+    assert document["completion"]["reason"] == "gameplay-exit", document["completion"]
+    assert document["completion"]["stage_committed"], document["completion"]
+    requests = [event for event in document["events"]
+                if event["operation"] == "ScreenManager.SetNewScreen"]
+    assert len(requests) == 1 and requests[0]["args"] == ["ScreenGameplay"], requests
+    transitions = [event for event in document["events"]
+                   if event["operation"].endswith("StartTransitioningScreen")]
+    assert len(transitions) == 1 and transitions[0]["args"] == ["SM_DoNextScreen"], transitions
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--itgmania-bin", type=Path, required=True)
@@ -64,7 +89,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
-    parser.add_argument("--fixture", choices=("reload", "foreground", "hold-row"), default="reload")
+    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row"), default="reload")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -125,12 +150,14 @@ def main():
         assert document["dropped_update_frames"] == 0
         assert document["update_frame_phase"] == "gameplay-overlay-probe"
         assert [frame["sequence"] for frame in frames] == list(range(1, len(frames) + 1))
-        assert {frame["scene"] for frame in frames} == ({1, 2} if args.fixture == "reload" else {1})
+        assert {frame["scene"] for frame in frames} == (
+            {1, 2} if args.fixture in ("reload", "reload-queue") else {1})
         assert all(frame["delta"] >= 0 for frame in frames)
         assert all(right["wall_seconds"] >= left["wall_seconds"] for left, right in zip(frames, frames[1:]))
         assert not [event for event in document["events"] if event["kind"] == "error"]
         if args.fixture != "reload":
-            {"foreground": check_foregrounds, "hold-row": check_hold_row}[args.fixture](document)
+            {"foreground": check_foregrounds, "hold-row": check_hold_row,
+             "reload-queue": check_reload_queue}[args.fixture](document)
             print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
                               "completion": document["completion"], "update_frames": len(frames)}))
             return
