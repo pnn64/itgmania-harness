@@ -2066,13 +2066,12 @@ SCREENMAN = {
 	SystemMessage = function(_, message) emit("call", nil, "ScreenManager.SystemMessage", safe_args(message)) end,
 	SetNewScreen = function(_, screen)
 		emit("call", nil, "ScreenManager.SetNewScreen", safe_args(screen))
-		-- ScreenManager::SetNewScreen queues a load that Update executes after
-		-- updating the current screen. This host has no screen-load dispatcher.
-		-- Preserve the request for diagnosis without certifying its old scene.
-		record_runtime_error(nil, "ScreenManager.SetNewScreen", screen,
-			"native delayed screen loading is unavailable in the headless song host")
+		_ITG_SCREEN_DISPATCH("request", screen)
 	end,
 }
+_ITG_SCREEN_DISPATCH("init", function(operation, scene, delta, text)
+	manual.screen_dispatch(operation, scene, delta, text)
+end)
 
 DISPLAY = {
 	GetDisplayWidth = function() return harness.display_width end,
@@ -3266,6 +3265,33 @@ end
 for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "Begin") end) end
 for _, root in ipairs(loaded_roots) do visit(root.actor, function(actor) run_command(actor, "On") end) end
 
+manual.screen_dispatch = function(operation, scene, delta, text)
+	if operation == "update" then
+		advance_actor(top_screen, delta)
+		run_scheduled_beats()
+	elseif operation == "end" then
+		run_command_tree(top_screen, "End")
+		visit(top_screen, function(actor)
+			local subscriber = rawget(actor, "native_subscriber")
+			if subscriber then
+				actor.retired_message_order = _ITG_MESSAGE_RANK(subscriber)
+				_ITG_MESSAGE_RETIRE(subscriber)
+				actor.native_subscriber = nil
+			end
+		end)
+		top_screen = nil
+	elseif operation == "load" then
+		-- The dispatch boundary executes ScreenManager.cpp unchanged. A new
+		-- ScreenGameplay needs Player, statistics, input and foreground loading;
+		-- do not keep updating the deleted scene or certify a synthetic reload.
+		error("native ScreenGameplay construction is unavailable in the headless song host: " .. text)
+	elseif operation == "broadcast" then
+		broadcast(text)
+	elseif operation == "error" then
+		record_runtime_error(nil, "ScreenManager.LoadDelayedScreen", text, text)
+	end
+end
+
 local function crosses_action(previous, beat, first_frame)
 	for _, item in ipairs(scheduled_beats) do
 		local action_beat = tonumber(item.beat) or 0
@@ -3308,8 +3334,11 @@ while true do
 	if _ITG_OPTIONS_RATE_TWEENS() then
 		delta = _ITG_FLOAT(delta * manual.song_options.ModsLevel_Current:MusicRate())
 	end
-	advance_actor(top_screen, delta)
-	run_scheduled_beats()
+	local dispatched, dispatch_error = pcall(_ITG_SCREEN_DISPATCH, "update", delta)
+	if not dispatched then
+		record_runtime_error(nil, "ScreenManager.LoadDelayedScreen", "ScreenGameplay", dispatch_error)
+		break
+	end
 	manual.run(loaded_roots)
 	update_frames[#update_frames + 1] = { current_beat, current_seconds }
 	-- Setter events are downsampled. Preserve own render state on every frame,
@@ -3360,7 +3389,8 @@ capture_operations = true
 for _, record in ipairs(runtime_actors) do
 	local actor = actor_by_id[record.id]
 	if actor then
-		record.message_order = _ITG_MESSAGE_RANK(rawget(actor, "native_subscriber"))
+		local subscriber = rawget(actor, "native_subscriber")
+		record.message_order = subscriber and _ITG_MESSAGE_RANK(subscriber) or actor.retired_message_order
 		-- Keep raw floats while comparing successive frames, then encode the
 		-- native nonfinite kind before JSON would replace it with null.
 		for _, sample in ipairs(record.render_state_samples or {}) do
@@ -3461,6 +3491,7 @@ return json_encode({
 		native_step_selection = harness.native_stage_scores_loaded == true,
 		stage_score_judgments = false,
 		delayed_screen_loading = false,
+		native_delayed_screen_dispatch = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
 		sprite_shadow_samples = true,

@@ -1107,3 +1107,12 @@ The prior harness produces identical metadata for all ten inputs and identical
 pixels for its one captured input. Prepared pixel coverage expands from one
 image to nine. This is CPU upload evidence; native GPU framebuffer parity and
 DeadSync's physical tiny Sprite preparation remain open.
+
+Harness 0.1.75 runs the pinned `ScreenManager.cpp` request, update and delayed
+dispatch bodies unchanged around the headless screen adapter. `SetNewScreen`
+keeps the current screen available through the rest of its command and update;
+the last request wins, and native dispatch ends the old screen before loading.
+The control checks zero first-update delta, update-before-End ordering, and
+archive rejection when the replacement cannot be constructed. The harness
+still reports `delayed_screen_loading=false`: native ScreenGameplay construction,
+Player judgment progress and full scene reconstruction remain unsupported.

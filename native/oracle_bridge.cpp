@@ -79,6 +79,7 @@ class SongLuaMessages {
     Closure(Check, "_ITG_MESSAGE_CHECK");
     Closure(Broadcast, "_ITG_MESSAGE_BROADCAST");
     Closure(Rank, "_ITG_MESSAGE_RANK");
+    Closure(Retire, "_ITG_MESSAGE_RETIRE");
   }
 
  private:
@@ -159,6 +160,11 @@ class SongLuaMessages {
     if (!MESSAGEMAN->IsSubscribedToMessage(&subscriber, name)) {
       subscriber.SubscribeToMessage(name);
     }
+    return 0;
+  }
+
+  static int Retire(lua_State* L) {
+    Owner(L).Get(L, 1).UnsubscribeAll();
     return 0;
   }
 
@@ -1110,6 +1116,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
   const std::lock_guard<std::mutex> guard(harness_native_mutex());
   lua_State* state = nullptr;
   std::unique_ptr<SongLuaMessages> messages;
+  std::unique_ptr<SongLuaScreens, decltype(&destroy_song_screens)> screens(nullptr, destroy_song_screens);
   std::unique_ptr<SongLuaModels, decltype(&destroy_song_models)> models(nullptr, destroy_song_models);
   // Borrowed Lua handles never outlive their semantic session, including errors.
   std::unique_ptr<SongLuaVM, decltype(&destroy_song_vm)> vm(nullptr, destroy_song_vm);
@@ -1222,6 +1229,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     }, 1);
     lua_setglobal(state, "_ITG_INIT_NOTESKIN");
     install_option_queries(state);
+    screens.reset(install_song_screens(state));
     install_actor_math(state);
     models.reset(install_song_models(state));
     lua_pushlightuserdata(state, &splines);
@@ -1454,12 +1462,14 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
         "@semantic_host.lua");
     if (load_status != 0) {
       const std::string message = lua_error_text(state);
+      screens.reset();
       messages.reset();
       vm.reset();
       state = nullptr;
       return song_lua_semantic_error_buffer(message);
     }
     const int call_status = lua_pcall(state, 0, 1, 0);
+    screens.reset();
     if (call_status != 0) {
       const std::string message = lua_error_text(state);
       messages.reset();
@@ -1486,6 +1496,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     out.string(document);
     return out.release();
   } catch (const std::exception& error) {
+    screens.reset();
     messages.reset();
     if (state != nullptr) vm.reset();
     try {
@@ -1494,6 +1505,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       return {nullptr, 0};
     }
   } catch (...) {
+    screens.reset();
     messages.reset();
     if (state != nullptr) vm.reset();
     try {

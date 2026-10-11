@@ -25,6 +25,9 @@ void install_option_queries(lua_State* state, bool scoring_control = false);
 void clear_option_queries(lua_State* state);
 class Song;
 void bind_score_song(lua_State* state, Song* song);
+struct SongLuaScreens;
+SongLuaScreens* install_song_screens(lua_State* state);
+void destroy_song_screens(SongLuaScreens* screens);
 // Source-backed score controls are serialized with the other native oracles.
 void install_score_queries(lua_State* state);
 void clear_score_queries(lua_State* state);

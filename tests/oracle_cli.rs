@@ -293,7 +293,7 @@ return Def.ActorFrame{}
 }
 
 #[test]
-fn excludes_unexecuted_screen_reload_archives() {
+fn defers_native_screen_requests_and_excludes_incomplete_reloads() {
     let directory = temp_dir("screen-reload");
     let corpus = directory.join("corpus");
     std::fs::create_dir_all(&corpus).unwrap();
@@ -301,8 +301,20 @@ fn excludes_unexecuted_screen_reload_archives() {
         "#TITLE:Reload;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n#NOTES:dance-single::Challenge:1:0,0,0,0,0:\n1000\n;\n",
     ).unwrap();
     std::fs::write(corpus.join("control.lua"), r#"
-return Def.ActorFrame { OnCommand=function()
+return Def.ActorFrame { OnCommand=function(self)
+    local screen = SCREENMAN:GetTopScreen()
+    SCREENMAN:SetNewScreen('LastRequestMustReplaceThis')
     SCREENMAN:SetNewScreen('ScreenGameplay')
+    assert(SCREENMAN:GetTopScreen() == screen)
+    self:x(1)
+    self:SetUpdateFunction(function(actor, delta)
+        assert(delta == 0, 'first native screen update must have zero delta')
+        assert(SCREENMAN:GetTopScreen() == screen)
+        actor:x(2)
+    end)
+end, EndCommand=function(self)
+    assert(SCREENMAN:GetTopScreen() ~= nil)
+    self:x(3)
 end }
 "#).unwrap();
     let traces = directory.join("traces");
@@ -314,11 +326,25 @@ end }
     ).unwrap();
     assert_eq!(trace["capabilities"]["runtime_complete"], false);
     assert_eq!(trace["capabilities"]["delayed_screen_loading"], false);
+    assert_eq!(trace["capabilities"]["native_delayed_screen_dispatch"], true);
     let errors = trace["runtime_errors"].as_array().unwrap();
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0]["operation"], "ScreenManager.SetNewScreen");
+    assert_eq!(errors[0]["operation"], "ScreenManager.LoadDelayedScreen");
     assert_eq!(errors[0]["name"], "ScreenGameplay");
-    assert!(errors[0]["message"].as_str().unwrap().contains("delayed screen loading"));
+    assert!(errors[0]["message"].as_str().unwrap().contains("ScreenGameplay construction"));
+    let tween_calls: Vec<_> = trace["tween_tracks"].as_array().unwrap().iter()
+        .flat_map(|track| track["segments"].as_array().unwrap())
+        .flat_map(|segment| segment["operations"].as_array().unwrap())
+        .filter(|operation| operation["operation"] == "ActorFrame.x")
+        .map(|operation| (operation["seq"].as_u64().unwrap(), operation["args"][0].clone())).collect();
+    let update = trace["operation_tracks"].as_array().unwrap().iter()
+        .find(|track| track["operation"] == "ActorFrame.x").unwrap();
+    let sample = &update["samples"][0];
+    let mut positions = tween_calls;
+    positions.push((sample[0].as_u64().unwrap(), sample[3][0].clone()));
+    positions.sort_by_key(|(seq, _)| *seq);
+    assert_eq!(positions.iter().map(|(_, x)| x.clone()).collect::<Vec<_>>(),
+        vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)]);
     let manifest: Value = serde_json::from_slice(
         &std::fs::read(traces.join("_semantic_manifest.json")).unwrap(),
     ).unwrap();

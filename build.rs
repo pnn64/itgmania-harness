@@ -152,6 +152,7 @@ fn main() {
     println!("cargo:rerun-if-changed=native/actor_oracle.cpp");
     println!("cargo:rerun-if-changed=native/options_oracle.cpp");
     println!("cargo:rerun-if-changed=native/scoring_oracle.cpp");
+    println!("cargo:rerun-if-changed=native/screen_lifecycle.cpp");
     println!("cargo:rerun-if-changed=native/runtime_stubs.cpp");
     println!("cargo:rerun-if-changed=native/runtime_stubs.h");
 
@@ -216,6 +217,7 @@ fn main() {
     write_player_option_methods(&root, &out);
     write_song_stats(&root, &out);
     write_scoring_state(&root, &out);
+    write_screen_lifecycle(&root, &out);
     write_lua_binding(&root, &out);
     prepare_texture_sources(&root, &out);
     compile_image_deps(&root, &out, &target_os);
@@ -253,6 +255,7 @@ fn main() {
         .file(manifest.join("native/actor_oracle.cpp"))
         .file(manifest.join("native/options_oracle.cpp"))
         .file(manifest.join("native/scoring_oracle.cpp"))
+        .file(manifest.join("native/screen_lifecycle.cpp"))
         .file(manifest.join("native/runtime_stubs.cpp"))
         .file(out.join("lua_binding.cpp"));
 
@@ -515,6 +518,27 @@ fn compile_audio_deps(root: &Path, out: &Path) {
         container.file(source);
     }
     container.compile("itgmania_ogg");
+}
+
+fn write_screen_lifecycle(root: &Path, out: &Path) {
+    let path = root.join("src/ScreenManager.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native screen dispatcher");
+    let mut methods = String::new();
+    for (start, end) in [
+        ("struct LoadedScreen {", "Actor* g_pSharedBGA;"),
+        ("void PushLoadedScreen(", "bool ScreenIsPrepped("),
+        ("bool ScreenIsPrepped(", "void BeforeDeleteScreen()"),
+        ("ScreenMessage ScreenManager::PopTopScreenInternal(", "void ScreenManager::Update("),
+        ("void ScreenManager::Update(", "void ScreenManager::Draw()"),
+        ("void ScreenManager::SetNewScreen(", "/* Activate the screen"),
+        ("void ScreenManager::LoadDelayedScreen()", "void ScreenManager::AddNewScreenToTop("),
+    ] {
+        let begin = source.find(start).expect("native screen method");
+        let finish = begin + source[begin..].find(end).expect("native screen method end");
+        methods.push_str(&source[begin..finish]);
+    }
+    fs::write(out.join("screen_lifecycle.inc"), methods).expect("write native screen dispatcher");
 }
 
 fn write_song_stats(root: &Path, out: &Path) {
