@@ -139,6 +139,7 @@ fn capture_in(
                     return Err(Error::new("native gameplay capture contains errors or dropped observations"));
                 }
             }
+            validate_update_frames(&document)?;
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
             crate::song_lua_semantics::enrich(&mut document).map_err(|source| {
                 Error::new(format!("could not derive song Lua semantics: {source}"))
@@ -379,6 +380,34 @@ fn metrics(fallback_theme: &str) -> String {
     )
 }
 
+fn validate_update_frames(document: &Value) -> Result<(), Error> {
+    let frames = document.get("update_frames").and_then(Value::as_array)
+        .filter(|frames| !frames.is_empty())
+        .ok_or_else(|| Error::new("native gameplay capture has no update-frame clocks"))?;
+    if document.pointer("/capabilities/native_update_frames").and_then(Value::as_bool) != Some(true)
+        || document.get("dropped_update_frames").and_then(Value::as_u64) != Some(0)
+        || document.get("update_frame_phase").and_then(Value::as_str) != Some("gameplay-overlay-probe")
+    {
+        return Err(Error::new("native gameplay update-frame capture is incomplete"));
+    }
+    let mut previous_scene = 0;
+    let mut previous_wall = 0.0;
+    for (index, frame) in frames.iter().enumerate() {
+        let scene = frame.get("scene").and_then(Value::as_u64).unwrap_or(0);
+        let finite = |key| frame.get(key).and_then(Value::as_f64).filter(|value| value.is_finite());
+        let valid = frame.get("sequence").and_then(Value::as_u64) == Some(index as u64 + 1)
+            && scene > 0 && scene >= previous_scene
+            && finite("delta").is_some_and(|delta| delta >= 0.0)
+            && finite("seconds").is_some() && finite("beat").is_some()
+            && finite("wall_seconds").is_some_and(|wall| wall >= previous_wall);
+        if !valid { return Err(Error::new(format!("invalid native gameplay update-frame clock at {}", index + 1))); }
+        previous_scene = scene;
+        // The validation above proves this finite clock exists.
+        previous_wall = finite("wall_seconds").expect("validated native wall clock");
+    }
+    Ok(())
+}
+
 fn config_lua(options: &Options) -> String {
     let difficulty = options
         .difficulty
@@ -604,6 +633,38 @@ mod tests {
         assert!(lua.contains("schema_version = 1"));
         assert!(lua.contains("until_beat = 4.500000000"));
         assert!(lua.contains("difficulty = \"Challenge\""));
+    }
+
+    #[test]
+    fn update_clocks_allow_reload_music_reset() {
+        let document = serde_json::json!({
+            "capabilities": {"native_update_frames": true}, "dropped_update_frames": 0,
+            "update_frame_phase": "gameplay-overlay-probe",
+            "update_frames": [
+                {"sequence": 1, "scene": 1, "delta": 0, "seconds": -1, "beat": -2, "wall_seconds": 10},
+                {"sequence": 2, "scene": 1, "delta": 0.02, "seconds": 1, "beat": 2, "wall_seconds": 10.02},
+                {"sequence": 3, "scene": 2, "delta": 0, "seconds": -6, "beat": -6, "wall_seconds": 10.03}
+            ]
+        });
+        assert!(validate_update_frames(&document).is_ok());
+        let mut lost = document.clone();
+        lost["dropped_update_frames"] = serde_json::json!(1);
+        assert!(validate_update_frames(&lost).is_err());
+        let mut reversed = document.clone();
+        reversed["update_frames"][2]["wall_seconds"] = serde_json::json!(9);
+        assert!(validate_update_frames(&reversed).is_err());
+        let mut missing = document.clone();
+        missing["update_frames"][1]["delta"] = Value::Null;
+        assert!(validate_update_frames(&missing).is_err());
+        let mut gap = document.clone();
+        gap["update_frames"][2]["sequence"] = serde_json::json!(4);
+        assert!(validate_update_frames(&gap).is_err());
+    }
+
+    #[test]
+    fn update_clocks_require_actual_frames() {
+        assert!(validate_update_frames(&serde_json::json!({"update_frames": []})).is_err());
+        assert!(validate_update_frames(&serde_json::json!({})).is_err());
     }
 
     #[test]

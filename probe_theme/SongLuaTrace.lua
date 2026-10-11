@@ -543,9 +543,27 @@ end
 local trace = {}
 local stage_samples = {}
 local dropped_stage_samples = 0
+local update_frames = {}
+local dropped_update_frames = 0
 local scene_count = 0
 local stages_before = nil
 local last_screen = nil
+
+-- Clock inputs are recorded separately from stage-statistic observations.
+-- Replayers use delta/music/wall time and derive their own beats and scores.
+function trace.sample_update(delta)
+	if finished then return end
+	if #update_frames >= 1000000 then
+		dropped_update_frames = dropped_update_frames + 1
+		return
+	end
+	local beat, seconds = position()
+	update_frames[#update_frames + 1] = {
+		sequence = #update_frames + 1, scene = scene_count,
+		delta = delta, seconds = seconds, beat = beat,
+		wall_seconds = GetTimeSinceStart(),
+	}
+end
 
 function trace.sample_stage(phase, stage)
 	if finished then return end
@@ -648,7 +666,8 @@ function trace.finish(completion)
 		},
 		trace_until_beat = cfg.until_beat,
 		completion = completion,
-		input = {autoplay = cfg.autoplay, injected_inputs = false},
+		input = {autoplay = cfg.autoplay, injected_inputs = false,
+			requested_difficulty = cfg.difficulty, style = cfg.style},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
 			actor_definitions = true,
@@ -662,6 +681,7 @@ function trace.finish(completion)
 			draw_order_calls = true,
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
+			native_update_frames = true,
 		},
 		roots = roots,
 		actor_definitions = live_definitions,
@@ -670,6 +690,9 @@ function trace.finish(completion)
 		dropped_events = dropped_events,
 		stage_samples = stage_samples,
 		dropped_stage_samples = dropped_stage_samples,
+		update_frames = update_frames,
+		dropped_update_frames = dropped_update_frames,
+		update_frame_phase = "gameplay-overlay-probe",
 	})
 end
 

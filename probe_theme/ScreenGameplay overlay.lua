@@ -6,7 +6,8 @@ local probe = Def.ActorFrame {
 	InitCommand = function(self)
 		trace.scene_init()
 		local last_second = nil
-		self:SetUpdateFunction(function(actor)
+		self:SetUpdateFunction(function(actor, delta)
+			trace.sample_update(delta)
 			local second = math.floor(GAMESTATE:GetCurMusicSeconds())
 			if second ~= last_second then
 				last_second = second

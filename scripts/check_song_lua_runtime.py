@@ -43,6 +43,14 @@ def main():
                    and event["args"][0] == "HarnessReloadControl"]
         assert document["display"]["video_renderers"] == "null", document["display"]
         assert document["dropped_events"] == 0, document["dropped_events"]
+        frames = document["update_frames"]
+        assert frames and document["capabilities"]["native_update_frames"]
+        assert document["dropped_update_frames"] == 0
+        assert document["update_frame_phase"] == "gameplay-overlay-probe"
+        assert [frame["sequence"] for frame in frames] == list(range(1, len(frames) + 1))
+        assert {frame["scene"] for frame in frames} == {1, 2}
+        assert all(frame["delta"] >= 0 for frame in frames)
+        assert all(right["wall_seconds"] >= left["wall_seconds"] for left, right in zip(frames, frames[1:]))
         assert not [event for event in document["events"] if event["kind"] == "error"]
         assert [sample["count"] for sample in samples] == [1, 2], samples
         assert [sample["difficulty"] for sample in samples] == [

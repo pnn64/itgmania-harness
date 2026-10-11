@@ -164,6 +164,13 @@ scoring and screen replacement. It records Lua semantics without opening a
 render window; it does not produce framebuffer reference images. Omit this
 option to use the install's normal renderer.
 
+Every executable capture records the actual gameplay-overlay update deltas,
+music positions, beats and monotonic wall times in `update_frames`. These
+clock inputs remain separate from `stage_samples`, which contain observed
+scores and life. Replayers must compute their own beats and stage statistics.
+The capture rejects missing, invalid or dropped update frames. The
+`update_frame_phase` field identifies the observer's place in the actor tree.
+
 Use `--until-gameplay-end` instead of `--until-beat` to keep recording through
 gameplay reloads until the native engine activates a different screen. A
 persistent `ScreenSystemLayer` observer records stage commitment and the
