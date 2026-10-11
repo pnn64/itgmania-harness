@@ -139,7 +139,7 @@ fn capture_in(
                     return Err(Error::new("native gameplay capture contains errors or dropped observations"));
                 }
             }
-            validate_update_frames(&document)?;
+            validate_runtime_inputs(&document)?;
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
             crate::song_lua_semantics::enrich(&mut document).map_err(|source| {
                 Error::new(format!("could not derive song Lua semantics: {source}"))
@@ -380,7 +380,19 @@ fn metrics(fallback_theme: &str) -> String {
     )
 }
 
-fn validate_update_frames(document: &Value) -> Result<(), Error> {
+fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
+    let preferences = document.pointer("/input/preferences").ok_or_else(|| {
+        Error::new("native gameplay capture has no machine preferences")
+    })?;
+    if document.pointer("/capabilities/native_machine_preferences").and_then(Value::as_bool) != Some(true)
+        || !["global_offset_seconds", "visual_delay_seconds"].into_iter().all(|key| {
+            preferences.get(key).and_then(Value::as_f64).is_some_and(f64::is_finite)
+        })
+        || !matches!(preferences.get("default_sync_offset").and_then(Value::as_str),
+            Some("SyncOffset_NULL" | "SyncOffset_ITG"))
+    {
+        return Err(Error::new("native gameplay machine preferences are incomplete"));
+    }
     let frames = document.get("update_frames").and_then(Value::as_array)
         .filter(|frames| !frames.is_empty())
         .ok_or_else(|| Error::new("native gameplay capture has no update-frame clocks"))?;
@@ -638,7 +650,10 @@ mod tests {
     #[test]
     fn update_clocks_allow_reload_music_reset() {
         let document = serde_json::json!({
-            "capabilities": {"native_update_frames": true}, "dropped_update_frames": 0,
+            "capabilities": {"native_update_frames": true, "native_machine_preferences": true},
+            "input": {"preferences": {"global_offset_seconds": -0.008,
+                "default_sync_offset": "SyncOffset_ITG", "visual_delay_seconds": 0}},
+            "dropped_update_frames": 0,
             "update_frame_phase": "gameplay-overlay-probe",
             "update_frames": [
                 {"sequence": 1, "scene": 1, "delta": 0, "seconds": -1, "beat": -2, "wall_seconds": 10},
@@ -646,25 +661,34 @@ mod tests {
                 {"sequence": 3, "scene": 2, "delta": 0, "seconds": -6, "beat": -6, "wall_seconds": 10.03}
             ]
         });
-        assert!(validate_update_frames(&document).is_ok());
+        assert!(validate_runtime_inputs(&document).is_ok());
         let mut lost = document.clone();
         lost["dropped_update_frames"] = serde_json::json!(1);
-        assert!(validate_update_frames(&lost).is_err());
+        assert!(validate_runtime_inputs(&lost).is_err());
         let mut reversed = document.clone();
         reversed["update_frames"][2]["wall_seconds"] = serde_json::json!(9);
-        assert!(validate_update_frames(&reversed).is_err());
+        assert!(validate_runtime_inputs(&reversed).is_err());
         let mut missing = document.clone();
         missing["update_frames"][1]["delta"] = Value::Null;
-        assert!(validate_update_frames(&missing).is_err());
+        assert!(validate_runtime_inputs(&missing).is_err());
         let mut gap = document.clone();
         gap["update_frames"][2]["sequence"] = serde_json::json!(4);
-        assert!(validate_update_frames(&gap).is_err());
+        assert!(validate_runtime_inputs(&gap).is_err());
+        let mut settings = document.clone();
+        settings["input"]["preferences"]["global_offset_seconds"] = Value::Null;
+        assert!(validate_runtime_inputs(&settings).is_err());
+        settings = document.clone();
+        settings["input"]["preferences"]["default_sync_offset"] = serde_json::json!("unknown");
+        assert!(validate_runtime_inputs(&settings).is_err());
+        settings = document.clone();
+        settings["capabilities"]["native_machine_preferences"] = serde_json::json!(false);
+        assert!(validate_runtime_inputs(&settings).is_err());
     }
 
     #[test]
     fn update_clocks_require_actual_frames() {
-        assert!(validate_update_frames(&serde_json::json!({"update_frames": []})).is_err());
-        assert!(validate_update_frames(&serde_json::json!({})).is_err());
+        assert!(validate_runtime_inputs(&serde_json::json!({"update_frames": []})).is_err());
+        assert!(validate_runtime_inputs(&serde_json::json!({})).is_err());
     }
 
     #[test]

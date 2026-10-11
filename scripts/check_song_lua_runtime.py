@@ -45,6 +45,11 @@ def main():
         assert document["dropped_events"] == 0, document["dropped_events"]
         frames = document["update_frames"]
         assert frames and document["capabilities"]["native_update_frames"]
+        assert document["capabilities"]["native_machine_preferences"]
+        preferences = document["input"]["preferences"]
+        assert preferences["default_sync_offset"] in ("SyncOffset_NULL", "SyncOffset_ITG")
+        assert isinstance(preferences["global_offset_seconds"], (int, float))
+        assert isinstance(preferences["visual_delay_seconds"], (int, float))
         assert document["dropped_update_frames"] == 0
         assert document["update_frame_phase"] == "gameplay-overlay-probe"
         assert [frame["sequence"] for frame in frames] == list(range(1, len(frames) + 1))

@@ -170,6 +170,9 @@ clock inputs remain separate from `stage_samples`, which contain observed
 scores and life. Replayers must compute their own beats and stage statistics.
 The capture rejects missing, invalid or dropped update frames. The
 `update_frame_phase` field identifies the observer's place in the actor tree.
+`input.preferences` records the native machine offset, default sync offset and
+visual delay before song Lua loads. Replayers must use these settings when
+loading timing and reject captures that omit them rather than assume defaults.
 
 Use `--until-gameplay-end` instead of `--until-beat` to keep recording through
 gameplay reloads until the native engine activates a different screen. A

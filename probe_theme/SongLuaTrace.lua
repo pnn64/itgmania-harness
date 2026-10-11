@@ -1,5 +1,12 @@
 local cfg = ITGMANIA_HARNESS_CONFIG
 
+-- Read machine inputs before any song constructors or commands can change them.
+local input_preferences = {
+	global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
+	default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
+	visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
+}
+
 local definitions = {}
 local definition_by_table = setmetatable({}, {__mode = "k"})
 local wrapped_commands = setmetatable({}, {__mode = "k"})
@@ -667,7 +674,8 @@ function trace.finish(completion)
 		trace_until_beat = cfg.until_beat,
 		completion = completion,
 		input = {autoplay = cfg.autoplay, injected_inputs = false,
-			requested_difficulty = cfg.difficulty, style = cfg.style},
+			requested_difficulty = cfg.difficulty, style = cfg.style,
+			preferences = input_preferences},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
 			actor_definitions = true,
@@ -682,6 +690,7 @@ function trace.finish(completion)
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
 			native_update_frames = true,
+			native_machine_preferences = true,
 		},
 		roots = roots,
 		actor_definitions = live_definitions,
