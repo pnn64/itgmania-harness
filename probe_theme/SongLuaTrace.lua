@@ -495,6 +495,16 @@ local function install_class_hook(class)
 			if should_emit then
 				event = emit(stage_query and "query" or event_kind(class, name), actor_id or actor_paths[args[1]],
 					class .. "." .. name, event_args)
+				if event then
+					-- The active song command can call native methods that run theme
+					-- Lua synchronously. Preserve its context and the immediate caller
+					-- separately; those nested theme calls are not authored song calls.
+					local caller = debug.getinfo(2, "S") or {}
+					event.caller = {
+						source = normalize_path(caller.source or ""),
+						line = caller.linedefined or -1,
+					}
+				end
 			end
 			local result = pack(original(unpack(args, 1, args.n)))
 			if event and stage_query then
@@ -728,6 +738,7 @@ function trace.finish(completion)
 			native_stage_statistics = true,
 			native_update_frames = true,
 			native_event_scenes = true,
+			native_call_sources = true,
 			native_machine_preferences = input_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
 		},

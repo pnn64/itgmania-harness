@@ -431,6 +431,20 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             prior_scene = scene.expect("validated native event scene");
         }
     }
+    if document.pointer("/capabilities/native_call_sources").and_then(Value::as_bool) == Some(true) {
+        let events = document.get("events").and_then(Value::as_array)
+            .ok_or_else(|| Error::new("native call source capture has no events array"))?;
+        for event in events {
+            if !matches!(event.get("kind").and_then(Value::as_str), Some("call" | "query" | "message" | "modifier")) {
+                continue;
+            }
+            let source = event.pointer("/caller/source").and_then(Value::as_str);
+            let line = event.pointer("/caller/line").and_then(Value::as_i64);
+            if source.is_none_or(str::is_empty) || line.is_none_or(|line| line < -1) {
+                return Err(Error::new("native method event has no valid immediate caller"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -765,6 +779,25 @@ mod tests {
             let mut invalid = epochs.clone();
             *invalid.pointer_mut(pointer).expect("native event field") = value;
             assert!(validate_runtime_inputs(&invalid).is_err(), "accepted invalid event at {pointer}");
+        }
+
+        epochs["capabilities"]["native_call_sources"] = serde_json::json!(true);
+        epochs["events"][1]["kind"] = serde_json::json!("call");
+        epochs["events"][1]["source"] = serde_json::json!("song:/reload.lua");
+        epochs["events"][1]["caller"] = serde_json::json!({"source":"@Themes/Simply Love/overlay.lua", "line":12});
+        epochs["events"][2]["kind"] = serde_json::json!("query");
+        epochs["events"][2]["caller"] = serde_json::json!({"source":"song:/reload.lua", "line":24});
+        assert!(validate_runtime_inputs(&epochs).is_ok());
+        for (pointer, value) in [
+            ("/events/1/caller", Value::Null),
+            ("/events/1/caller/source", serde_json::json!("")),
+            ("/events/2/caller/line", serde_json::json!(-2)),
+            ("/events/2/caller/line", serde_json::json!(1.5)),
+            ("/events", Value::Null),
+        ] {
+            let mut invalid = epochs.clone();
+            *invalid.pointer_mut(pointer).expect("native caller field") = value;
+            assert!(validate_runtime_inputs(&invalid).is_err(), "accepted invalid caller at {pointer}");
         }
     }
 
