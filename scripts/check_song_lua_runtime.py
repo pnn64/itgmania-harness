@@ -96,6 +96,29 @@ def check_broadcast_params(document):
     assert document["completion"]["stage_committed"], document["completion"]
 
 
+def check_end(document):
+    events = [event for event in document["events"]
+              if event["operation"] == "MessageManager.Broadcast"
+              and event["args"][0].startswith("HarnessEnd")]
+    assert [event["args"][0] for event in events] == [
+        "HarnessEndOn", "HarnessEndRoot", "HarnessEndChild", "HarnessEndOn",
+        "HarnessEndLater", "HarnessEndRoot", "HarnessEndChild"], events
+    assert [event["args"][1]["count"] for event in events] == [1, 1, 1, 2, 2, 2, 2], events
+    first, last = events[1]["args"][1], events[-2]["args"][1]
+    assert not first["top_present"] and not last["top_present"], events
+    assert (first["roots"], first["children"]) == (1, 0), events
+    assert (last["roots"], last["children"]) == (2, 1), events
+    assert (first["possible"], first["current_possible"]) == (20, 0), events
+    assert (last["possible"], last["current_possible"]) == (10, 10), events
+    assert events[0]["args"][1]["dark"] == first["dark"] == 0, events
+    assert events[3]["args"][1]["dark"] == last["dark"] == 0.6000000238418579, events
+    assert events[0]["seconds"] == events[1]["seconds"] == events[2]["seconds"], events
+    assert events[3]["seconds"] < events[-1]["seconds"], events
+    assert len([sample for sample in document["stage_samples"] if sample["phase"] == "screen-end"]) == 2
+    assert document["completion"]["reason"] == "gameplay-exit", document["completion"]
+    assert document["completion"]["stage_committed"], document["completion"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--itgmania-bin", type=Path, required=True)
@@ -104,7 +127,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
-    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params"), default="reload")
+    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params", "end"), default="reload")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -166,14 +189,15 @@ def main():
         assert document["update_frame_phase"] == "gameplay-overlay-probe"
         assert [frame["sequence"] for frame in frames] == list(range(1, len(frames) + 1))
         assert {frame["scene"] for frame in frames} == (
-            {1, 2} if args.fixture in ("reload", "reload-queue") else {1})
+            {1, 2} if args.fixture in ("reload", "reload-queue", "end") else {1})
         assert all(frame["delta"] >= 0 for frame in frames)
         assert all(right["wall_seconds"] >= left["wall_seconds"] for left, right in zip(frames, frames[1:]))
         assert not [event for event in document["events"] if event["kind"] == "error"]
         if args.fixture != "reload":
             {"foreground": check_foregrounds, "hold-row": check_hold_row,
              "reload-queue": check_reload_queue,
-             "broadcast-params": check_broadcast_params}[args.fixture](document)
+             "broadcast-params": check_broadcast_params,
+             "end": check_end}[args.fixture](document)
             print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
                               "completion": document["completion"], "update_frames": len(frames)}))
             return
