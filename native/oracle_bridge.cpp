@@ -44,7 +44,6 @@
 #include "ThemeManager.h"
 #include "runtime_stubs.h"
 
-void install_option_queries(lua_State* state);
 void install_actor_math(lua_State* state);
 std::string harness_chart_theme(Steps& steps, const std::string& theme,
     const std::string& host, bool ambiguous);

@@ -36,6 +36,24 @@ fn reads_native_stage_points() {
 }
 
 #[test]
+fn calculates_native_score_points() {
+    for _ in 0..2 {
+        let output = run_fixture("score-points.json");
+        assert_eq!(output["script_errors"], serde_json::json!([]));
+        assert_eq!(output["diagnostics"], serde_json::json!([]));
+    }
+}
+
+#[test]
+fn reads_native_stage_grade() {
+    for _ in 0..2 {
+        let output = run_fixture("stage-grade.json");
+        assert_eq!(output["script_errors"], serde_json::json!([]));
+        assert_eq!(output["diagnostics"], serde_json::json!([]));
+    }
+}
+
+#[test]
 fn executes_native_actor_commands() {
     let output = run_fixture("native-commands.json");
     assert_eq!(output["script_errors"], serde_json::json!([]));

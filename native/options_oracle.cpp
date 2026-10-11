@@ -27,6 +27,8 @@ struct OptionState {
   ModsGroup<SongOptions> saved_song = GAMESTATE->m_SongOptions;
   int64_t current_time = 0;
   bool saved_rate_pref = PREFSMAN->m_bRateModsAffectTweens;
+  AllowW1 saved_allow_w1 = PREFSMAN->m_AllowW1;
+  bool saved_merciful = PREFSMAN->m_bMercifulBeginner;
   NoteSkinManager* saved_skin = NOTESKIN;
   std::unique_ptr<NoteSkinManager> fallback_skin;
   OptionState() {
@@ -44,6 +46,8 @@ struct OptionState {
   ~OptionState() {
     GAMESTATE->m_SongOptions = saved_song;
     PREFSMAN->m_bRateModsAffectTweens.Set(saved_rate_pref);
+    PREFSMAN->m_AllowW1.Set(saved_allow_w1);
+    PREFSMAN->m_bMercifulBeginner.Set(saved_merciful);
     if (fallback_skin) NOTESKIN = saved_skin;
   }
 };
@@ -145,7 +149,8 @@ int using_modifier(lua_State* L) {
 }
 }
 
-void install_option_queries(lua_State* L) {
+void install_option_queries(lua_State* L, bool scoring_control) {
+  if (scoring_control) install_score_queries(L);
   // Native LuaXType builds both directions used by ENUM_INTERFACE.
   LuaLifeType(L);
   LuaPlayerNumber(L);
@@ -331,6 +336,7 @@ void install_option_queries(lua_State* L) {
 // Native assertion controls use the manager's persistent Lua state. Release
 // their query closures and restore the clock/GameState before the next oracle.
 void clear_option_queries(lua_State* L) {
+  clear_score_queries(L);
   for (const char* name : {"_ITG_OPTIONS_UPDATE", "_ITG_OPTIONS_AT", "_ITG_OPTIONS_LEVEL",
       "_ITG_OPTIONS_ADVANCE", "_ITG_OPTIONS_SEED", "_ITG_OPTIONS_RATE_TWEENS",
       "_ITG_OPTIONS_SKINS", "_ITG_OPTIONS_REJECTED", "_ITG_APPLY_STAGE_MODIFIERS",

@@ -288,6 +288,29 @@ Harness 0.1.45 allows surface dimensions up to 4096 so native Model
 262144 pixels replaces independent small dimension limits. Oversized
 requests fail before resizing; native surface algorithms are unchanged.
 
+Harness 0.1.70 extracts unchanged possible-point and point-weight methods
+from `ScoreKeeperNormal.cpp`, with the native weight declarations and dance
+game definition. The score controls execute those methods with native
+`NoteDataUtil` radar calculations. Scoring mode tables come verbatim from
+Simply Love's `SL_Init.lua`; expressions come from its `metrics.ini`, with
+the native fallback metrics loaded first. No score weights are supplied by
+the semantic host.
+
+The assertion control's numeric theme boundary evaluates those expressions
+and converts their values with the linked Lua helpers. This replaces zero numeric getters for
+these scoring groups. The actual `PlayerStageStats::GetGrade` can therefore
+exercise Simply Love's thresholds, including empty and failed stage grades.
+`score-points.json` verifies all three scoring modes, disabled W1, merciful
+beginner weights, row totals, holds, rolls, lifts, fakes and max(pre, post).
+`stage-grade.json` provides the same assertions consumed by DeadSync.
+
+These controls do not execute `ScoreKeeperNormal::Load`, judgment progress,
+course scoring, a gameplay screen reload or the complete theme initialization.
+Those remain separate capture requirements. Song captures continue to reject
+stage grade queries until their native judgment state is populated.
+Requested screen reloads still
+produce a partial capture and no complete archive.
+
 Song file calls now invoke the unchanged `LunaRageFile` class and registration
 from the compiled `src/RageFile.cpp`. This replaces the translated Lua methods
 and deletes the copied outer RageFile implementation, whose `Flush`, return

@@ -210,6 +210,7 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     write_player_option_methods(&root, &out);
     write_song_stats(&root, &out);
+    write_scoring_state(&root, &out);
     prepare_texture_sources(&root, &out);
     compile_image_deps(&root, &out, &target_os);
     write_compat_headers(&out, &target_os);
@@ -521,7 +522,131 @@ fn write_song_stats(root: &Path, out: &Path) {
         + start;
     fs::write(out.join("song_stats.inc"), &source[start..end])
         .expect("write native song stats method");
+}
 
+fn write_scoring_state(root: &Path, out: &Path) {
+    let path = root.join("src/GameState.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(&path).expect("read native scoring game state");
+    let mut methods = String::new();
+    for (start, end) in [
+        (
+            "const Game* GameState::GetCurrentGame() const {",
+            "void GameState::SetCurrentStyle(",
+        ),
+        (
+            "bool GameState::ShowW1() const {",
+            "static ThemeMetric<bool> PROFILE_RECORD_FEATS(",
+        ),
+    ] {
+        let start = source
+            .find(start)
+            .expect("native game state scoring method");
+        let end = start
+            + source[start..]
+                .find(end)
+                .expect("end of native game state method");
+        methods.push_str(&source[start..end]);
+    }
+    fs::write(out.join("game_state_scoring.inc"), methods).expect("write unchanged native methods");
+    let path = root.join("src/ScoreKeeperNormal.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native scoring methods");
+    let weights = source
+        .find("static std::string PercentScoreWeightName(")
+        .expect("native weight names");
+    let weights_end = source
+        .find("ScoreKeeperNormal::ScoreKeeperNormal(")
+        .expect("end of weight declarations");
+    let totals = source
+        .find("int ScoreKeeperNormal::GetPossibleDancePoints(")
+        .expect("native possible points");
+    let methods_end = totals
+        + source[totals..]
+            .find("\n/*")
+            .expect("end of native scoring methods");
+    fs::write(
+        out.join("score_points.inc"),
+        format!(
+            "{}{}",
+            &source[weights..weights_end],
+            &source[totals..methods_end]
+        ),
+    )
+    .expect("write unchanged native scoring methods");
+    write_score_metrics(root, out);
+    let path = root.join("src/GameManager.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native dance game definition");
+    let tracks = source
+        .find("enum {\n  TRACK_1 = 0,")
+        .expect("native track enumeration");
+    let tracks_end = tracks
+        + source[tracks..]
+            .find("\n};")
+            .expect("end of track enumeration")
+        + 3;
+    let dance = source
+        .find("static const AutoMappings g_AutoKeyMappings_Dance")
+        .expect("native dance definitions");
+    let dance_end = source
+        .find("static const AutoMappings g_AutoKeyMappings_Pump")
+        .expect("end of dance definitions");
+    fs::write(
+        out.join("dance_score.inc"),
+        format!(
+            "{}\n{}",
+            &source[tracks..tracks_end],
+            &source[dance..dance_end]
+        ),
+    )
+    .expect("write unchanged native dance definitions");
+}
+
+fn write_score_metrics(root: &Path, out: &Path) {
+    let theme = PathBuf::from("vendor/simply-love");
+    let init = theme.join("Scripts/SL_Init.lua");
+    println!("cargo:rerun-if-changed={}", init.display());
+    let source = fs::read_to_string(init).expect("read Simply Love scoring settings");
+    let start = source
+        .find("\tMetrics = {")
+        .expect("Simply Love metrics table")
+        + "\tMetrics = ".len();
+    let end = start
+        + source[start..]
+            .find("\n\tExWeights = {")
+            .expect("end of metrics table");
+    let metrics = source[start..end].trim_end().trim_end_matches(',');
+    let mut output = format!(
+        "static const char* harness_score_settings = R\"ITGMETRIC({metrics})ITGMETRIC\";\n"
+    );
+    output.push_str("static const char* harness_score_metrics[][3] = {\n");
+    for path in [
+        root.join("Themes/_fallback/metrics.ini"),
+        theme.join("metrics.ini"),
+    ] {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut group = String::new();
+        for line in fs::read_to_string(path)
+            .expect("read scoring theme metrics")
+            .lines()
+        {
+            let line = line.trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                group = line[1..line.len() - 1].to_owned();
+            } else if ["ScoreKeeperNormal", "PlayerStageStats"].contains(&group.as_str()) {
+                if let Some((name, value)) = line.split_once('=') {
+                    if !name.starts_with('#') && !name.starts_with(';') && !value.is_empty() {
+                        output.push_str(&format!(
+                            "{{{group:?}, {name:?}, R\"ITGMETRIC({value})ITGMETRIC\"}},\n"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    output.push_str("};\n");
+    fs::write(out.join("score_metrics.inc"), output).expect("write source scoring metrics");
 }
 
 fn write_player_option_methods(root: &Path, out: &Path) {
@@ -576,7 +701,11 @@ fn write_player_option_methods(root: &Path, out: &Path) {
         ("  MULTICOL_FLOAT_INTERFACE(", true),
     ] {
         for definition in source.split(token).skip(1) {
-            let name = definition.split(',').next().expect("native option name").trim();
+            let name = definition
+                .split(',')
+                .next()
+                .expect("native option name")
+                .trim();
             if columns {
                 floats.extend((1..=16).map(|column| format!("{name}{column}")));
             } else {

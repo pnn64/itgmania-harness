@@ -17,8 +17,11 @@ void harness_native_time(int64_t microseconds);
 
 struct lua_State;
 void harness_register_lua_globals(lua_State* state);
-void install_option_queries(lua_State* state);
+void install_option_queries(lua_State* state, bool scoring_control = false);
 void clear_option_queries(lua_State* state);
+// Source-backed score controls are serialized with the other native oracles.
+void install_score_queries(lua_State* state);
+void clear_score_queries(lua_State* state);
 struct SongLuaModels;
 SongLuaModels* install_song_models(lua_State* state);
 void destroy_song_models(SongLuaModels* models);

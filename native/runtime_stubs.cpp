@@ -13,10 +13,17 @@ extern "C" {
 
 #include "global.h"
 #include "Attack.h"
+#include "Game.h"
 #include "GameManager.h"
+#include "InputMapper.h"
+#include "RageInputDevice.h"
 #include "GameState.h"
 #include "CommonMetrics.h"
 #include "ScoreKeeperNormal.h"
+#include "NoteDataUtil.h"
+#include "NoteData.h"
+#include "TimingData.h"
+#include "TimingSegments.h"
 #include "Course.h"
 #include "Trail.h"
 #include "MessageManager.h"
@@ -127,14 +134,6 @@ Trail* Course::GetTrail(StepsType, Difficulty) const {
 }
 PlayMode Course::GetPlayMode() const {
 	throw std::runtime_error("course play modes are unavailable in the song harness");
-}
-// PlayerStageStats' native Lua registration links grading too. The headless
-// host has no grading metrics; never silently produce an invented grade.
-int ScoreKeeperNormal::TapNoteScoreToGradePoints(TapNoteScore, bool) {
-	throw std::runtime_error("stage grade weights are unavailable in the song harness");
-}
-int ScoreKeeperNormal::HoldNoteScoreToGradePoints(HoldNoteScore, bool) {
-	throw std::runtime_error("stage grade weights are unavailable in the song harness");
 }
 void Trail::GetDisplayBpms(DisplayBpms&) const {
 	throw std::runtime_error("course BPMs are unavailable in the song harness");
@@ -726,7 +725,14 @@ void LuaReference::PushSelf(lua_State* L) const {
 }
 bool LuaReference::IsSet() const { return m_iReference != LUA_NOREF; }
 bool LuaReference::IsNil() const { return m_iReference == LUA_REFNIL; }
-int LuaReference::GetLuaType() const { return IsSet() ? LUA_TNIL : LUA_TNONE; }
+int LuaReference::GetLuaType() const {
+	Lua* state = LUA->Get();
+	PushSelf(state);
+	const int type = lua_type(state, -1);
+	lua_pop(state, 1);
+	LUA->Release(state);
+	return type;
+}
 RString LuaReference::Serialize() const { return ""; }
 void LuaReference::Unregister() { m_iReference = LUA_NOREF; }
 LuaTable::LuaTable() {
@@ -790,6 +796,11 @@ template<> void Push<std::string>(lua_State* L, std::string const& v) { lua_push
 template<> bool FromStack<float>(lua_State* L, float& out, int i) { out = static_cast<float>(lua_tonumber(L, i)); return true; }
 template<> bool FromStack<bool>(lua_State* L, bool& out, int i) { out = lua_toboolean(L, i) != 0; return true; }
 template<> bool FromStack<int>(lua_State* L, int& out, int i) { out = static_cast<int>(lua_tointeger(L, i)); return true; }
+template<> bool FromStack<LuaReference>(lua_State* L, LuaReference& out, int i) {
+	lua_pushvalue(L, i);
+	out.SetFromStack(L);
+	return true;
+}
 template<> bool FromStack<std::string>(lua_State* L, std::string& out, int i) { size_t len = 0; const char* s = lua_tolstring(L, i, &len); out.assign(s ? s : "", len); return true; }
 
 void PushValueFunc(lua_State* L, int args) {
@@ -1342,7 +1353,9 @@ bool GameState::ChangePreferredDifficultyAndStepsType(PlayerNumber, Difficulty, 
 bool GameState::ChangePreferredDifficulty(PlayerNumber, int) { return false; }
 bool GameState::ChangePreferredCourseDifficultyAndStepsType(PlayerNumber, CourseDifficulty, StepsType) { return false; }
 bool GameState::ChangePreferredCourseDifficulty(PlayerNumber, int) { return false; }
-const Style* GameState::GetCurrentStyle(PlayerNumber) const { return nullptr; }
+#include "game_state_scoring.inc"
+#include "score_points.inc"
+#include "dance_score.inc"
 void GameState::SetProcessedTimingData(TimingData* td) { processedTiming = td; }
 TimingData* GameState::GetProcessedTimingData() const { return processedTiming; }
 bool GameState::IsCourseDifficultyShown(CourseDifficulty) { return true; }
@@ -1450,9 +1463,80 @@ void RageTexturePreloader::Load(const RageTextureID&) {}
 void RageTexturePreloader::UnloadAll() {}
 
 namespace {
+// Expressions and mode tables come verbatim from the pinned theme sources.
+#include "score_metrics.inc"
+bool harness_scores_ready = false;
+bool harness_score_controls = false;
+std::string harness_score_mode = "ITG";
+
+bool push_score_metric(Lua* state, const RString& group, const RString& name) {
+	if (!harness_scores_ready) return false;
+	const char* expression = nullptr;
+	for (const auto& metric : harness_score_metrics) {
+		if (group == metric[0] && name == metric[1]) expression = metric[2];
+	}
+	if (!expression) return false;
+	const int top = lua_gettop(state);
+	const std::string script = "return " + std::string(expression);
+	bool failed = luaL_loadbuffer(state, script.data(), script.size(), "source scoring metric") != 0;
+	if (!failed) {
+		// Keep the real expression's SL references separate from chart globals.
+		lua_newtable(state);
+		lua_newtable(state);
+		lua_getglobal(state, "_HARNESS_SCORE_SETTINGS"); lua_setfield(state, -2, "Metrics");
+		lua_newtable(state);
+		lua_pushstring(state, harness_score_mode.c_str()); lua_setfield(state, -2, "GameMode");
+		lua_setfield(state, -2, "Global"); lua_setfield(state, -2, "SL");
+		lua_setfenv(state, -2);
+		failed = lua_pcall(state, 0, 1, 0) != 0;
+	}
+	const std::string error = failed ? lua_tostring(state, -1) : "";
+	if (!failed && lua_isnil(state, -1)) {
+		lua_settop(state, top);
+		throw std::runtime_error("source scoring metric evaluated to nil: " + group + "." + name);
+	}
+	if (failed) {
+		lua_settop(state, top);
+		throw std::runtime_error("source scoring metric: " + error);
+	}
+	return true;
+}
+
+template<class T> T score_metric(const RString& group, const RString& name) {
+	Lua* state = LUA->Get();
+	T result{};
+	if (push_score_metric(state, group, name)) {
+		LuaHelpers::FromStack(state, result, -1);
+		lua_pop(state, 1);
+	}
+	LUA->Release(state);
+	return result;
+}
+
 std::vector<IThemeMetric*>& harness_theme_metrics() {
 	static std::vector<IThemeMetric*> metrics;
 	return metrics;
+}
+
+void configure_score_mode(const std::string& mode) {
+	if (mode != "ITG" && mode != "FA+" && mode != "Casual")
+		throw std::runtime_error("unsupported Simply Love score mode: " + mode);
+	if (harness_scores_ready && harness_score_mode == mode) return;
+	if (!harness_scores_ready) {
+		Lua* state = LUA->Get();
+		const std::string script = "return " + std::string(harness_score_settings);
+		if (luaL_loadbuffer(state, script.data(), script.size(), "Simply Love Metrics") || lua_pcall(state, 0, 1, 0)) {
+			const std::string error = lua_tostring(state, -1);
+			lua_pop(state, 1); LUA->Release(state);
+			throw std::runtime_error(error);
+		}
+		lua_setglobal(state, "_HARNESS_SCORE_SETTINGS"); LUA->Release(state);
+		harness_scores_ready = true;
+	}
+	harness_score_mode = mode;
+	for (IThemeMetric* metric : harness_theme_metrics()) {
+		metric->Read();
+	}
 }
 
 bool harness_font_candidate(
@@ -1514,6 +1598,73 @@ bool harness_resolve_font(
 	return harness_resolve_font(redirect, result, depth + 1);
 }
 }
+void install_score_queries(lua_State* L) {
+	harness_score_controls = true;
+	configure_score_mode("ITG");
+	lua_pushcfunction(L, ([](lua_State* L) -> int {
+		const std::string mode = luaL_checkstring(L, 1);
+		std::string error;
+		try { configure_score_mode(mode); }
+		catch (const std::exception& e) { error = e.what(); }
+		if (!error.empty()) { lua_pushstring(L, error.c_str()); return lua_error(L); }
+		PREFSMAN->m_AllowW1.Set(lua_toboolean(L, 2) ? ALLOW_W1_EVERYWHERE : ALLOW_W1_NEVER);
+		PREFSMAN->m_bMercifulBeginner.Set(lua_toboolean(L, 3) != 0);
+		return 0;
+	}));
+	lua_setglobal(L, "_ITG_SCORE_CONFIG");
+	lua_pushcfunction(L, ([](lua_State* L) -> int {
+		const bool hold = lua_toboolean(L, 1) != 0;
+		const bool beginner = lua_toboolean(L, 3) != 0;
+		int dance, grade;
+		if (hold) {
+			const auto score = Enum::Check<HoldNoteScore>(L, 2);
+			dance = ScoreKeeperNormal::HoldNoteScoreToDancePoints(score, beginner);
+			grade = ScoreKeeperNormal::HoldNoteScoreToGradePoints(score, beginner);
+		} else {
+			const auto score = Enum::Check<TapNoteScore>(L, 2);
+			dance = ScoreKeeperNormal::TapNoteScoreToDancePoints(score, beginner);
+			grade = ScoreKeeperNormal::TapNoteScoreToGradePoints(score, beginner);
+		}
+		lua_pushinteger(L, dance); lua_pushinteger(L, grade); return 2;
+	}));
+	lua_setglobal(L, "_ITG_SCORE_WEIGHT");
+	lua_pushcfunction(L, ([](lua_State* L) -> int {
+		const char* before = luaL_checkstring(L, 1);
+		const char* after = luaL_optstring(L, 2, before);
+		const float seconds = static_cast<float>(luaL_optnumber(L, 3, 2.0));
+		int dance = 0, grade = 0;
+		std::string error;
+	const Game* saved_game = GAMESTATE->m_pCurGame.Get();
+		TimingData* saved_timing = GAMESTATE->GetProcessedTimingData();
+		try {
+			NoteData pre, post;
+			pre.SetNumTracks(4); post.SetNumTracks(4);
+			NoteDataUtil::LoadFromSMNoteDataString(pre, before, false);
+			NoteDataUtil::LoadFromSMNoteDataString(post, after, false);
+			TimingData timing;
+			timing.AddSegment(BPMSegment(0, 120));
+			GAMESTATE->m_pCurGame.SetWithoutBroadcast(&g_Game_Dance);
+			GAMESTATE->SetProcessedTimingData(&timing);
+			dance = ScoreKeeperNormal::GetPossibleDancePoints(&pre, &post, &timing, seconds);
+			grade = ScoreKeeperNormal::GetPossibleGradePoints(&pre, &post, &timing, seconds);
+		} catch (const std::exception& e) { error = e.what(); }
+	GAMESTATE->m_pCurGame.SetWithoutBroadcast(saved_game);
+		GAMESTATE->SetProcessedTimingData(saved_timing);
+		if (!error.empty()) { lua_pushstring(L, error.c_str()); return lua_error(L); }
+		lua_pushinteger(L, dance); lua_pushinteger(L, grade); return 2;
+	}));
+	lua_setglobal(L, "_ITG_SCORE_POSSIBLE");
+}
+
+void clear_score_queries(lua_State* L) {
+	if (!harness_score_controls) return;
+	for (const char* name : {"_ITG_SCORE_CONFIG", "_ITG_SCORE_WEIGHT", "_ITG_SCORE_POSSIBLE"}) {
+		lua_pushnil(L); lua_setglobal(L, name);
+	}
+	configure_score_mode("ITG");
+	harness_score_controls = false;
+}
+
 ThemeManager::ThemeManager() : m_sCurThemeName("Harness"), m_sCurLanguage("en"), m_bPseudoLocalize(false) {
 	for (IThemeMetric* metric : harness_theme_metrics()) {
 		if (metric) metric->Read();
@@ -1585,12 +1736,23 @@ RString ThemeManager::GetMetric(const RString& group, const RString& name) {
 	// Simply Love/metrics.ini [Common]; this is a string metric, not an expression.
 	return group == "Common" && name == "DefaultNoteSkinName" ? "cel" : "";
 }
-int ThemeManager::GetMetricI(const RString&, const RString&) { return 0; }
-float ThemeManager::GetMetricF(const RString&, const RString&) { return 0.0f; }
-bool ThemeManager::GetMetricB(const RString&, const RString&) { return false; }
+int ThemeManager::GetMetricI(const RString& group, const RString& name) { return score_metric<int>(group, name); }
+float ThemeManager::GetMetricF(const RString& group, const RString& name) {
+	if (group == "PlayerStageStats" && !harness_score_controls)
+		throw std::runtime_error("live stage grading is unavailable in the song harness");
+	return score_metric<float>(group, name);
+}
+bool ThemeManager::GetMetricB(const RString& group, const RString& name) { return score_metric<bool>(group, name); }
 RageColor ThemeManager::GetMetricC(const RString&, const RString&) { return RageColor(); }
 LuaReference ThemeManager::GetMetricR(const RString&, const RString&) { return LuaReference(); }
 void ThemeManager::GetMetric(const RString& group, const RString& name, LuaReference& out) {
+	Lua* state = LUA->Get();
+	if (push_score_metric(state, group, name)) {
+		out.SetFromStack(state);
+		LUA->Release(state);
+		return;
+	}
+	LUA->Release(state);
 	if (group == "Common" && name == "DefaultNoteSkinName") {
 		Lua* state = LUA->Get();
 		LuaHelpers::Push(state, GetMetric(group, name));

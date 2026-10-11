@@ -1594,7 +1594,7 @@ Json::Value evaluate_lua_assertions(const Json::Value& request) {
     luaL_openlibs(state);
     harness_register_lua_globals(state);
     const bool option_control = request.get("option_control", false).asBool();
-    if (option_control) install_option_queries(state);
+    if (option_control) install_option_queries(state, true);
     ActorFrameTexture frozen, collision, unused;
     Actor target;
     ActorProxy proxy;

@@ -93,6 +93,37 @@ fn timing_data_keeps_each_native_owner() {
 }
 
 #[test]
+fn rejects_unpopulated_stage_grades() {
+    let directory = temp_dir("stage-grade-scope");
+    let corpus = directory.join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::write(corpus.join("control.sm"),
+        "#TITLE:Grade scope;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n#NOTES:dance-single::Challenge:1:0,0,0,0,0:\n1000\n;\n",
+    ).unwrap();
+    std::fs::write(corpus.join("control.lua"), r#"
+assert(_ITG_SCORE_CONFIG == nil and _ITG_SCORE_WEIGHT == nil and _ITG_SCORE_POSSIBLE == nil)
+STATSMAN:GetCurStageStats():GetPlayerStageStats(PLAYER_1):GetGrade()
+return Def.ActorFrame{}
+"#).unwrap();
+    let traces = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", corpus.to_str().unwrap(),
+        "--out", traces.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(traces.join("_semantic_manifest.json")).unwrap(),
+    ).unwrap();
+    assert_ne!(manifest["simfiles"][0]["status"], "ok");
+    let archives = directory.join("archives");
+    let output = run(&["song-lua-archive", corpus.to_str().unwrap(),
+        "--traces", traces.to_str().unwrap(), "--out", archives.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let index: Value = serde_json::from_slice(
+        &std::fs::read(archives.join("index.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(index["archives"], serde_json::json!([]));
+}
+
+#[test]
 fn excludes_unexecuted_screen_reload_archives() {
     let directory = temp_dir("screen-reload");
     let corpus = directory.join("corpus");
