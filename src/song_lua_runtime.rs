@@ -380,7 +380,7 @@ fn metrics(fallback_theme: &str) -> String {
     )
 }
 
-fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
+pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     validate_gameplay_preferences(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")

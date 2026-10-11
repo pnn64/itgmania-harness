@@ -80,7 +80,8 @@ struct ChartMetadata {
 #[derive(Serialize)]
 struct RuntimeMetadata {
     display: DisplayMetadata,
-    update_hz: f64,
+    update_hz: Option<f64>,
+    frame_clock: &'static str,
     random_state: RandomState,
 }
 
@@ -243,6 +244,46 @@ fn archive_members(
     semantic: &SemanticManifest,
     entry: &SemanticEntry,
 ) -> Result<(BTreeMap<String, Vec<u8>>, ArchiveManifest), Error> {
+    let native_gameplay = trace
+        .pointer("/capabilities/native_screen_lifecycle")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if native_gameplay {
+        crate::song_lua_runtime::validate_runtime_inputs(trace)
+            .map_err(|error| Error(format!("invalid native gameplay archive: {error}")))?;
+        if trace.pointer("/completion/reason").and_then(Value::as_str) != Some("gameplay-exit")
+            || trace
+                .pointer("/completion/stage_committed")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || trace
+                .pointer("/capabilities/native_stage_statistics")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || trace
+                .get("stage_samples")
+                .and_then(Value::as_array)
+                .and_then(|samples| samples.last())
+                .and_then(|sample| sample.get("phase"))
+                .and_then(Value::as_str)
+                != Some("gameplay-exit")
+            || ["dropped_events", "dropped_stage_samples"]
+                .into_iter()
+                .any(|key| trace.get(key).and_then(Value::as_u64) != Some(0))
+            || trace
+                .get("events")
+                .and_then(Value::as_array)
+                .is_none_or(|events| {
+                    events
+                        .iter()
+                        .any(|event| event.get("kind").and_then(Value::as_str) == Some("error"))
+                })
+        {
+            return Err(Error(
+                "native gameplay archive requires a clean committed gameplay exit".into(),
+            ));
+        }
+    }
     let song_dir = simfile.parent().unwrap_or_else(|| Path::new("."));
     let simfile_name = simfile
         .file_name()
@@ -260,6 +301,10 @@ fn archive_members(
 
     let (lua_paths, external_lua) = lua_dependency_closure(simfile, song_dir, trace)?;
     let mut members = BTreeMap::new();
+    if native_gameplay {
+        append_song_audio(song_dir, song_dir, &mut members)?;
+    }
+    let mut asset_members: BTreeSet<String> = members.keys().cloned().collect();
     members.insert(simfile_member.clone(), simfile_bytes);
     members.insert(trace_member.clone(), trace_bytes.to_vec());
     let mut lua_members = Vec::with_capacity(lua_paths.len());
@@ -283,7 +328,6 @@ fn archive_members(
             );
         }
     }
-    let mut asset_members = BTreeSet::new();
     for asset in &asset_refs {
         let Some(relative) = &asset.local_path else {
             continue;
@@ -369,8 +413,12 @@ fn archive_members(
         itgmania: ArchiveItgmania {
             source_revision: itgmania.git_revision.clone(),
             source_dirty: itgmania.git_dirty.clone(),
-            execution: "embedded_bundled_lua",
-            launches_executable: false,
+            execution: if native_gameplay {
+                "native_gameplay"
+            } else {
+                "embedded_bundled_lua"
+            },
+            launches_executable: native_gameplay,
         },
         chart: ChartMetadata {
             title: entry.title.clone(),
@@ -381,10 +429,17 @@ fn archive_members(
         },
         runtime: RuntimeMetadata {
             display: display_metadata(trace),
-            update_hz: trace
-                .get("update_fps")
-                .and_then(Value::as_f64)
-                .unwrap_or(60.0),
+            update_hz: (!native_gameplay).then(|| {
+                trace
+                    .get("update_fps")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(60.0)
+            }),
+            frame_clock: if native_gameplay {
+                "native-update-frames"
+            } else {
+                "fixed-update-rate"
+            },
             random_state: RandomState {
                 source: "ITGmania MersenneTwister",
                 seed: trace.get("random_seed").and_then(Value::as_u64),
@@ -416,6 +471,46 @@ fn archive_members(
         files,
     };
     Ok((members, manifest))
+}
+
+// Gameplay may select any chart music in the song directory, outside Lua asset loads.
+fn append_song_audio(
+    song_dir: &Path,
+    directory: &Path,
+    members: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), Error> {
+    for entry in fs::read_dir(directory)
+        .map_err(|error| Error::io("read song audio directory", directory, error))?
+    {
+        let entry = entry.map_err(|error| Error::io("read song audio entry", directory, error))?;
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .map_err(|error| Error::io("read song audio type", &path, error))?;
+        if kind.is_symlink() {
+            return Err(Error(format!(
+                "song audio collection does not support symlinks: {}",
+                path.display()
+            )));
+        } else if kind.is_dir() {
+            append_song_audio(song_dir, &path, members)?;
+        } else if kind.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| {
+                    ["ogg", "wav", "mp3"]
+                        .iter()
+                        .any(|audio| extension.eq_ignore_ascii_case(audio))
+                })
+        {
+            let relative = portable_relative(song_dir, &path)?;
+            let bytes =
+                fs::read(&path).map_err(|error| Error::io("read song audio", &path, error))?;
+            members.insert(format!("song/{relative}"), bytes);
+        }
+    }
+    Ok(())
 }
 
 fn lua_dependency_closure(
@@ -1192,6 +1287,72 @@ mod tests {
             texture.source_sha256.as_deref(),
             Some(hash_bytes(&image).as_str())
         );
+
+        // Synthetic capture metadata tests archive handling, not gameplay simulation.
+        let mut native = trace.clone();
+        native["capabilities"]["native_screen_lifecycle"] = serde_json::json!(true);
+        native["capabilities"]["native_stage_statistics"] = serde_json::json!(true);
+        native["capabilities"]["native_update_frames"] = serde_json::json!(true);
+        native["capabilities"]["native_machine_preferences"] = serde_json::json!(true);
+        native["capabilities"]["native_gameplay_preferences"] = serde_json::json!(true);
+        native["input"] = serde_json::json!({
+            "preferences": {"global_offset_seconds": -0.008, "visual_delay_seconds": 0,
+                "default_sync_offset": "SyncOffset_ITG"},
+            "gameplay_preferences": {"initialization": "theme-game-mode", "game_mode": "ITG",
+                "mod_level": "ModsLevel_Preferred", "default_modifiers": "",
+                "timing_window_scale": 1, "timing_window_add": 0.0015,
+                "max_input_latency_seconds": 0, "music_rate": 1,
+                "timing_windows": {"W1": 0.0215, "W2": 0.043, "W3": 0.102,
+                    "W4": 0.135, "W5": 0.18, "Hold": 0.32, "Mine": 0.07,
+                    "Roll": 0.35, "Attack": 0.135, "Checkpoint": 0.1664},
+                "players": [{"player": "PlayerNumber_P1", "fail_setting": "FailType_Off",
+                    "min_tns_to_hide_notes": "TapNoteScore_W3", "disabled_timing_windows": []}]}
+        });
+        native["update_frame_phase"] = serde_json::json!("gameplay-overlay-probe");
+        native["update_frames"] = serde_json::json!([
+            {"sequence": 1, "scene": 1, "delta": 0.01, "seconds": 1, "beat": 2, "wall_seconds": 10},
+            {"sequence": 2, "scene": 2, "delta": 0, "seconds": -6, "beat": -6, "wall_seconds": 10.01}
+        ]);
+        native["dropped_update_frames"] = serde_json::json!(0);
+        native["dropped_stage_samples"] = serde_json::json!(0);
+        native["stage_samples"] = serde_json::json!([{"phase": "gameplay-exit", "scene": 2}]);
+        native["completion"] =
+            serde_json::json!({"reason": "gameplay-exit", "stage_committed": true});
+        let source = serde_json::to_vec(&native).expect("native metadata bytes");
+        let (members, manifest) =
+            archive_members(&root, &simfile, &source, &native, &semantic, &entry)
+                .expect("native gameplay archive");
+        assert_eq!(manifest.itgmania.execution, "native_gameplay");
+        assert!(manifest.itgmania.launches_executable);
+        assert_eq!(manifest.runtime.update_hz, None);
+        assert_eq!(manifest.runtime.frame_clock, "native-update-frames");
+        assert_eq!(members["trace/semantic.json"], source);
+        assert_eq!(
+            members["song/sound-clip.wav"],
+            fs::read(root.join("sound-clip.wav")).expect("music bytes")
+        );
+        assert!(
+            manifest
+                .files
+                .iter()
+                .any(|file| file.path == "song/sound-clip.wav" && file.role == "required-asset")
+        );
+        for (pointer, value) in [
+            ("/completion/stage_committed", serde_json::json!(false)),
+            ("/completion/reason", serde_json::json!("beat-limit")),
+            ("/dropped_events", serde_json::json!(1)),
+            ("/dropped_stage_samples", serde_json::json!(1)),
+            ("/dropped_update_frames", serde_json::json!(1)),
+            ("/stage_samples", serde_json::json!([])),
+            ("/events", serde_json::json!([{"kind": "error"}])),
+        ] {
+            let mut incomplete = native.clone();
+            *incomplete.pointer_mut(pointer).expect("capture field") = value;
+            assert!(
+                archive_members(&root, &simfile, &source, &incomplete, &semantic, &entry).is_err(),
+                "accepted incomplete capture at {pointer}"
+            );
+        }
     }
 
     #[test]
