@@ -303,9 +303,11 @@ fn defers_native_screen_requests_and_excludes_incomplete_reloads() {
     std::fs::write(corpus.join("control.lua"), r#"
 return Def.ActorFrame { OnCommand=function(self)
     local screen = SCREENMAN:GetTopScreen()
+    local name = screen:GetName()
     SCREENMAN:SetNewScreen('LastRequestMustReplaceThis')
+    assert(screen:GetName() == name)
     SCREENMAN:SetNewScreen('ScreenGameplay')
-    assert(SCREENMAN:GetTopScreen() == screen)
+    assert(SCREENMAN:GetTopScreen() == screen and screen:GetName() == name)
     self:x(1)
     self:SetUpdateFunction(function(actor, delta)
         assert(delta == 0, 'first native screen update must have zero delta')
