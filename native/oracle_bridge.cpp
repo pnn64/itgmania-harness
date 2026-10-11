@@ -985,6 +985,9 @@ extern "C" ItgOracleBuffer itg_oracle_load_charts(const uint8_t* path,
     const std::string theme_path(reinterpret_cast<const char*>(theme), theme_len);
     const std::string theme_host(reinterpret_cast<const char*>(host), host_len);
     harness_clear_diagnostics();
+    // Composite radar calculation queries GameState::GetCurrentStyle, which
+    // asserts that a game is selected even when the current style is null.
+    NoteSkinGlobalGuard native_game(NOTESKIN, harness_score_game());
     Song song;
     if (!load_song(simfile, song)) {
       return error_buffer("ITGmania failed to load the simfile");
@@ -1043,6 +1046,9 @@ extern "C" ItgOracleBuffer itg_oracle_load_song_lua(const uint8_t* path,
       return song_lua_error_buffer("simfile path pointer is null");
     }
     const std::string simfile(reinterpret_cast<const char*>(path), path_len);
+    // Routine note statistics require the same selected-game precondition as
+    // the chart oracle. Restore the caller's game when loading finishes.
+    NoteSkinGlobalGuard native_game(NOTESKIN, harness_score_game());
     Song song;
     if (!load_song(simfile, song)) {
       return song_lua_error_buffer("ITGmania failed to load the simfile");

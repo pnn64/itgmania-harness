@@ -160,6 +160,35 @@ return Def.ActorFrame{}
 }
 
 #[test]
+fn loads_routine_statistics_before_native_selection() {
+    let directory = temp_dir("routine-step-selection");
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut chart = String::from("#VERSION:0.83;\n#TITLE:Routine selection;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n");
+    for (difficulty, description) in [("Easy", "first"), ("Challenge", "second")] {
+        chart.push_str(&format!("#NOTEDATA:;\n#STEPSTYPE:dance-routine;\n#DIFFICULTY:{difficulty};\n#DESCRIPTION:{description};\n#METER:1;\n#NOTES:\n10000000\n;\n"));
+    }
+    std::fs::write(directory.join("control.ssc"), chart).unwrap();
+    std::fs::write(directory.join("control.lua"), r#"
+local all = GAMESTATE:GetCurrentSong():GetAllSteps()
+assert(GAMESTATE:GetCurrentStyle():GetStyleType() == 'StyleType_TwoPlayersSharedSides')
+assert(GAMESTATE:SetCurrentSteps(0, all[2]) == GAMESTATE)
+assert(GAMESTATE:GetCurrentSteps(0) == all[2] and GAMESTATE:GetCurrentSteps(1) == all[2])
+return Def.ActorFrame{}
+"#).unwrap();
+    let out = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+        "--out", out.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let trace: Value = serde_json::from_slice(
+        &std::fs::read(out.join("control.ssc.semantic.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    assert_eq!(trace["style"], "routine");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn selects_native_steps_and_matches_player_music() {
     let directory = temp_dir("native-step-selection");
     std::fs::create_dir_all(&directory).unwrap();
