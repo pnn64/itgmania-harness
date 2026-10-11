@@ -173,6 +173,13 @@ The capture rejects missing, invalid or dropped update frames. The
 `input.preferences` records the native machine offset, default sync offset and
 visual delay before song Lua loads. Replayers must use these settings when
 loading timing and reject captures that omit them rather than assume defaults.
+The bootstrap calls the fallback theme's `SetGameModePreferences()` helper and
+reloads its metrics when that helper exists, as Simply Love does when selecting
+a game mode. `input.gameplay_preferences` records the resulting timing windows,
+scale, addition, input latency, music rate and preferred player fail options
+before song Lua runs. Themes without this helper retain their native preferences
+and are labeled accordingly. Captures before 0.1.80 skipped Simply Love's mode
+initialization and must be recaptured for gameplay parity comparisons.
 
 Use `--until-gameplay-end` instead of `--until-beat` to keep recording through
 gameplay reloads until the native engine activates a different screen. A

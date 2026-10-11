@@ -50,6 +50,22 @@ def main():
         assert preferences["default_sync_offset"] in ("SyncOffset_NULL", "SyncOffset_ITG")
         assert isinstance(preferences["global_offset_seconds"], (int, float))
         assert isinstance(preferences["visual_delay_seconds"], (int, float))
+        assert document["capabilities"]["native_gameplay_preferences"]
+        gameplay = document["input"]["gameplay_preferences"]
+        assert gameplay["mod_level"] == "ModsLevel_Preferred", gameplay
+        if "Simply Love" in args.fallback_theme or "Simply-Love" in args.fallback_theme:
+            # SL_Init.lua's ITG preferences, applied by the real theme helper.
+            assert gameplay["initialization"] == "theme-game-mode", gameplay
+            assert gameplay["game_mode"] == "ITG", gameplay
+            windows = {"W1": 0.0215, "W2": 0.043, "W3": 0.102, "W4": 0.135,
+                       "W5": 0.18, "Hold": 0.32, "Mine": 0.07, "Roll": 0.35}
+            assert all(abs(gameplay["timing_windows"][key] - value) < 1e-8
+                       for key, value in windows.items()), gameplay
+            assert abs(gameplay["timing_window_add"] - 0.0015) < 1e-8, gameplay
+            assert gameplay["timing_window_scale"] == gameplay["music_rate"] == 1, gameplay
+            assert all(player["min_tns_to_hide_notes"] == "TapNoteScore_W3"
+                       and player["disabled_timing_windows"] == []
+                       for player in gameplay["players"]), gameplay
         assert document["dropped_update_frames"] == 0
         assert document["update_frame_phase"] == "gameplay-overlay-probe"
         assert [frame["sequence"] for frame in frames] == list(range(1, len(frames) + 1))

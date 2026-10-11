@@ -1,11 +1,7 @@
 local cfg = ITGMANIA_HARNESS_CONFIG
 
--- Read machine inputs before any song constructors or commands can change them.
-local input_preferences = {
-	global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
-	default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
-	visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
-}
+local input_preferences = nil
+local gameplay_preferences = nil
 
 local definitions = {}
 local definition_by_table = setmetatable({}, {__mode = "k"})
@@ -556,6 +552,42 @@ local scene_count = 0
 local stages_before = nil
 local last_screen = nil
 
+-- Capture after theme initialization, before gameplay loads any song Lua.
+-- Keep these input settings separate from observed scores and life.
+function trace.capture_inputs(game_mode_initialized)
+	input_preferences = {
+		global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
+		default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
+		visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
+	}
+	local windows, players = {}, {}
+	for _, window in ipairs({"W1", "W2", "W3", "W4", "W5", "Hold", "Mine", "Roll", "Attack", "Checkpoint"}) do
+		windows[window] = PREFSMAN:GetPreference("TimingWindowSeconds" .. window)
+	end
+	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+		local options = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+		local disabled = {}
+		for _, window in ipairs(options:GetDisabledTimingWindows()) do
+			disabled[#disabled + 1] = tostring(window)
+		end
+		players[#players + 1] = {
+			player = tostring(player), fail_setting = tostring(options:FailSetting()),
+			min_tns_to_hide_notes = tostring(options:MinTNSToHideNotes()),
+			disabled_timing_windows = disabled,
+		}
+	end
+	gameplay_preferences = {
+		initialization = game_mode_initialized and "theme-game-mode" or "native-preferences",
+		game_mode = SL and SL.Global and SL.Global.GameMode or nil,
+		mod_level = "ModsLevel_Preferred", timing_windows = windows, players = players,
+		default_modifiers = PREFSMAN:GetPreference("DefaultModifiers"),
+		timing_window_scale = PREFSMAN:GetPreference("TimingWindowScale"),
+		timing_window_add = PREFSMAN:GetPreference("TimingWindowAdd"),
+		max_input_latency_seconds = PREFSMAN:GetPreference("MaxInputLatencySeconds"),
+		music_rate = GAMESTATE:GetSongOptionsObject("ModsLevel_Preferred"):MusicRate(),
+	}
+end
+
 -- Clock inputs are recorded separately from stage-statistic observations.
 -- Replayers use delta/music/wall time and derive their own beats and scores.
 function trace.sample_update(delta)
@@ -675,7 +707,7 @@ function trace.finish(completion)
 		completion = completion,
 		input = {autoplay = cfg.autoplay, injected_inputs = false,
 			requested_difficulty = cfg.difficulty, style = cfg.style,
-			preferences = input_preferences},
+			preferences = input_preferences, gameplay_preferences = gameplay_preferences},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
 			actor_definitions = true,
@@ -690,7 +722,8 @@ function trace.finish(completion)
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
 			native_update_frames = true,
-			native_machine_preferences = true,
+			native_machine_preferences = input_preferences ~= nil,
+			native_gameplay_preferences = gameplay_preferences ~= nil,
 		},
 		roots = roots,
 		actor_definitions = live_definitions,

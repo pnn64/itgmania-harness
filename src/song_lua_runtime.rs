@@ -381,6 +381,7 @@ fn metrics(fallback_theme: &str) -> String {
 }
 
 fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
+    validate_gameplay_preferences(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")
     })?;
@@ -416,6 +417,37 @@ fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
         previous_scene = scene;
         // The validation above proves this finite clock exists.
         previous_wall = finite("wall_seconds").expect("validated native wall clock");
+    }
+    Ok(())
+}
+
+fn validate_gameplay_preferences(document: &Value) -> Result<(), Error> {
+    let preferences = document.pointer("/input/gameplay_preferences")
+        .ok_or_else(|| Error::new("native gameplay capture has no initialized gameplay preferences"))?;
+    let finite = |key| preferences.get(key).and_then(Value::as_f64).is_some_and(f64::is_finite);
+    let windows = preferences.get("timing_windows");
+    let players = preferences.get("players").and_then(Value::as_array);
+    let valid = document.pointer("/capabilities/native_gameplay_preferences").and_then(Value::as_bool) == Some(true)
+        && preferences.get("mod_level").and_then(Value::as_str) == Some("ModsLevel_Preferred")
+        && preferences.get("default_modifiers").and_then(Value::as_str).is_some()
+        && matches!(preferences.get("initialization").and_then(Value::as_str), Some("theme-game-mode" | "native-preferences"))
+        && (preferences.get("initialization").and_then(Value::as_str) != Some("theme-game-mode")
+            || preferences.get("game_mode").and_then(Value::as_str).is_some_and(|mode| !mode.is_empty()))
+        && ["timing_window_scale", "timing_window_add", "max_input_latency_seconds", "music_rate"].into_iter().all(finite)
+        && ["W1", "W2", "W3", "W4", "W5", "Hold", "Mine", "Roll", "Attack", "Checkpoint"].into_iter().all(|key| {
+            windows.and_then(|windows| windows.get(key)).and_then(Value::as_f64).is_some_and(f64::is_finite)
+        })
+        && players.is_some_and(|players| !players.is_empty() && players.len() <= 2 && players.iter().all(|player| {
+            matches!(player.get("player").and_then(Value::as_str), Some("PlayerNumber_P1" | "PlayerNumber_P2"))
+                && matches!(player.get("fail_setting").and_then(Value::as_str),
+                    Some("FailType_Immediate" | "FailType_ImmediateContinue" | "FailType_EndOfSong" | "FailType_Off"))
+                && player.get("min_tns_to_hide_notes").and_then(Value::as_str).is_some_and(|score| score.starts_with("TapNoteScore_"))
+                && player.get("disabled_timing_windows").and_then(Value::as_array).is_some_and(|windows| windows.iter().all(|window| {
+                    matches!(window.as_str(), Some("TimingWindow_W1" | "TimingWindow_W2" | "TimingWindow_W3" | "TimingWindow_W4" | "TimingWindow_W5"))
+                }))
+        }));
+    if !valid {
+        return Err(Error::new("native initialized gameplay preferences are incomplete"));
     }
     Ok(())
 }
@@ -650,9 +682,18 @@ mod tests {
     #[test]
     fn update_clocks_allow_reload_music_reset() {
         let document = serde_json::json!({
-            "capabilities": {"native_update_frames": true, "native_machine_preferences": true},
+            "capabilities": {"native_update_frames": true, "native_machine_preferences": true,
+                "native_gameplay_preferences": true},
             "input": {"preferences": {"global_offset_seconds": -0.008,
-                "default_sync_offset": "SyncOffset_ITG", "visual_delay_seconds": 0}},
+                "default_sync_offset": "SyncOffset_ITG", "visual_delay_seconds": 0},
+                "gameplay_preferences": {"initialization": "theme-game-mode", "game_mode": "ITG",
+                    "mod_level": "ModsLevel_Preferred", "default_modifiers": "failendofsong", "timing_window_scale": 1,
+                    "timing_window_add": 0.0015, "max_input_latency_seconds": 0, "music_rate": 1,
+                    "timing_windows": {"W1": 0.0215, "W2": 0.043, "W3": 0.102,
+                        "W4": 0.135, "W5": 0.18, "Hold": 0.32, "Mine": 0.07,
+                        "Roll": 0.35, "Attack": 0.135, "Checkpoint": 0.1664},
+                    "players": [{"player": "PlayerNumber_P1", "fail_setting": "FailType_ImmediateContinue",
+                        "min_tns_to_hide_notes": "TapNoteScore_W3", "disabled_timing_windows": []}]}},
             "dropped_update_frames": 0,
             "update_frame_phase": "gameplay-overlay-probe",
             "update_frames": [
@@ -683,6 +724,17 @@ mod tests {
         settings = document.clone();
         settings["capabilities"]["native_machine_preferences"] = serde_json::json!(false);
         assert!(validate_runtime_inputs(&settings).is_err());
+        for pointer in ["/input/gameplay_preferences", "/input/gameplay_preferences/timing_windows/Roll",
+            "/input/gameplay_preferences/timing_window_add", "/input/gameplay_preferences/game_mode",
+            "/input/gameplay_preferences/players/0/fail_setting", "/capabilities/native_gameplay_preferences"] {
+            settings = document.clone();
+            *settings.pointer_mut(pointer).expect("fixture contains preference") = Value::Null;
+            assert!(validate_runtime_inputs(&settings).is_err(), "accepted missing {pointer}");
+        }
+        settings = document.clone();
+        settings["input"]["gameplay_preferences"]["initialization"] = serde_json::json!("native-preferences");
+        settings["input"]["gameplay_preferences"]["game_mode"] = Value::Null;
+        assert!(validate_runtime_inputs(&settings).is_ok());
     }
 
     #[test]

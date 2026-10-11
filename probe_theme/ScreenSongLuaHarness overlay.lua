@@ -54,9 +54,18 @@ local function configure_song()
 	if cfg.style == "couple" or cfg.style == "routine" then
 		GAMESTATE:SetCurrentSteps(PLAYER_2, selected)
 	end
+	-- Direct gameplay entry bypasses the theme's play-mode selection screen.
+	-- Use its real initializer so timing windows and player fail options match
+	-- normal gameplay instead of retaining the engine's stock preferences.
+	local game_mode_initialized = type(SetGameModePreferences) == "function"
+	if game_mode_initialized then
+		SetGameModePreferences()
+		THEME:ReloadMetrics()
+	end
 	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
 		GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred"):PlayerAutoPlay(cfg.autoplay)
 	end
+	ITGMANIA_HARNESS_TRACE.capture_inputs(game_mode_initialized)
 	return selected, nil
 end
 
