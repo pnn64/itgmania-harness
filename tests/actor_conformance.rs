@@ -18,6 +18,13 @@ fn run_fixture(name: &str) -> serde_json::Value {
 }
 
 #[test]
+fn keeps_chart_owned_easing_globals() {
+    let output = run_fixture("easing-global.json");
+    assert_eq!(output["script_errors"], serde_json::json!([]));
+    assert_eq!(output["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
 fn captures_native_tween_queue_and_projected_geometry() {
     let output = run_fixture("tween-queue.json");
     assert_eq!(output["oracle"], "itgmania_native_actor_conformance");

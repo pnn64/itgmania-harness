@@ -2244,11 +2244,6 @@ end
 math.round = math.round or round
 print = function() end
 
-local function base_ease(t, b, c, d)
-	if d == nil or d == 0 then return t end
-	return (b or 0) + (c or 1) * t / d
-end
-ease = setmetatable({ linear = base_ease }, { __index = function() return base_ease end })
 mods, mods2, mod_actions = {}, {}, {}
 local function schedule_beat(beat, action, params)
 	scheduled_beats[#scheduled_beats + 1] = { beat = tonumber(beat) or 0, action = action, params = params }

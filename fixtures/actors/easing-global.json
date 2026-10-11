@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "name": "chart owned easing global",
+  "lua_assertions": "assert(ease == nil, 'engine must not preinstall chart easing functions')\nif not ease then\n    ease = {}\n    ease.t_linear = function(t,b,c,d) return c*t/d+b end\n    ease.outQuad = function(t,b,c,d) t=t/d; return -c*t*(t-2)+b end\nend\nassert(ease.t_linear(0.25,10,20,1) == 15)\nassert(ease.outQuad(0.25,10,20,1) == 18.75)\nassert(ease.unknown == nil)\nease = nil\n"
+}
