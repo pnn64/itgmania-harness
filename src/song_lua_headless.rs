@@ -736,7 +736,7 @@ mod tests {
             .join("tests/fixtures/song-lua-headless")
             .canonicalize()
             .unwrap();
-        for name in ["host-bindings.lua", "recurring-command.lua"] {
+        for name in ["host-bindings.lua", "recurring-command.lua", "screen-type.lua"] {
             let path = dir.join(name);
             let context = Context {
                 simfile: &path,

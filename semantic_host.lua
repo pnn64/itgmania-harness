@@ -857,6 +857,8 @@ local function actor_call(actor, name, ...)
 		end
 	end
 	if name == "GetName" then return actor.__songlua_name or "" end
+	-- ScreenGameplay.h overrides Screen::GetScreenType; Screen.cpp exposes its Lua enum.
+	if name == "GetScreenType" and actor.class == "Screen" then return "ScreenType_Gameplay" end
 	if name == "GetText" then return actor.state.text or "" end
 	if name == "get_mult_attrs_with_diffuse" then return actor.state.mult_attrs_with_diffuse == true end
 	if name == "GetWidth" or name == "GetHeight" then
