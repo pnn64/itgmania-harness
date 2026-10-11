@@ -418,6 +418,19 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
         // The validation above proves this finite clock exists.
         previous_wall = finite("wall_seconds").expect("validated native wall clock");
     }
+    if document.pointer("/capabilities/native_event_scenes").and_then(Value::as_bool) == Some(true) {
+        let events = document.get("events").and_then(Value::as_array)
+            .ok_or_else(|| Error::new("native event scene capture has no events array"))?;
+        let mut prior_scene = 0;
+        for (index, event) in events.iter().enumerate() {
+            let scene = event.get("scene").and_then(Value::as_u64)
+                .filter(|scene| *scene >= prior_scene && *scene <= previous_scene);
+            if event.get("seq").and_then(Value::as_u64) != Some(index as u64 + 1) || scene.is_none() {
+                return Err(Error::new(format!("invalid native event scene at {}", index + 1)));
+            }
+            prior_scene = scene.expect("validated native event scene");
+        }
+    }
     Ok(())
 }
 
@@ -735,6 +748,24 @@ mod tests {
         settings["input"]["gameplay_preferences"]["initialization"] = serde_json::json!("native-preferences");
         settings["input"]["gameplay_preferences"]["game_mode"] = Value::Null;
         assert!(validate_runtime_inputs(&settings).is_ok());
+
+        let mut epochs = document.clone();
+        epochs["capabilities"]["native_event_scenes"] = serde_json::json!(true);
+        epochs["events"] = serde_json::json!([
+            {"seq": 1, "scene": 0}, {"seq": 2, "scene": 1}, {"seq": 3, "scene": 2}
+        ]);
+        assert!(validate_runtime_inputs(&epochs).is_ok());
+        for (pointer, value) in [
+            ("/events/2/scene", Value::Null),
+            ("/events/2/scene", serde_json::json!(3)),
+            ("/events/2/scene", serde_json::json!(0)),
+            ("/events/2/seq", serde_json::json!(4)),
+            ("/events", Value::Null),
+        ] {
+            let mut invalid = epochs.clone();
+            *invalid.pointer_mut(pointer).expect("native event field") = value;
+            assert!(validate_runtime_inputs(&invalid).is_err(), "accepted invalid event at {pointer}");
+        }
     }
 
     #[test]

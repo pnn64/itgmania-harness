@@ -15,6 +15,7 @@ local active_context = nil
 local next_sequence = 0
 local dropped_events = 0
 local finished = false
+local scene_count = 0
 local original_methods = {}
 local raw_metatable = debug.getmetatable
 
@@ -190,6 +191,7 @@ local function emit(kind, actor, operation, args, detail)
 	next_sequence = next_sequence + 1
 	local event = {
 		seq = next_sequence,
+		scene = scene_count,
 		kind = kind,
 		beat = beat,
 		seconds = seconds,
@@ -552,7 +554,6 @@ local stage_samples = {}
 local dropped_stage_samples = 0
 local update_frames = {}
 local dropped_update_frames = 0
-local scene_count = 0
 local stages_before = nil
 local last_screen = nil
 
@@ -726,6 +727,7 @@ function trace.finish(completion)
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
 			native_update_frames = true,
+			native_event_scenes = true,
 			native_machine_preferences = input_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
 		},
