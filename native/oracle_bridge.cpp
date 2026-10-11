@@ -34,6 +34,7 @@
 #include "RageSoundReader_Vorbisfile.h"
 #include <cstdlib>
 #include "Song.h"
+#include "SongUtil.h"
 #include "SongPosition.h"
 #include "Steps.h"
 #include "TimingData.h"
@@ -1259,6 +1260,9 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       }
       timing_song.m_SongTiming.TidyUpData(false);
       for (Steps* steps : timing_song.GetAllSteps()) steps->GetTimingData()->TidyUpData(false);
+      // Song::TidyUpData runs this before gameplay or Lua observes Steps.
+      // The raw chart oracle deliberately retains direct-loader metadata.
+      SongUtil::AdjustDuplicateSteps(&timing_song);
       timing_song.ReCalculateStepStatsAndLastSecond(false, false);
       lua_getglobal(state, "_HARNESS");
       const std::string background = timing_song.GetBackgroundPath();

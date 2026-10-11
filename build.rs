@@ -530,6 +530,32 @@ fn write_song_stats(root: &Path, out: &Path) {
         + start;
     fs::write(out.join("song_stats.inc"), &source[start..end])
         .expect("write native song stats method");
+    let mut methods = String::new();
+    for (file, ranges) in [
+        ("Song.cpp", vec![
+            ("std::string Song::GetDisplayFullTitle()", "std::string Song::GetTranslitFullTitle()"),
+            ("void Song::RemoveAutoGenNotes()", "bool Song::IsEasy("),
+            ("void Song::DeleteSteps(", "bool Song::Matches("),
+        ]),
+        ("SongUtil.cpp", vec![
+            ("void SongUtil::GetSteps(", "Steps* SongUtil::GetOneSteps("),
+            ("void SongUtil::AdjustDuplicateSteps(", "/////////////////////////////////////\n// Sorting"),
+        ]),
+        ("StepsUtil.cpp", vec![
+            ("bool StepsUtil::CompareNotesPointersByRadarValues(", "bool StepsUtil::CompareStepsPointersByTypeAndDifficulty("),
+            ("bool StepsUtil::CompareStepsPointersByDescription(", "void StepsUtil::SortStepsByDescription("),
+        ]),
+    ] {
+        let path = root.join("src").join(file);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let source = fs::read_to_string(path).expect("read native step normalization");
+        for (start, end) in ranges {
+            let start = source.find(start).expect("native normalization method");
+            let end = start + source[start..].find(end).expect("end of normalization method");
+            methods.push_str(&source[start..end]);
+        }
+    }
+    fs::write(out.join("song_steps.inc"), methods).expect("write unchanged native step normalization");
 }
 
 fn write_lua_binding(root: &Path, out: &Path) {

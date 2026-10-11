@@ -160,6 +160,44 @@ return Def.ActorFrame{}
 }
 
 #[test]
+fn tidies_duplicate_steps_before_song_lua() {
+    let directory = temp_dir("step-tidy");
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut chart = String::from("#VERSION:0.83;\n#TITLE:Native step tidy;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n");
+    for (difficulty, description, meter, notes, music) in [
+        ("Challenge", "selected", 1, "1000", "a.ogg"),
+        ("Hard", "", 1, "1000", "a.ogg"),
+        ("Hard", "", 2, "1000\n0100", "a.ogg"),
+        ("Hard", "spelling", 3, "0100", "a.ogg"),
+        ("Hard", "spelling", 3, "0100", "b.ogg"),
+    ] {
+        chart.push_str(&format!("#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:{difficulty};\n#DESCRIPTION:{description};\n#METER:{meter};\n#MUSIC:{music};\n#NOTES:\n{notes}\n;\n"));
+    }
+    std::fs::write(directory.join("control.ssc"), chart).unwrap();
+    std::fs::write(directory.join("control.lua"), r#"
+local all = GAMESTATE:GetCurrentSong():GetAllSteps()
+assert(#all == 4, 'identical steps must be removed before Lua')
+assert(all[1]:GetDifficulty() == 'Difficulty_Challenge')
+assert(all[2]:GetDifficulty() == 'Difficulty_Hard')
+assert(all[3]:GetDifficulty() == 'Difficulty_Edit')
+assert(all[3]:GetDescription() == 'Hard Edit')
+assert(all[4]:GetDifficulty() == 'Difficulty_Edit')
+assert(all[4]:GetDescription() == 'spelling')
+return Def.ActorFrame{}
+"#).unwrap();
+    let out = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+        "--out", out.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let trace: Value = serde_json::from_slice(
+        &std::fs::read(out.join("control.ssc.semantic.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["dropped_events"], 0);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn loads_routine_statistics_before_native_selection() {
     let directory = temp_dir("routine-step-selection");
     std::fs::create_dir_all(&directory).unwrap();

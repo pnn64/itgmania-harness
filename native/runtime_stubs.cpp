@@ -45,6 +45,8 @@ extern "C" {
 #include "ScreenMessage.h"
 #include "Song.h"
 #include "Steps.h"
+#include "StepsUtil.h"
+#include "SongUtil.h"
 #include "Style.h"
 #include "ThemeManager.h"
 #include "FontCharAliases.h"
@@ -2009,6 +2011,12 @@ bool Song::HasAutosaveFile() { return false; }
 bool Song::LoadAutosaveFile() { return false; }
 void Song::TidyUpData(bool, bool) {}
 #include "song_stats.inc"
+#include "song_steps.inc"
+// Duplicate-step deletion passes false and never requests autogeneration.
+// Keep a missing application feature explicit if another caller requests it.
+void Song::AddAutoGenNotes() {
+    throw std::runtime_error("native song autogeneration is unavailable");
+}
 void Song::TranslateTitles() {}
 void Song::AddBackgroundChange(BackgroundLayer layer, BackgroundChange seg) {
 	BackgroundUtil::AddBackgroundChange(GetBackgroundChanges(layer), seg);
