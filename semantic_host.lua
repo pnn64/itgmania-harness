@@ -965,7 +965,7 @@ local function actor_call(actor, name, ...)
 		return rawget(actor, "allocated_texture")
 	end
 	if name == "GetPath" and actor.class == "RageTexture" then return _ITG_TEXTURE_NAME(actor.state.path or "") end
-	if name == "GetPlayerStageStats" then return external_actor(actor.path .. "/PlayerStageStats", "PlayerStageStats") end
+	if name == "GetPlayerStageStats" then return _ITG_STAGE_STATS(...) end
 	if name == "GetPercentDancePoints" then return 0 end
 	if name == "GetSpline" or name == "get_spline" or name:match("Handler$") or name:match("^get_.*_handler$") then
 		local canonical = ({get_spline="GetSpline", get_pos_handler="GetPosHandler",
@@ -2121,6 +2121,9 @@ PROFILEMAN = {
 	GetProfile = function() return harness_profile end,
     GetPlayerName = function() return "" end,
 }
+-- ScreenGameplay loads players and seeds their life record before song Lua.
+-- This capture does not simulate judgments or subsequent life changes.
+for player = 0, (is_double and 0 or 1) do _ITG_STAGE_LIFE_SEED(player) end
 STATSMAN = { GetCurStageStats = function() return external_actor("stage-stats", "StageStats") end }
 FILEMAN = { DoesFileExist = function(_, path) return is_file(normalize(path)) end,
     GetDirListing = function(_, path, only_dirs, return_path)
@@ -3405,6 +3408,8 @@ return json_encode({
         model_texture_bindings = true,
         model_texture_metadata = true,
         native_column_splines = true,
+		native_stage_life_records = true,
+		stage_life_judgments = false,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
 		sprite_shadow_samples = true,

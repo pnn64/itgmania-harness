@@ -16,6 +16,7 @@ extern "C" {
 #include "GameManager.h"
 #include "GameState.h"
 #include "CommonMetrics.h"
+#include "ScoreKeeperNormal.h"
 #include "Course.h"
 #include "Trail.h"
 #include "MessageManager.h"
@@ -111,6 +112,7 @@ template<> std::string Luna<Course>::m_sClassName = "Course";
 template<> std::string Luna<Trail>::m_sClassName = "Trail";
 ThemeMetric<std::string> CommonMetrics::DEFAULT_NOTESKIN_NAME("Common", "DefaultNoteSkinName");
 ThemeMetric<std::string> CommonMetrics::DEFAULT_MODIFIERS("Common", "DefaultModifiers");
+ThemeMetric<int> CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES("Common", "PercentScoreDecimalPlaces");
 
 std::string CommonMetrics::LocalizeOptionItem(const std::string& name, bool optional) {
 	if (optional && !THEME->HasString("OptionNames", name)) return name;
@@ -122,6 +124,17 @@ std::string CommonMetrics::LocalizeOptionItem(const std::string& name, bool opti
 // method needs course data that this headless session cannot supply.
 Trail* Course::GetTrail(StepsType, Difficulty) const {
 	throw std::runtime_error("course trails are unavailable in the song harness");
+}
+PlayMode Course::GetPlayMode() const {
+	throw std::runtime_error("course play modes are unavailable in the song harness");
+}
+// PlayerStageStats' native Lua registration links grading too. The headless
+// host has no grading metrics; never silently produce an invented grade.
+int ScoreKeeperNormal::TapNoteScoreToGradePoints(TapNoteScore, bool) {
+	throw std::runtime_error("stage grade weights are unavailable in the song harness");
+}
+int ScoreKeeperNormal::HoldNoteScoreToGradePoints(HoldNoteScore, bool) {
+	throw std::runtime_error("stage grade weights are unavailable in the song harness");
 }
 void Trail::GetDisplayBpms(DisplayBpms&) const {
 	throw std::runtime_error("course BPMs are unavailable in the song harness");
@@ -769,8 +782,8 @@ void ReportScriptErrorFmt(const char* format, ...) {
 template<> void Push<float>(lua_State* L, float const& v) { lua_pushnumber(L, v); }
 template<> void Push<bool>(lua_State* L, bool const& v) { lua_pushboolean(L, v); }
 template<> void Push<int>(lua_State* L, int const& v) { lua_pushinteger(L, v); }
+template<> void Push<unsigned int>(lua_State* L, unsigned int const& v) { lua_pushnumber(L, double(v)); }
 template<> void Push<double>(lua_State* L, double const& v) { lua_pushnumber(L, v); }
-template<> void Push<PlayerNumber>(lua_State* L, PlayerNumber const& v) { lua_pushinteger(L, v); }
 template<> void Push<GameController>(lua_State* L, GameController const& v) { lua_pushinteger(L, v); }
 template<> void Push<std::string>(lua_State* L, std::string const& v) { lua_pushlstring(L, v.data(), v.size()); }
 

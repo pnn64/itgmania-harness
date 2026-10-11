@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "name": "stage-life",
+  "option_control": true,
+  "lua_assertions": "local p1 = _ITG_STAGE_STATS('PlayerNumber_P1')\nlocal p2 = _ITG_STAGE_STATS('PlayerNumber_P2')\nassert(p1 ~= p2 and p1 == _ITG_STAGE_STATS('PlayerNumber_P1'))\nassert(p1:GetCurrentLife() == 0 and p2:GetCurrentLife() == 0)\nassert(not pcall(_ITG_STAGE_STATS, 'PlayerNumber_P3'))\n_ITG_STAGE_LIFE_RECORD(0, 0.5, -1)\nassert(p1:GetCurrentLife() == 0)\n_ITG_STAGE_LIFE_SEED(0)\nassert(p1:GetCurrentLife() == 0.5 and p2:GetCurrentLife() == 0)\n_ITG_OPTIONS_AT(1, 'ModsLevel_Stage', 'DrainSetting', 'DrainType_NoRecover')\n_ITG_STAGE_LIFE_SEED(1)\nassert(p2:GetCurrentLife() == 1)\n_ITG_OPTIONS_AT(0, 'ModsLevel_Stage', 'DrainSetting', 'DrainType_SuddenDeath')\n_ITG_STAGE_LIFE_SEED(0)\nassert(p1:GetCurrentLife() == 1)\n_ITG_OPTIONS_AT(0, 'ModsLevel_Stage', 'DrainSetting', 'DrainType_Normal')\n_ITG_STAGE_LIFE_SEED(0)\nassert(p1:GetCurrentLife() == 0.5 and p2:GetCurrentLife() == 1)\n_ITG_STAGE_LIFE_RECORD(0, 0.25, 2)\n_ITG_STAGE_LIFE_RECORD(1, 0.75, 2)\nassert(p1:GetCurrentLife() == 0.25 and p2:GetCurrentLife() == 0.75)\n_ITG_STAGE_LIFE_RECORD(0, 1, 1)\nassert(p1:GetCurrentLife() == 0.25)\n_ITG_STAGE_LIFE_RECORD(0, 0.875, 2)\nassert(p1:GetCurrentLife() == 0.875 and p2:GetCurrentLife() == 0.75)\n"
+}

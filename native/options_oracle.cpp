@@ -8,7 +8,9 @@
 #include <limits>
 #include <memory>
 #include "NoteSkinManager.h"
+#include "PlayerStageStats.h"
 #include "ModsGroup.cpp"
+#include "PlayerNumber.cpp"
 #include "runtime_stubs.h"
 
 namespace {
@@ -21,12 +23,15 @@ struct OptionClock {
 struct OptionState {
   OptionClock clock;
   ModsGroup<PlayerOptions> players[2];
+  PlayerStageStats stats[2];
   ModsGroup<SongOptions> saved_song = GAMESTATE->m_SongOptions;
   int64_t current_time = 0;
   bool saved_rate_pref = PREFSMAN->m_bRateModsAffectTweens;
   NoteSkinManager* saved_skin = NOTESKIN;
   std::unique_ptr<NoteSkinManager> fallback_skin;
   OptionState() {
+    stats[0].Init(PLAYER_1);
+    stats[1].Init(PLAYER_2);
     // FromOneModString requires a manager even for numeric modifiers. Song
     // captures provide their populated manager; standalone numeric queries
     // use an empty native manager without inventing skin assets.
@@ -143,6 +148,7 @@ int using_modifier(lua_State* L) {
 void install_option_queries(lua_State* L) {
   // Native LuaXType builds both directions used by ENUM_INTERFACE.
   LuaLifeType(L);
+  LuaPlayerNumber(L);
   LuaDrainType(L);
   LuaHideLightType(L);
   LuaModTimerType(L);
@@ -155,6 +161,37 @@ void install_option_queries(lua_State* L) {
   });
   lua_setfield(L, -2, "__gc");
   lua_setmetatable(L, -2);
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const int player = static_cast<int>(luaL_checkinteger(L, 1));
+    if (player < 0 || player > 1) return luaL_error(L, "invalid player");
+    state->stats[player].SetLifeRecordAt(static_cast<float>(luaL_checknumber(L, 2)),
+                                        static_cast<float>(luaL_checknumber(L, 3)));
+    return 0;
+  }, 1);
+  lua_setglobal(L, "_ITG_STAGE_LIFE_RECORD");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    state->stats[Enum::Check<PlayerNumber>(L, 1)].PushSelf(L);
+    return 1;
+  }, 1);
+  lua_setglobal(L, "_ITG_STAGE_STATS");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    // Player::Load seeds SetLifeRecordAt before Foreground::LoadFromSong.
+    // Simply Love and _fallback both set LifeMeterBar.InitialValue to 0.5.
+    const int player = static_cast<int>(luaL_checkinteger(L, 1));
+    if (player < 0 || player > 1) return luaL_error(L, "invalid player");
+    const auto drain = state->players[player].GetStage().m_DrainType;
+    if (drain != DrainType_Normal && drain != DrainType_NoRecover &&
+        drain != DrainType_SuddenDeath) return luaL_error(L, "invalid drain type");
+    state->stats[player].SetLifeRecordAt(drain == DrainType_Normal ? 0.5f : 1.0f, 0.0f);
+    return 0;
+  }, 1);
+  lua_setglobal(L, "_ITG_STAGE_LIFE_SEED");
   lua_pushvalue(L, -1);
   lua_pushcclosure(L, update_options, 1);
   lua_setglobal(L, "_ITG_OPTIONS_UPDATE");
@@ -297,7 +334,8 @@ void clear_option_queries(lua_State* L) {
   for (const char* name : {"_ITG_OPTIONS_UPDATE", "_ITG_OPTIONS_AT", "_ITG_OPTIONS_LEVEL",
       "_ITG_OPTIONS_ADVANCE", "_ITG_OPTIONS_SEED", "_ITG_OPTIONS_RATE_TWEENS",
       "_ITG_OPTIONS_SKINS", "_ITG_OPTIONS_REJECTED", "_ITG_APPLY_STAGE_MODIFIERS",
-      "_ITG_USING_MODIFIER"}) {
+      "_ITG_USING_MODIFIER", "_ITG_STAGE_LIFE_RECORD",
+      "_ITG_STAGE_LIFE_SEED", "_ITG_STAGE_STATS"}) {
     lua_pushnil(L); lua_setglobal(L, name);
   }
   lua_gc(L, LUA_GCCOLLECT, 0);

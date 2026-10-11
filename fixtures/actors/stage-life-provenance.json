@@ -1,0 +1,67 @@
+{
+  "oracle": "actual ITGmania PlayerStageStats and LunaPlayerStageStats; no semantic_host.lua in actor control",
+  "sources": {
+    "src/PlayerStageStats.cpp": {
+      "compiled_vendor_sha256": "e067b3bba22adc5d016e32fd6384393d2a03d9a1bbbd2b8fe36216b03b4e7497",
+      "local_reference_sha256": "e067b3bba22adc5d016e32fd6384393d2a03d9a1bbbd2b8fe36216b03b4e7497",
+      "identical": true
+    },
+    "src/HighScore.cpp": {
+      "compiled_vendor_sha256": "676b14d2745ff2f9a67505fc4e41e75166d1f0cc263195f0f90292c95e52f83e",
+      "local_reference_sha256": "676b14d2745ff2f9a67505fc4e41e75166d1f0cc263195f0f90292c95e52f83e",
+      "identical": true
+    },
+    "src/Grade.cpp": {
+      "compiled_vendor_sha256": "d39d41f9dc37ef29228f1fdba430fb099d8142d83c7ee7cea4de98e4195e149d",
+      "local_reference_sha256": "d39d41f9dc37ef29228f1fdba430fb099d8142d83c7ee7cea4de98e4195e149d",
+      "identical": true
+    },
+    "src/DateTime.cpp": {
+      "compiled_vendor_sha256": "c64f120f9e4ab1ca8463e5f425b6746cc2c91b0bfb88db6ddbfac92375151c1d",
+      "local_reference_sha256": "c64f120f9e4ab1ca8463e5f425b6746cc2c91b0bfb88db6ddbfac92375151c1d",
+      "identical": true
+    },
+    "src/PlayerNumber.cpp": {
+      "compiled_vendor_sha256": "b3c7bda87792975a48f701809b92042fe75e00effcd194cbc0eca17e0afe97c7",
+      "local_reference_sha256": "b3c7bda87792975a48f701809b92042fe75e00effcd194cbc0eca17e0afe97c7",
+      "identical": true
+    },
+    "src/Player.cpp": {
+      "compiled_vendor_sha256": "fb9fbc6ead8073b26cc8ff9097068ed2c33b8d8c2bea58b43eb61e0384ae1935",
+      "local_reference_sha256": "fb9fbc6ead8073b26cc8ff9097068ed2c33b8d8c2bea58b43eb61e0384ae1935",
+      "identical": true
+    },
+    "src/ScreenGameplay.cpp": {
+      "compiled_vendor_sha256": "45ef96f5c1a4e9aa641139704f97c7749e061d9664a9bc42bd0cd6c84f58264b",
+      "local_reference_sha256": "45ef96f5c1a4e9aa641139704f97c7749e061d9664a9bc42bd0cd6c84f58264b",
+      "identical": true
+    },
+    "src/LifeMeterBar.cpp": {
+      "compiled_vendor_sha256": "bca833e240e2dbaff591c518784bed8de839605be5ebe48b4f8c64357f4b6ef6",
+      "local_reference_sha256": "bca833e240e2dbaff591c518784bed8de839605be5ebe48b4f8c64357f4b6ef6",
+      "identical": true
+    }
+  },
+  "control": "fixtures/actors/stage-life.json",
+  "checks": [
+    "empty record returns zero",
+    "negative timestamps are ignored",
+    "P1/P2 identity and records are separate",
+    "normal bar initialization is 0.5",
+    "NoRecover and SuddenDeath initialization is 1",
+    "latest timestamp wins, not insertion order",
+    "replacement at same timestamp updates current life",
+    "fresh sessions do not retain previous records"
+  ],
+  "lifecycle": [
+    "ScreenGameplay.cpp loads players before song foreground",
+    "Player.cpp seeds stage life from the life meter",
+    "LifeMeterBar.cpp chooses InitialValue for normal drain and 1 for other drains",
+    "Simply-Love-SM5 and _fallback metrics.ini both set InitialValue=0.5"
+  ],
+  "limits": [
+    "No judgment simulation: stage life stays initialized unless a native control records a new value",
+    "Course state and grading weights remain unavailable and throw explicit errors",
+    "Does not prove live framebuffer or app screen reload parity"
+  ]
+}

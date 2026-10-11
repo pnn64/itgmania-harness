@@ -14,6 +14,40 @@ fn itgmania_root() -> PathBuf {
 }
 
 #[test]
+fn seeds_enabled_native_stage_life_before_song_lua() {
+    let directory = temp_dir("stage-life");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, steps_type) in [("single", "dance-single"), ("double", "dance-double")] {
+        let columns = if name == "double" { "10000000" } else { "1000" };
+        let chart = format!("#TITLE:Life;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n#NOTES:{steps_type}::Challenge:1:0,0,0,0,0:\n{columns}\n;\n");
+        std::fs::write(directory.join(format!("{name}.sm")), chart).unwrap();
+    }
+    std::fs::write(directory.join("control.lua"), r#"
+local stats = STATSMAN:GetCurStageStats()
+local p1 = stats:GetPlayerStageStats('PlayerNumber_P1')
+local p2 = stats:GetPlayerStageStats('PlayerNumber_P2')
+assert(p1 ~= p2 and p1 == stats:GetPlayerStageStats('PlayerNumber_P1'))
+assert(p1:GetCurrentLife() == 0.5)
+assert(p2:GetCurrentLife() == (GAMESTATE:IsPlayerEnabled('PlayerNumber_P2') and 0.5 or 0))
+return Def.Quad { InitCommand=function(self) self:y(p1:GetCurrentLife()) end }
+"#).unwrap();
+    let out = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+        "--out", out.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for name in ["single", "double"] {
+        let trace: Value = serde_json::from_slice(
+            &std::fs::read(out.join(format!("{name}.sm.semantic.json"))).unwrap(),
+        ).unwrap();
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        assert_eq!(trace["capabilities"]["native_stage_life_records"], true);
+        assert_eq!(trace["capabilities"]["stage_life_judgments"], false);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn timing_data_keeps_each_native_owner() {
     let directory = temp_dir("timing-data");
     std::fs::create_dir_all(&directory).unwrap();
