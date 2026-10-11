@@ -119,6 +119,19 @@ def check_end(document):
     assert document["completion"]["stage_committed"], document["completion"]
 
 
+def check_percent(document):
+    values = [event["args"][1] for event in document["events"]
+              if event["operation"] == "MessageManager.Broadcast"
+              and event["args"][0] == "HarnessPercent"]
+    assert [value["index"] for value in values] == list(range(1, 11)), values
+    assert values[0]["percent"] == 0 and values[7]["percent"] == 1, values
+    assert 0.3332 < values[1]["percent"] < 0.33334, values
+    assert 0.6665 < values[2]["percent"] < 0.66664, values
+    assert 0.1427 < values[3]["percent"] < 0.14284, values
+    assert all(value["actual"] < 0 and value["percent"] == 0 for value in values[8:]), values
+    assert document["completion"]["stage_committed"], document["completion"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--itgmania-bin", type=Path, required=True)
@@ -127,7 +140,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
-    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params", "end"), default="reload")
+    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params", "end", "percent"), default="reload")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -197,7 +210,7 @@ def main():
             {"foreground": check_foregrounds, "hold-row": check_hold_row,
              "reload-queue": check_reload_queue,
              "broadcast-params": check_broadcast_params,
-             "end": check_end}[args.fixture](document)
+             "end": check_end, "percent": check_percent}[args.fixture](document)
             print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
                               "completion": document["completion"], "update_frames": len(frames)}))
             return
