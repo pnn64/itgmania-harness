@@ -790,7 +790,95 @@ void PushValueFunc(lua_State* L, int args) {
 		return count;
 	}, args + 1);
 }
-bool RunScriptOnStack(Lua*, std::string&, int, int, bool) { return false; }
+// LuaManager.cpp: execute native actor callbacks with protected stack cleanup.
+static int GetLuaStack(lua_State* L) {
+  std::string sErr;
+  LuaHelpers::Pop(L, sErr);
+
+  lua_Debug ar;
+
+  for (int iLevel = 0; lua_getstack(L, iLevel, &ar); ++iLevel) {
+    if (!lua_getinfo(L, "nSluf", &ar)) {
+      break;
+    }
+    // The function is now on the top of the stack.
+    const char* file = ar.source[0] == '@' ? ar.source + 1 : ar.short_src;
+    const char* name;
+    std::vector<std::string> vArgs;
+
+    if (!strcmp(ar.what, "C")) {
+      for (int i = 1;
+           i <= ar.nups && (name = lua_getupvalue(L, -1, i)) != nullptr; ++i) {
+        vArgs.push_back(ssprintf("%s = %s", name, lua_tostring(L, -1)));
+        lua_pop(L, 1);  // pop value
+      }
+    } else {
+      for (int i = 1; (name = lua_getlocal(L, &ar, i)) != nullptr; ++i) {
+        vArgs.push_back(ssprintf("%s = %s", name, lua_tostring(L, -1)));
+        lua_pop(L, 1);  // pop value
+      }
+    }
+
+    // If the first call is this function, omit it from the trace.
+    if (iLevel == 0 && lua_iscfunction(L, -1) &&
+        lua_tocfunction(L, 1) == GetLuaStack) {
+      lua_pop(L, 1);  // pop function
+      continue;
+    }
+    lua_pop(L, 1);  // pop function
+
+    sErr += ssprintf("\n%s:", file);
+    if (ar.currentline != -1) {
+      sErr += ssprintf("%i:", ar.currentline);
+    }
+
+    if (ar.name && ar.name[0]) {
+      sErr += ssprintf(" %s", ar.name);
+    } else if (
+        !strcmp(ar.what, "main") || !strcmp(ar.what, "tail") ||
+        !strcmp(ar.what, "C")) {
+      sErr += ssprintf(" %s", ar.what);
+    } else {
+      sErr += ssprintf(" unknown");
+    }
+    sErr += ssprintf("(%s)", join(",", vArgs).c_str());
+  }
+
+  LuaHelpers::Push(L, sErr);
+  return 1;
+}
+
+
+bool RunScriptOnStack(
+    Lua* L, std::string& Error, int Args, int ReturnValues, bool ReportError) {
+  lua_pushcfunction(L, GetLuaStack);
+
+  // move the error function above the function and params
+  int ErrFunc = lua_gettop(L) - Args - 1;
+  lua_insert(L, ErrFunc);
+
+  // evaluate
+  int ret = lua_pcall(L, Args, ReturnValues, ErrFunc);
+  if (ret) {
+    if (ReportError) {
+      std::string lerror;
+      LuaHelpers::Pop(L, lerror);
+      Error += lerror;
+      ReportScriptError(Error);
+    } else {
+      LuaHelpers::Pop(L, Error);
+    }
+    lua_remove(L, ErrFunc);
+    for (int i = 0; i < ReturnValues; ++i) {
+      lua_pushnil(L);
+    }
+    return false;
+  }
+
+  lua_remove(L, ErrFunc);
+  return true;
+}
+
 bool RunScript(
 	Lua*, const std::string&, const std::string&, std::string&, int, int, bool) {
 	return false;

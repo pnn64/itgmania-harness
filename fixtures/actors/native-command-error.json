@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "name": "native-command-error.json",
+  "lua_assertions": "local calls = 0\nfrozen:addcommand('Bad', function() error('native callback failure') end)\nfrozen:addcommand('Good', function(self) calls = calls + 1; self:x(calls) end)\nfor i = 1, 2 do frozen:playcommand('Bad'); frozen:playcommand('Good') end\nassert(calls == 2 and frozen:GetX() == 2)\n"
+}

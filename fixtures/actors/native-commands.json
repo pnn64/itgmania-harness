@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "name": "native-commands.json",
+  "lua_assertions": "local order = {}\nfrozen:addcommand('Begin', function(self, params)\n    assert(self == frozen and params == nil)\n    order[#order+1] = 'Begin'\n    self:SetFOV(45)\n    native_target:visible(false)\n    native_proxy:SetTarget(native_target)\nend)\nnative_proxy:addcommand('On', function(self)\n    order[#order+1] = 'On'\n    assert(self:GetTarget() == native_target)\nend)\nfrozen:playcommand('Begin')\nnative_proxy:playcommand('On')\nassert(order[1] == 'Begin' and order[2] == 'On')\nlocal wrapper = native_proxy:AddWrapperState()\nassert(wrapper == native_proxy:GetWrapperState(1))\nnative_proxy:AddWrapperState()\nassert(native_proxy:GetNumWrapperStates() == 2)\n"
+}

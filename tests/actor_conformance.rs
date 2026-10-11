@@ -18,6 +18,26 @@ fn run_fixture(name: &str) -> serde_json::Value {
 }
 
 #[test]
+fn executes_native_actor_commands() {
+    let output = run_fixture("native-commands.json");
+    assert_eq!(output["script_errors"], serde_json::json!([]));
+    assert_eq!(output["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
+fn recovers_after_native_command_errors() {
+    let output = run_fixture("native-command-error.json");
+    let errors = output["script_errors"].as_array().expect("native command errors");
+    assert_eq!(errors.len(), 2);
+    assert_eq!(output["script_errors"], output["diagnostics"]);
+    for error in errors {
+        let text = error.as_str().expect("native error text");
+        assert!(text.starts_with("Error playing command:"));
+        assert!(text.contains("native callback failure"));
+    }
+}
+
+#[test]
 fn keeps_chart_owned_easing_globals() {
     let output = run_fixture("easing-global.json");
     assert_eq!(output["script_errors"], serde_json::json!([]));
