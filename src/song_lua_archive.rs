@@ -519,7 +519,7 @@ fn lua_dependency_closure(
     trace: &Value,
 ) -> Result<(BTreeSet<PathBuf>, Vec<String>), Error> {
     let mut references = BTreeSet::new();
-    collect_string_values(trace, &mut |value| {
+    collect_trace_paths(trace, &mut |value| {
         if is_lua_reference(value) {
             references.insert(value.to_owned());
         }
@@ -667,7 +667,7 @@ fn texture_references(
             );
         }
     }
-    collect_string_values(trace, &mut |value| {
+    collect_trace_paths(trace, &mut |value| {
         if is_texture_reference(value) {
             textures
                 .entry(value.to_owned())
@@ -720,7 +720,7 @@ fn asset_references(
     lua_paths: &BTreeSet<PathBuf>,
 ) -> Result<Vec<AssetReference>, Error> {
     let mut references = BTreeMap::<String, Option<PathBuf>>::new();
-    collect_string_values(trace, &mut |value| {
+    collect_trace_paths(trace, &mut |value| {
         if is_asset_reference(value) {
             insert_asset_reference(&mut references, song_dir, None, value);
         }
@@ -951,6 +951,34 @@ fn is_asset_path(path: &Path) -> bool {
             )
         })
         || matches_extension(&path.to_string_lossy(), MOVIE_EXTENSIONS)
+}
+
+fn collect_trace_paths(trace: &Value, visit: &mut impl FnMut(&str)) {
+    let Some(fields) = trace.as_object().filter(|_| {
+        trace.pointer("/capabilities/native_call_sources").and_then(Value::as_bool) == Some(true)
+    }) else {
+        return collect_string_values(trace, visit);
+    };
+    for (key, value) in fields {
+        if key != "events" {
+            collect_string_values(value, visit);
+            continue;
+        }
+        for event in value.as_array().into_iter().flatten().filter_map(Value::as_object) {
+            for (key, value) in event {
+                // A theme caller is reference provenance, not a song dependency.
+                // Song callers still identify Lua helpers loaded dynamically.
+                if key == "caller" {
+                    if let Some(source) = value.get("source").and_then(Value::as_str)
+                        .filter(|source| source.starts_with("song:/")) {
+                        visit(source);
+                    }
+                } else {
+                    collect_string_values(value, visit);
+                }
+            }
+        }
+    }
 }
 
 fn collect_string_values(value: &Value, visit: &mut impl FnMut(&str)) {
@@ -1549,6 +1577,17 @@ mod tests {
             ),
             ["helpers.lua", "template/std.lua"]
         );
+    }
+
+    #[test]
+    fn native_caller_metadata_keeps_song_paths_and_real_arguments() {
+        let trace = serde_json::json!({"capabilities":{"native_call_sources":true},
+            "events":[{"caller":{"source":"@Themes/Simply Love/out.lua", "line":4},
+                "args":["external.lua", {"caller":"nested-data.lua"}]},
+                {"caller":{"source":"song:/helper.lua", "line":1}, "args":[]}]});
+        let mut paths = Vec::new();
+        collect_trace_paths(&trace, &mut |path| paths.push(path.to_owned()));
+        assert_eq!(paths, ["external.lua", "nested-data.lua", "song:/helper.lua"]);
     }
 
     #[test]
