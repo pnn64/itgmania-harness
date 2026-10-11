@@ -158,6 +158,30 @@ cargo run -- verify path/to/baselines.toml --against path/to/baselines
 cargo run -- diff path/to/expected.json path/to/actual.json
 ```
 
+`song-lua-trace --headless` uses ITGmania's native null display driver. It
+still launches the complete engine, including `ScreenGameplay`, `Player`,
+scoring and screen replacement. It records Lua semantics without opening a
+render window; it does not produce framebuffer reference images. Omit this
+option to use the install's normal renderer.
+
+ITGmania publishes the staged JSON trace atomically when `RageFile` closes
+it. The collector stops and reaps the engine on every exit, including
+invalid output and timeouts.
+
+To verify replacement against a complete engine, run:
+
+```sh
+python scripts/check_song_lua_runtime.py \
+  --harness-bin target/debug/itgmania-harness-rs.exe \
+  --itgmania-bin path/to/ITGmania/Program/ITGmania.exe \
+  --fallback-theme Simply-Love-SM5
+```
+
+The control generates silent audio in a temporary directory. It checks that
+the native Lua global survives, the selected difficulty changes from
+Challenge to Easy, stage totals are rebuilt for the smaller chart, and the
+null renderer remains active. It does not create a whole-song archive.
+
 `ITGMANIA_ROOT` can also select the source tree. If neither the option nor the
 environment variable is present, the CLI uses `vendor/itgmania` relative to this
 project. `ITGMANIA_ROOT` is also read at build time by the native build.

@@ -27,7 +27,8 @@ end
 
 local function song_source(source)
 	return type(source) == "string"
-		and source:gsub("\\", "/"):find("Songs/Harness/Probe/", 1, true) ~= nil
+		and (source:sub(1, 6) == "song:/"
+			or source:gsub("\\", "/"):find("Songs/Harness/Probe/", 1, true) ~= nil)
 end
 
 local function position()
@@ -345,6 +346,17 @@ local function install_definition_hook()
 			local result = constructor(actor_def)
 			result._Level = previous_level
 			local is_song_definition = song_source(result._Source)
+			-- A returned Def constructor can lose its caller to Lua's tail-call
+			-- optimization. Command functions retain their native source metadata.
+			if not is_song_definition then
+				for name, value in pairs(result) do
+					if type(name) == "string" and name:match("Command$")
+						and type(value) == "function" and song_source(function_source(value).source) then
+						is_song_definition = true
+						break
+					end
+				end
+			end
 			if not is_song_definition then
 				for index = 1, #result do
 					local child = result[index]
@@ -352,7 +364,6 @@ local function install_definition_hook()
 						definition_by_table[child] or song_source(child._Source)
 					) then
 						is_song_definition = true
-						if not song_source(result._Source) then result._Source = child._Source end
 						break
 					end
 				end
@@ -534,6 +545,7 @@ function trace.finish()
 		difficulty = steps and tostring(steps:GetDifficulty()) or nil,
 		description = steps and steps:GetDescription() or nil,
 		display = {
+			video_renderers = PREFSMAN:GetPreference("VideoRenderers"),
 			width = DISPLAY:GetDisplayWidth(),
 			height = DISPLAY:GetDisplayHeight(),
 			logical_width = SCREEN_WIDTH,

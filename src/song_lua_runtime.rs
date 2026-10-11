@@ -22,6 +22,7 @@ pub struct Options {
     pub fallback_theme: String,
     pub timeout: Duration,
     pub keep_run_dir: bool,
+    pub headless: bool,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -96,8 +97,9 @@ fn capture_in(
             ))
         })?;
 
+    // RageFile WRITE uses a temporary file and publishes it on Close.
     let started = Instant::now();
-    loop {
+    let result = (|| loop {
         if result_path.is_file() {
             let bytes = fs::read(&result_path).map_err(|source| {
                 Error::new(format!(
@@ -111,12 +113,15 @@ fn capture_in(
                     result_path.display()
                 ))
             })?;
-            let _ = child.kill();
-            let _ = child.wait();
             if let Some(message) = document.get("error").and_then(Value::as_str) {
                 return Err(Error::new(format!(
                     "ITGmania probe script reported: {message}"
                 )));
+            }
+            if options.headless
+                && document.pointer("/display/video_renderers").and_then(Value::as_str) != Some("null")
+            {
+                return Err(Error::new("ITGmania did not retain the requested null renderer"));
             }
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
             crate::song_lua_semantics::enrich(&mut document).map_err(|source| {
@@ -134,8 +139,6 @@ fn capture_in(
             )));
         }
         if started.elapsed() >= options.timeout {
-            let _ = child.kill();
-            let _ = child.wait();
             return Err(Error::new(format!(
                 "ITGmania did not write a semantic trace within {:.1} seconds{}",
                 options.timeout.as_secs_f64(),
@@ -143,7 +146,11 @@ fn capture_in(
             )));
         }
         thread::sleep(Duration::from_millis(25));
-    }
+    })();
+    // Reap the engine on every exit, including malformed output and I/O errors.
+    let _ = child.kill();
+    let _ = child.wait();
+    result
 }
 
 fn prepare_install(
@@ -218,7 +225,7 @@ fn prepare_install(
     write(&portable, b"[Options]\n")?;
     write(
         &run_dir.join("Save/Preferences.ini"),
-        preferences(install_root).as_bytes(),
+        preferences(install_root, options.headless)?.as_bytes(),
     )?;
     write(
         &run_dir.join("Themes/itgmania-harness/ThemeInfo.ini"),
@@ -266,8 +273,14 @@ fn install_root(binary: &Path) -> Result<PathBuf, Error> {
     Ok(parent.to_owned())
 }
 
-fn preferences(install_root: &Path) -> String {
-    format!(
+fn preferences(install_root: &Path, headless: bool) -> Result<String, Error> {
+    // CheckVideoDefaultSettings replaces VideoRenderers when this differs.
+    let renderer = if headless {
+        format!("VideoRenderers=null\nLastSeenVideoDriver={}\nShowLoadingWindow=0\n", video_driver()?)
+    } else {
+        String::new()
+    };
+    Ok(format!(
         "[Options]\n\
          AdditionalFoldersReadOnly={}\n\
          AllowMultipleInstances=1\n\
@@ -275,13 +288,57 @@ fn preferences(install_root: &Path) -> String {
          LogToDisk=1\n\
          ShowLogOutput=0\n\
          SoundDrivers=Null\n\
+         {}\
          TestInitialScreen=ScreenSongLuaHarness\n\
          Theme={THEME_NAME}\n\
          Windowed=1\n\
          DisplayWidth=854\n\
          DisplayHeight=480\n",
-        slash_path(install_root)
-    )
+        slash_path(install_root),
+        renderer
+    ))
+}
+
+#[cfg(not(windows))]
+fn video_driver() -> Result<String, Error> {
+    // StepMania.cpp::GetVideoDriverName uses this literal outside Windows.
+    Ok("OpenGL".into())
+}
+
+#[cfg(windows)]
+fn video_driver() -> Result<String, Error> {
+    // Match VideoDriverInfo.cpp::GetPrimaryVideoName, including the ANSI API.
+    #[repr(C)]
+    struct DisplayDevice {
+        size: u32,
+        name: [u8; 32],
+        description: [u8; 128],
+        flags: u32,
+        id: [u8; 128],
+        key: [u8; 128],
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn EnumDisplayDevicesA(device: *const u8, index: u32, out: *mut DisplayDevice, flags: u32) -> i32;
+    }
+    for index in 0.. {
+        let mut device = DisplayDevice {
+            size: std::mem::size_of::<DisplayDevice>() as u32,
+            name: [0; 32], description: [0; 128], flags: 0, id: [0; 128], key: [0; 128],
+        };
+        // SAFETY: the struct has the DISPLAY_DEVICEA layout, its cb is set,
+        // and the API writes only to this live buffer; a null device enumerates adapters.
+        if unsafe { EnumDisplayDevicesA(std::ptr::null(), index, &mut device, 0) } == 0 {
+            return Err(Error::new("could not identify the primary video driver for headless capture"));
+        }
+        if device.flags & 4 != 0 {
+            let end = device.description.iter().position(|byte| *byte == 0).unwrap_or(device.description.len());
+            let name = std::str::from_utf8(&device.description[..end])
+                .map_err(|_| Error::new("primary video driver name is not UTF-8"))?;
+            return Ok(name.trim_end().to_owned());
+        }
+    }
+    unreachable!("unbounded adapter enumeration returns at its end")
 }
 
 fn metrics(fallback_theme: &str) -> String {
@@ -513,6 +570,7 @@ mod tests {
             fallback_theme: "Simply-Love-SM5".into(),
             timeout: Duration::from_secs(30),
             keep_run_dir: false,
+            headless: false,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -554,6 +612,7 @@ mod tests {
             fallback_theme: "Simply-Love-SM5".into(),
             timeout: Duration::from_secs(30),
             keep_run_dir: false,
+            headless: true,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();
@@ -578,6 +637,7 @@ mod tests {
         let preferences = fs::read_to_string(run_dir.join("Save/Preferences.ini")).unwrap();
         assert!(preferences.contains("AdditionalFoldersReadOnly="));
         assert!(preferences.contains("TestInitialScreen=ScreenSongLuaHarness"));
+        assert!(preferences.contains("VideoRenderers=null"));
         fs::remove_dir_all(fixture).unwrap();
     }
 }

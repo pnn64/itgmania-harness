@@ -162,6 +162,7 @@ fn parse_song_lua_trace_args(
     let mut timeout = None;
     let mut out = None;
     let mut keep_run_dir = false;
+    let mut headless = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -219,6 +220,10 @@ fn parse_song_lua_trace_args(
                     "--keep-run-dir may only be provided once".into(),
                 ));
             }
+            Some("--headless") if !headless => headless = true,
+            Some("--headless") => {
+                return Err(CliError::Usage("--headless may only be provided once".into()));
+            }
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -242,6 +247,7 @@ fn parse_song_lua_trace_args(
             fallback_theme: fallback_theme.unwrap_or_else(|| "Simply-Love-SM5".into()),
             timeout: timeout.unwrap_or_else(|| std::time::Duration::from_secs(120)),
             keep_run_dir,
+            headless,
         },
         out,
     })
@@ -1211,7 +1217,7 @@ fn print_help() {
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
-             [--keep-run-dir]\n\
+             [--keep-run-dir] [--headless]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
