@@ -49,6 +49,12 @@ def main():
             "Difficulty_Challenge", "Difficulty_Easy"], samples
         assert all(sample["top_name"] == "ScreenGameplay" for sample in samples), samples
         assert all(sample["current_possible"] == 0 for sample in samples), samples
+        queries = [event for event in document["events"]
+                   if event["operation"] in ("PlayerStageStats.GetCurrentPossibleDancePoints",
+                                             "PlayerStageStats.GetPossibleDancePoints")]
+        assert len(queries) == 4, queries
+        assert all(event.get("actor", "").startswith("stage:current/player:")
+                   for event in queries), queries
         assert samples[1]["possible"] > 0, samples
         assert samples[0]["possible"] == 2 * samples[1]["possible"], samples
         stages = document["stage_samples"]

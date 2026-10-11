@@ -408,6 +408,9 @@ end
 
 local function assign_result_path(class, method, args, result)
 	if result == nil then return end
+	-- StageStats and PlayerStageStats use LUA_REGISTER_CLASS userdata;
+	-- actors use the instanced table binding. Retain identities for both.
+	local object_result = type(result) == "table" or type(result) == "userdata"
 	if type(result) == "table" and class == "ScreenManager" and method == "GetTopScreen" then
 		external_actor(result, "ScreenGameplay")
 	elseif type(result) == "table" and class == "ActorFrame" and method == "GetChild" then
@@ -429,11 +432,11 @@ local function assign_result_path(class, method, args, result)
 	elseif class == "PlayerState" and method == "GetPlayerOptions" then
 		actor_paths[result] = (actor_paths[args[1]] or "player-state")
 			.. "/options:" .. tostring(args[2])
-	elseif type(result) == "table" and class == "StatsManager" and method == "GetCurStageStats" then
+	elseif object_result and class == "StatsManager" and method == "GetCurStageStats" then
 		actor_paths[result] = "stage:current"
-	elseif type(result) == "table" and class == "StatsManager" and method == "GetPlayedStageStats" then
+	elseif object_result and class == "StatsManager" and method == "GetPlayedStageStats" then
 		actor_paths[result] = "stage:played:" .. tostring(args[2])
-	elseif type(result) == "table" and class == "StageStats" and method == "GetPlayerStageStats" then
+	elseif object_result and class == "StageStats" and method == "GetPlayerStageStats" then
 		actor_paths[result] = (actor_paths[args[1]] or "stage") .. "/player:" .. tostring(args[2])
 	end
 end
