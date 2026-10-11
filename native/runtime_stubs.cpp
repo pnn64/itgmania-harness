@@ -20,6 +20,10 @@ extern "C" {
 #include "GameState.h"
 #include "CommonMetrics.h"
 #include "ScoreKeeperNormal.h"
+#include "NoteDataWithScoring.h"
+#include "PlayerState.h"
+#include "ScreenManager.h"
+#include "LuaDebugManager.h"
 #include "NoteDataUtil.h"
 #include "NoteData.h"
 #include "TimingData.h"
@@ -269,6 +273,9 @@ std::mutex& harness_native_mutex() {
         LUA->RegisterTypes();
         auto manager = std::make_unique<MessageManager>();
         MESSAGEMAN = manager.get();
+        // BroadcastOnChange does not initialize its value. Native Reset uses
+        // PlayMode_Invalid; set it after the message manager exists.
+        GAMESTATE->m_PlayMode.Set(PlayMode_Invalid);
         return manager;
     }();
     return mutex;
@@ -628,13 +635,28 @@ int LuaHelpers::TypeError(Lua* L, int index, const char* type) {
 void IPreference::SetFromStack(lua_State*) {}
 void IPreference::PushValue(lua_State*) const {}
 
-// Minimal LuaManager / LuaReference scaffolding for Lua registration macros.
-LuaManager::LuaManager() : m_pLuaMain(luaL_newstate()) {}
+// Use native empty-stack coroutine acquisition for reentrant engine calls.
+// The outer harness mutex serializes all oracle access; no debugger is active.
+LuaDebugManager* LUADEBUG = nullptr;
+void LuaDebugManager::ActivateState(lua_State*) { throw std::runtime_error("native Lua debugger is unavailable"); }
+void LuaDebugManager::DeactivateState(lua_State*) { throw std::runtime_error("native Lua debugger is unavailable"); }
+static lua_State* harness_lua_main = nullptr;
+// The native pool operates on the active oracle VM. Its acquisition/release
+// algorithm stays unchanged; each song session owns a root and pool together.
+#define m_pLuaMain (harness_lua_main ? harness_lua_main : m_pLuaMain)
+#include "lua_pool.inc"
+#undef m_pLuaMain
+LuaManager::LuaManager() : m_pLuaMain(luaL_newstate()) {
+	pImpl = new Impl;
+	lua_newtable(m_pLuaMain);
+}
 LuaManager::~LuaManager() {
 	if (m_pLuaMain) {
 		lua_close(m_pLuaMain);
 		m_pLuaMain = nullptr;
 	}
+	delete pImpl;
+	pImpl = nullptr;
 }
 static std::vector<RegisterWithLuaFn>& lua_registrations() {
 	static std::vector<RegisterWithLuaFn> functions;
@@ -644,13 +666,12 @@ void LuaManager::Register(RegisterWithLuaFn fn) { lua_registrations().push_back(
 void harness_register_lua_globals(lua_State* state) {
 	for (RegisterWithLuaFn fn : lua_registrations()) fn(state);
 }
-Lua* LuaManager::Get() {
-	if (!m_pLuaMain) {
-		m_pLuaMain = luaL_newstate();
-	}
-	return m_pLuaMain;
+bool harness_shared_lua(lua_State* state) {
+	Lua* native = LUA->Get();
+	const bool shared = lua_topointer(state, LUA_REGISTRYINDEX) == lua_topointer(native, LUA_REGISTRYINDEX);
+	LUA->Release(native);
+	return shared;
 }
-void LuaManager::Release(Lua*& p) { p = m_pLuaMain; }
 void LuaManager::YieldLua() {}
 void LuaManager::UnyieldLua() {}
 void LuaManager::RegisterTypes() {
@@ -658,6 +679,7 @@ void LuaManager::RegisterTypes() {
 	// Refresh them even when this manager retains the same native Lua state.
 	Lua* state = Get();
 	harness_register_lua_globals(state);
+	Release(state);
 }
 void LuaManager::SetGlobal(const RString& name, int value) {
 	if (!m_pLuaMain) return;
@@ -1267,9 +1289,9 @@ void BroadcastPreferenceChanged(const RString&) {}
 GameState::GameState()
 	: masterPlayerNumber(PLAYER_1),
 	  processedTiming(nullptr),
-	  m_pCurGame(MessageID_Invalid),
-	  m_pCurStyle(MessageID_Invalid),
-	  m_PlayMode(MessageID_Invalid),
+	  m_pCurGame(Message_CurrentGameChanged),
+	  m_pCurStyle(Message_CurrentStyleChanged),
+	  m_PlayMode(Message_PlayModeChanged),
 	  m_iCoins(MessageID_Invalid),
 	  m_bMultiplayer(false),
 	  m_iNumMultiplayerNoteFields(0),
@@ -1292,9 +1314,9 @@ GameState::GameState()
 	  m_iCurrentStageIndex(0),
 	  m_AdjustTokensBySongCostForFinalStageCheck(false),
 	  m_bLoadingNextSong(false),
-	  m_pCurSong(MessageID_Invalid),
+	  m_pCurSong(Message_CurrentSongChanged),
 	  m_pPreferredSong(nullptr),
-	  m_pCurSteps(MessageID_Invalid),
+	  m_pCurSteps(Message_CurrentStepsP1Changed),
 	  m_pCurCourse(MessageID_Invalid),
 	  m_pCurTrail(MessageID_Invalid),
 	  m_bGameplayLeadIn(MessageID_Invalid),
@@ -1306,6 +1328,7 @@ GameState::GameState()
 	  m_sEditLocalProfileID(MessageID_Invalid)
 {
 	for (auto& s : m_SeparatedStyles) s = nullptr;
+	for (auto& player : m_pPlayerState) player = nullptr;
 	for (bool& joined : m_bSideIsJoined) joined = false;
 	for (auto& status : m_MultiPlayerStatus) status = MultiPlayerStatus_NotJoined;
 	m_SongOptions.Init();
@@ -1354,8 +1377,35 @@ bool GameState::ChangePreferredDifficulty(PlayerNumber, int) { return false; }
 bool GameState::ChangePreferredCourseDifficultyAndStepsType(PlayerNumber, CourseDifficulty, StepsType) { return false; }
 bool GameState::ChangePreferredCourseDifficulty(PlayerNumber, int) { return false; }
 #include "game_state_scoring.inc"
-#include "score_points.inc"
+#include "score_support.inc"
 #include "dance_score.inc"
+InputMapper* INPUTMAPPER = nullptr;
+void InputMapper::SetJoinControllers(PlayerNumber) {
+	throw std::runtime_error("native input controller joining is unavailable");
+}
+ScreenManager* SCREENMAN = nullptr;
+ScreenManager* harness_score_screen() {
+	if (!SCREENMAN) throw std::runtime_error("native toasty screen is unavailable");
+	return SCREENMAN;
+}
+ProfileManager* harness_score_profile() {
+	if (!PROFILEMAN) throw std::runtime_error("native toasty profile is unavailable");
+	return PROFILEMAN;
+}
+void ScreenManager::PostMessageToTopScreen(ScreenMessage, float) {
+	throw std::runtime_error("native toasty screen is unavailable");
+}
+void ProfileManager::IncrementToastiesCount(PlayerNumber) {
+	throw std::runtime_error("native toasty profile is unavailable");
+}
+const Game* harness_score_game() { return &g_Game_Dance; }
+const Style* harness_score_style(const std::string& steps_type) {
+	for (const Style* const* style = g_Game_Dance.m_apStyles; *style; ++style) {
+		if ((*style)->m_bUsedForGameplay && StepsTypeToString((*style)->m_StepsType) == steps_type)
+			return *style;
+	}
+	throw std::runtime_error("native scoring style unavailable: " + steps_type);
+}
 void GameState::SetProcessedTimingData(TimingData* td) { processedTiming = td; }
 TimingData* GameState::GetProcessedTimingData() const { return processedTiming; }
 bool GameState::IsCourseDifficultyShown(CourseDifficulty) { return true; }
@@ -1487,8 +1537,35 @@ bool push_score_metric(Lua* state, const RString& group, const RString& name) {
 		lua_newtable(state);
 		lua_pushstring(state, harness_score_mode.c_str()); lua_setfield(state, -2, "GameMode");
 		lua_setfield(state, -2, "Global"); lua_setfield(state, -2, "SL");
-		lua_setfenv(state, -2);
-		failed = lua_pcall(state, 0, 1, 0) != 0;
+		lua_pushcfunction(state, ([](lua_State* L) -> int {
+			lua_pushstring(L, GAMESTATE->GetCurrentGame()->m_szName); return 1;
+		}));
+		lua_setfield(state, -2, "CurGameName");
+		lua_newtable(state);
+		lua_pushcfunction(state, ([](lua_State* L) -> int {
+			LuaHelpers::Push(L, "PlayMode_" + PlayModeToString(GAMESTATE->m_PlayMode)); return 1;
+		}));
+		lua_setfield(state, -2, "GetPlayMode");
+		lua_pushcfunction(state, ([](lua_State* L) -> int {
+			lua_newtable(L);
+			lua_pushcfunction(L, ([](lua_State* L) -> int {
+				lua_pushstring(L, GAMESTATE->GetCurrentGame()->m_szName); return 1;
+			}));
+			lua_setfield(L, -2, "GetName"); return 1;
+		}));
+		lua_setfield(state, -2, "GetCurrentGame");
+		lua_setfield(state, -2, "GAMESTATE");
+		// Execute the fallback and Simply Love combo functions unchanged in the
+		// same private environment as the metric expression.
+		failed = luaL_loadbuffer(state, harness_combo_rules, std::strlen(harness_combo_rules), "source combo rules") != 0;
+		if (!failed) {
+			lua_pushvalue(state, -2); lua_setfenv(state, -2);
+			failed = lua_pcall(state, 0, 0, 0) != 0;
+		}
+		if (!failed) {
+			lua_setfenv(state, -2);
+			failed = lua_pcall(state, 0, 1, 0) != 0;
+		}
 	}
 	const std::string error = failed ? lua_tostring(state, -1) : "";
 	if (!failed && lua_isnil(state, -1)) {
@@ -1522,6 +1599,16 @@ void configure_score_mode(const std::string& mode) {
 	if (mode != "ITG" && mode != "FA+" && mode != "Casual")
 		throw std::runtime_error("unsupported Simply Love score mode: " + mode);
 	if (harness_scores_ready && harness_score_mode == mode) return;
+	struct ScoreGame {
+		const Game* previous = GAMESTATE->m_pCurGame;
+		ScoreGame() {
+			if (!previous) {
+				if (!harness_score_controls) throw std::runtime_error("native scoring game is not selected");
+				GAMESTATE->m_pCurGame.SetWithoutBroadcast(harness_score_game());
+			}
+		}
+		~ScoreGame() { if (!previous) GAMESTATE->m_pCurGame.SetWithoutBroadcast(nullptr); }
+	} game;
 	if (!harness_scores_ready) {
 		Lua* state = LUA->Get();
 		const std::string script = "return " + std::string(harness_score_settings);
@@ -1598,6 +1685,9 @@ bool harness_resolve_font(
 	return harness_resolve_font(redirect, result, depth + 1);
 }
 }
+void harness_prepare_scoring() {
+	if (!harness_scores_ready) configure_score_mode("ITG");
+}
 void install_score_queries(lua_State* L) {
 	harness_score_controls = true;
 	configure_score_mode("ITG");
@@ -1664,6 +1754,52 @@ void clear_score_queries(lua_State* L) {
 	configure_score_mode("ITG");
 	harness_score_controls = false;
 }
+
+struct SongLuaVM {
+	lua_State* saved_root = harness_lua_main;
+	Impl* saved_pool = pImpl;
+	bool saved_ready = harness_scores_ready;
+	std::string saved_mode = harness_score_mode;
+	lua_State* root = luaL_newstate();
+	lua_State* thread = nullptr;
+	SongLuaVM() {
+		if (!root) throw std::runtime_error("could not create native song Lua VM");
+		lua_newtable(root);
+		harness_lua_main = root;
+		pImpl = new Impl;
+		harness_scores_ready = false;
+		harness_score_mode = "ITG";
+	}
+	~SongLuaVM() {
+		if (thread) {
+			lua_settop(thread, 0);
+			LUA->Release(thread);
+		}
+		lua_close(root);
+		delete pImpl;
+		pImpl = saved_pool;
+		harness_lua_main = saved_root;
+		LUA->RegisterTypes();
+		// Session metric Lua references belong to the closing registry. Re-read
+		// them in the restored VM instead of reusing numeric registry handles.
+		harness_scores_ready = false;
+		if (saved_ready) {
+			const bool controls = harness_score_controls;
+			harness_score_controls = true;
+			configure_score_mode(saved_mode);
+			harness_score_controls = controls;
+		} else {
+			for (IThemeMetric* metric : harness_theme_metrics()) metric->Read();
+		}
+	}
+};
+
+SongLuaVM* create_song_vm(lua_State*& state) {
+	auto vm = std::make_unique<SongLuaVM>();
+	state = vm->thread = LUA->Get();
+	return vm.release();
+}
+void destroy_song_vm(SongLuaVM* vm) { delete vm; }
 
 ThemeManager::ThemeManager() : m_sCurThemeName("Harness"), m_sCurLanguage("en"), m_bPseudoLocalize(false) {
 	for (IThemeMetric* metric : harness_theme_metrics()) {
@@ -2184,6 +2320,7 @@ static void init_globals_once() {
 	new (&prefs_raw->m_bRateModsAffectTweens) Preference<bool>("RateModsAffectFGChanges", false);
 	new (&prefs_raw->m_bLightsSimplifyBass) Preference<bool>("LightsSimplifyBass", false);
 	new (&prefs_raw->m_MinTNSToHideNotes) Preference<TapNoteScore>("MinTNSToHideNotes", TNS_W3);
+#include "score_preferences.inc"
 	PREFSMAN = prefs_raw;
 
 	done = true;

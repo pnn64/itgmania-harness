@@ -1105,6 +1105,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
   std::unique_ptr<SongLuaMessages> messages;
   std::unique_ptr<SongLuaModels, decltype(&destroy_song_models)> models(nullptr, destroy_song_models);
   // Borrowed Lua handles never outlive their semantic session, including errors.
+  std::unique_ptr<SongLuaVM, decltype(&destroy_song_vm)> vm(nullptr, destroy_song_vm);
   std::vector<std::unique_ptr<CubicSplineN>> splines;
   SongPosition native_position;
   try {
@@ -1121,7 +1122,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
           "semantic timing values must be finite and positive");
     }
 
-    state = luaL_newstate();
+    vm.reset(create_song_vm(state));
     if (state == nullptr) {
       return song_lua_semantic_error_buffer("could not create Lua state");
     }
@@ -1402,6 +1403,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
       return 1;
     }, 1);
     lua_setglobal(state, "_ITG_TIMING_DATA");
+    bind_score_song(state, &timing_song);
 
     lua_getglobal(state, "os");
     if (lua_istable(state, -1)) {
@@ -1443,7 +1445,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     if (load_status != 0) {
       const std::string message = lua_error_text(state);
       messages.reset();
-      lua_close(state);
+      vm.reset();
       state = nullptr;
       return song_lua_semantic_error_buffer(message);
     }
@@ -1451,7 +1453,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     if (call_status != 0) {
       const std::string message = lua_error_text(state);
       messages.reset();
-      lua_close(state);
+      vm.reset();
       state = nullptr;
       return song_lua_semantic_error_buffer(message);
     }
@@ -1459,7 +1461,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     const char* json = lua_tolstring(state, -1, &json_len);
     if (json == nullptr) {
       messages.reset();
-      lua_close(state);
+      vm.reset();
       state = nullptr;
       return song_lua_semantic_error_buffer(
           "semantic host did not return JSON text");
@@ -1467,7 +1469,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     // Custom hosts may still return their JSON directly.
     if (document.empty()) document.assign(json, json_len);
     messages.reset();
-    lua_close(state);
+    vm.reset();
     state = nullptr;
     Writer out;
     out.song_lua_semantic_header(0);
@@ -1475,7 +1477,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     return out.release();
   } catch (const std::exception& error) {
     messages.reset();
-    if (state != nullptr) lua_close(state);
+    if (state != nullptr) vm.reset();
     try {
       return song_lua_semantic_error_buffer(error.what());
     } catch (...) {
@@ -1483,7 +1485,7 @@ extern "C" ItgOracleBuffer itg_oracle_eval_song_lua(
     }
   } catch (...) {
     messages.reset();
-    if (state != nullptr) lua_close(state);
+    if (state != nullptr) vm.reset();
     try {
       return song_lua_semantic_error_buffer(
           "unknown native song Lua semantic oracle failure");

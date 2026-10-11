@@ -17,11 +17,26 @@ void harness_native_time(int64_t microseconds);
 
 struct lua_State;
 void harness_register_lua_globals(lua_State* state);
+bool harness_shared_lua(lua_State* state);
+struct SongLuaVM;
+SongLuaVM* create_song_vm(lua_State*& state);
+void destroy_song_vm(SongLuaVM* vm);
 void install_option_queries(lua_State* state, bool scoring_control = false);
 void clear_option_queries(lua_State* state);
+class Song;
+void bind_score_song(lua_State* state, Song* song);
 // Source-backed score controls are serialized with the other native oracles.
 void install_score_queries(lua_State* state);
 void clear_score_queries(lua_State* state);
+void harness_prepare_scoring();
+class ScreenManager;
+class ProfileManager;
+struct Game;
+class Style;
+ScreenManager* harness_score_screen();
+ProfileManager* harness_score_profile();
+const Game* harness_score_game();
+const Style* harness_score_style(const std::string& steps_type);
 struct SongLuaModels;
 SongLuaModels* install_song_models(lua_State* state);
 void destroy_song_models(SongLuaModels* models);

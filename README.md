@@ -448,6 +448,20 @@ the trace `partial`, and excludes it from `song-lua-archive`. Logging the reques
 while continuing the first actor scene cannot verify a gameplay reload. The
 `delayed_screen_loading` capability remains false until that lifecycle runs.
 
+Harness 0.1.71 loads `ScoreKeeperNormal` before song Lua, using the selected
+native Steps, its timing and the player's Stage options. Stage totals now come
+from native chart loading rather than empty stats. `native_stage_score_load`
+reports this startup capability; `stage_score_judgments` remains false because
+song captures do not yet run a gameplay input/judgment timeline.
+
+The native assertion oracle dispatches explicit row and hold results through
+the complete scorekeeper. These controls cover jumps, lifts, holds, missed
+judgments, failure, modifiers, all three Simply Love scoring modes and fresh
+stage state. They do not supply fabricated judgments to song captures.
+Native toasties require an unavailable screen/profile boundary and fail
+explicitly. Stage grade queries and delayed screen reloads remain unsupported
+in song captures and cannot produce complete archives.
+
 Use repeatable `--simfile relative/path.ssc` arguments to retry selected files.
 Selections must resolve to simfiles inside the corpus; duplicates run once.
 Charts with no Lua references produce complete empty actor captures, so their

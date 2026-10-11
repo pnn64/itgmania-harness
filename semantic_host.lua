@@ -2128,9 +2128,13 @@ PROFILEMAN = {
 	GetProfile = function() return harness_profile end,
     GetPlayerName = function() return "" end,
 }
--- ScreenGameplay loads players and seeds their life record before song Lua.
--- This capture does not simulate judgments or subsequent life changes.
-for player = 0, (is_double and 0 or 1) do _ITG_STAGE_LIFE_SEED(player) end
+-- ScreenGameplay loads the native scorekeeper and players before song Lua.
+-- Stage totals use the selected Steps and Stage modifiers. Judgments and
+-- subsequent life changes still require a real gameplay input timeline.
+for player = 0, (is_double and 0 or 1) do
+	harness.native_stage_scores_loaded = _ITG_STAGE_SCORE_LOAD(player, harness.current_steps or 1)
+	_ITG_STAGE_LIFE_SEED(player)
+end
 STATSMAN = { GetCurStageStats = function() return external_actor("stage-stats", "StageStats") end }
 FILEMAN = { DoesFileExist = function(_, path) return is_file(normalize(path)) end,
     GetDirListing = function(_, path, only_dirs, return_path)
@@ -3417,6 +3421,8 @@ return json_encode({
         native_column_splines = true,
 		native_stage_life_records = true,
 		stage_life_judgments = false,
+		native_stage_score_load = harness.native_stage_scores_loaded == true,
+		stage_score_judgments = false,
 		delayed_screen_loading = false,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,

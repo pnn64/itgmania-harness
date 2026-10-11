@@ -46,7 +46,7 @@
 // Normal native Lua calls retain the original COMMON_RETURN_SELF behavior.
 #undef COMMON_RETURN_SELF
 #define COMMON_RETURN_SELF \
-  if (L == LUA->Get()) p->PushSelf(L); else lua_pushnil(L); \
+  if (harness_shared_lua(L)) p->PushSelf(L); else lua_pushnil(L); \
   return 1;
 #include "ActorMultiVertex.cpp"
 #include "Model.cpp"

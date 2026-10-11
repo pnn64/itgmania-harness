@@ -9,6 +9,14 @@
 #include <memory>
 #include "NoteSkinManager.h"
 #include "PlayerStageStats.h"
+#include "PlayerState.h"
+#include "ScoreKeeperNormal.h"
+#include "NoteDataUtil.h"
+#include "Song.h"
+#include "Steps.h"
+#include "Style.h"
+#include "TimingSegments.h"
+#include <set>
 #include "ModsGroup.cpp"
 #include "PlayerNumber.cpp"
 #include "runtime_stubs.h"
@@ -22,8 +30,24 @@ struct OptionClock {
 
 struct OptionState {
   OptionClock clock;
-  ModsGroup<PlayerOptions> players[2];
+  PlayerState players[2];
   PlayerStageStats stats[2];
+  std::unique_ptr<ScoreKeeperNormal> scores[2];
+  NoteData notes[2];
+  std::set<int> judged_rows[2];
+  std::set<std::pair<int, int>> judged_holds[2];
+  Song* song = nullptr;
+  std::unique_ptr<Song> control_song;
+  bool scores_loaded = false;
+  const Game* saved_game = GAMESTATE->m_pCurGame;
+  const Style* saved_style[2] = {
+      saved_game ? GAMESTATE->GetCurrentStyle(PLAYER_1) : nullptr,
+      saved_game ? GAMESTATE->GetCurrentStyle(PLAYER_2) : nullptr};
+  PlayMode saved_play = GAMESTATE->m_PlayMode;
+  Song* saved_current_song = GAMESTATE->m_pCurSong;
+  Steps* saved_steps[2] = {GAMESTATE->m_pCurSteps[0], GAMESTATE->m_pCurSteps[1]};
+  PlayerState* saved_players[2] = {GAMESTATE->m_pPlayerState[0], GAMESTATE->m_pPlayerState[1]};
+  TimingData* saved_timing = GAMESTATE->GetProcessedTimingData();
   ModsGroup<SongOptions> saved_song = GAMESTATE->m_SongOptions;
   int64_t current_time = 0;
   bool saved_rate_pref = PREFSMAN->m_bRateModsAffectTweens;
@@ -32,6 +56,8 @@ struct OptionState {
   NoteSkinManager* saved_skin = NOTESKIN;
   std::unique_ptr<NoteSkinManager> fallback_skin;
   OptionState() {
+    players[0].SetPlayerNumber(PLAYER_1);
+    players[1].SetPlayerNumber(PLAYER_2);
     stats[0].Init(PLAYER_1);
     stats[1].Init(PLAYER_2);
     // FromOneModString requires a manager even for numeric modifiers. Song
@@ -44,11 +70,54 @@ struct OptionState {
     GAMESTATE->m_SongOptions = ModsGroup<SongOptions>{};
   }
   ~OptionState() {
+    for (auto& score : scores) score.reset();
+    if (scores_loaded) {
+      GAMESTATE->m_pCurGame.Set(saved_game ? saved_game : harness_score_game());
+      for (int player = 0; player < 2; ++player) {
+        GAMESTATE->SetCurrentStyle(saved_style[player], static_cast<PlayerNumber>(player));
+        GAMESTATE->m_pCurSteps[player].Set(saved_steps[player]);
+        GAMESTATE->m_pPlayerState[player] = saved_players[player];
+      }
+      GAMESTATE->m_pCurGame.Set(saved_game);
+      GAMESTATE->m_PlayMode.Set(saved_play);
+      GAMESTATE->m_pCurSong.Set(saved_current_song);
+      GAMESTATE->SetProcessedTimingData(saved_timing);
+    }
     GAMESTATE->m_SongOptions = saved_song;
     PREFSMAN->m_bRateModsAffectTweens.Set(saved_rate_pref);
     PREFSMAN->m_AllowW1.Set(saved_allow_w1);
     PREFSMAN->m_bMercifulBeginner.Set(saved_merciful);
     if (fallback_skin) NOTESKIN = saved_skin;
+  }
+  void LoadScore(int player, Steps* steps) {
+    scores_loaded = true;
+    GAMESTATE->m_pCurGame.Set(harness_score_game());
+    harness_prepare_scoring();
+    GAMESTATE->m_PlayMode.Set(PLAY_MODE_REGULAR);
+    GAMESTATE->m_pCurSong.Set(song);
+    GAMESTATE->m_pCurSteps[player].Set(steps);
+    GAMESTATE->m_pPlayerState[player] = &players[player];
+    const Style* style = harness_score_style(StepsTypeToString(steps->m_StepsType));
+    GAMESTATE->SetCurrentStyle(style, static_cast<PlayerNumber>(player));
+    scores[player].reset();
+    stats[player] = PlayerStageStats();
+    stats[player].Init(static_cast<PlayerNumber>(player));
+    // ScreenGameplay sets the queue/joined state before ScoreKeeper::Load,
+    // then increments StepsPlayed while loading the first song.
+    stats[player].m_vpPossibleSteps = {steps};
+    stats[player].m_bJoined = true;
+    stats[player].m_pStyle = style;
+    judged_rows[player].clear();
+    judged_holds[player].clear();
+    scores[player] = std::make_unique<ScoreKeeperNormal>(&players[player], &stats[player]);
+    scores[player]->Load({song}, {steps}, {AttackArray{}});
+    NoteData original;
+    steps->GetNoteData(original);
+    style->GetTransformedNoteDataForStyle(static_cast<PlayerNumber>(player), original, notes[player]);
+    NoteDataUtil::TransformNoteData(notes[player], *steps->GetTimingData(),
+                                   players[player].m_PlayerOptions.GetStage(), steps->m_StepsType);
+    ++stats[player].m_iStepsPlayed;
+    scores[player]->OnNextSong(0, steps, &notes[player]);
   }
 };
 
@@ -93,12 +162,12 @@ int option_call(OptionState* state, int player, ModsLevel level,
   }
   if (player < 0 || player > 1) return luaL_error(L, "invalid player");
   if (method == "GetString") {
-    LuaHelpers::Push(L, state->players[player].Get(level).GetString());
+    LuaHelpers::Push(L, state->players[player].m_PlayerOptions.Get(level).GetString());
     return 1;
   }
   if (method == "GetMods") {
     std::vector<std::string> parts;
-    state->players[player].Get(level).GetMods(parts);
+    state->players[player].m_PlayerOptions.Get(level).GetMods(parts);
     LuaHelpers::CreateTableFromArray(parts, L);
     return 1;
   }
@@ -107,14 +176,14 @@ int option_call(OptionState* state, int player, ModsLevel level,
     // does not add modifiers to the previous PlayerOptions instance.
     PlayerOptions options;
     options.FromString(luaL_checkstring(L, 1));
-    state->players[player].Assign(level, options);
+    state->players[player].m_PlayerOptions.Assign(level, options);
     return 0;
   }
   // OPTIONAL_RETURN_SELF tests original_top. Index zero is not a valid Lua
   // argument; use the equivalent explicit-nil native getter to avoid reading
   // a stale slot outside the argument stack after a successful skin setter.
   if (method == "NoteSkin" && lua_gettop(L) == 0) lua_pushnil(L);
-  return call_option(&state->players[player].Get(level), L, method, player_methods);
+  return call_option(&state->players[player].m_PlayerOptions.Get(level), L, method, player_methods);
 }
 
 int update_options(lua_State* L) {
@@ -140,11 +209,11 @@ int using_modifier(lua_State* L) {
   if (player < 0 || player > 1) return luaL_error(L, "invalid player");
   const std::string text = luaL_checkstring(L, 2);
   // GameState::PlayerIsUsingModifier: apply to copies and compare current values.
-  PlayerOptions po = state->players[player].GetCurrent();
+  PlayerOptions po = state->players[player].m_PlayerOptions.GetCurrent();
   SongOptions so = GAMESTATE->m_SongOptions.GetCurrent();
   po.FromString(text);
   so.FromString(text);
-  lua_pushboolean(L, po == state->players[player].GetCurrent() && so == GAMESTATE->m_SongOptions.GetCurrent());
+  lua_pushboolean(L, po == state->players[player].m_PlayerOptions.GetCurrent() && so == GAMESTATE->m_SongOptions.GetCurrent());
   return 1;
 }
 }
@@ -166,6 +235,113 @@ void install_option_queries(lua_State* L, bool scoring_control) {
   });
   lua_setfield(L, -2, "__gc");
   lua_setmetatable(L, -2);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, LUA_REGISTRYINDEX, "ITG_SCORE_STATE");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const int player = Enum::Check<PlayerNumber>(L, 1);
+    const int index = luaL_checkint(L, 2);
+    if (!state->song || state->song->GetAllSteps().empty()) {
+      lua_pushboolean(L, false); return 1;
+    }
+    const auto& steps = state->song->GetAllSteps();
+    if (index < 1 || index > static_cast<int>(steps.size())) return luaL_error(L, "invalid native score chart");
+    try {
+      state->LoadScore(player, steps[index - 1]);
+    } catch (const std::exception& error) {
+      return luaL_error(L, "%s", error.what());
+    }
+    lua_pushboolean(L, true); return 1;
+  }, 1);
+  lua_setglobal(L, "_ITG_STAGE_SCORE_LOAD");
+  if (scoring_control) {
+    lua_pushvalue(L, -1);
+    lua_pushcclosure(L, [](lua_State* L) -> int {
+      auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+      const int player = Enum::Check<PlayerNumber>(L, 1);
+      const std::string text = luaL_checkstring(L, 2);
+      const Difficulty difficulty = Enum::Check<Difficulty>(L, 3);
+      const float seconds = lua_gettop(L) >= 4 ? FArg(4) : 2.0f;
+      if (!std::isfinite(seconds) || seconds <= 0) return luaL_error(L, "invalid score chart length");
+      if (!state->control_song) {
+        state->control_song = std::make_unique<Song>();
+        state->control_song->m_SongTiming.AddSegment(BPMSegment(0, 120.0f));
+        state->control_song->m_SongTiming.TidyUpData(false);
+      }
+      state->song = state->control_song.get();
+      state->song->m_fMusicLengthSeconds = seconds;
+      auto* steps = state->song->CreateSteps();
+      steps->m_StepsType = StepsType_dance_single;
+      steps->m_StepsTypeStr = "dance-single";
+      steps->SetDifficulty(difficulty);
+      steps->SetSMNoteData(text);
+      state->song->AddSteps(steps);
+      try {
+        state->LoadScore(player, steps);
+      } catch (const std::exception& error) {
+        return luaL_error(L, "%s", error.what());
+      }
+      return 0;
+    }, 1);
+    lua_setglobal(L, "_ITG_SCORE_CHART");
+    lua_pushvalue(L, -1);
+    lua_pushcclosure(L, [](lua_State* L) -> int {
+      auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+      const int player = Enum::Check<PlayerNumber>(L, 1);
+      const int row = luaL_checkint(L, 2);
+      const TapNoteScore score = Enum::Check<TapNoteScore>(L, 3);
+      if (!state->scores[player] || score < TNS_Miss || score > TNS_W1 ||
+          state->judged_rows[player].count(row) ||
+          !GAMESTATE->m_pCurSteps[player]->GetTimingData()->IsJudgableAtRow(row))
+        return luaL_error(L, "invalid or repeated score row");
+      auto& notes = state->notes[player];
+      int count = 0;
+      for (int track = 0; track < notes.GetNumTracks(); ++track) {
+        auto note = notes.GetTapNote(track, row);
+        if (note.type == TapNoteType_Tap || note.type == TapNoteType_HoldHead || note.type == TapNoteType_Lift) {
+          note.result.tns = score;
+          note.result.fTapNoteOffset = 0.0f;
+          notes.SetTapNote(track, row, note);
+          ++count;
+        }
+      }
+      if (!count) return luaL_error(L, "native score row has no taps");
+      state->judged_rows[player].insert(row);
+      try {
+        for (int track = 0; track < notes.GetNumTracks(); ++track) {
+          const auto& note = notes.GetTapNote(track, row);
+          if (note.type == TapNoteType_Tap || note.type == TapNoteType_HoldHead || note.type == TapNoteType_Lift)
+            state->scores[player]->HandleTapScore(note);
+        }
+        state->scores[player]->HandleTapRowScore(notes, row);
+      } catch (const std::exception& error) {
+        return luaL_error(L, "%s", error.what());
+      }
+      return 0;
+    }, 1);
+    lua_setglobal(L, "_ITG_SCORE_ROW");
+    lua_pushvalue(L, -1);
+    lua_pushcclosure(L, [](lua_State* L) -> int {
+      auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+      const int player = Enum::Check<PlayerNumber>(L, 1);
+      const int track = luaL_checkint(L, 2);
+      const int row = luaL_checkint(L, 3);
+      const HoldNoteScore score = Enum::Check<HoldNoteScore>(L, 4);
+      auto& notes = state->notes[player];
+      if (!state->scores[player] || track < 0 || track >= notes.GetNumTracks() ||
+          score == HNS_None || state->judged_holds[player].count({track, row}))
+        return luaL_error(L, "invalid or repeated hold judgment");
+      auto note = notes.GetTapNote(track, row);
+      if (note.type != TapNoteType_HoldHead) return luaL_error(L, "native score note is not a hold");
+      note.HoldResult.hns = score;
+      notes.SetTapNote(track, row, note);
+      state->judged_holds[player].insert({track, row});
+      state->scores[player]->HandleHoldScore(note);
+      return 0;
+    }, 1);
+    lua_setglobal(L, "_ITG_SCORE_HOLD");
+  }
   lua_pushvalue(L, -1);
   lua_pushcclosure(L, [](lua_State* L) -> int {
     auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
@@ -190,7 +366,7 @@ void install_option_queries(lua_State* L, bool scoring_control) {
     // Simply Love and _fallback both set LifeMeterBar.InitialValue to 0.5.
     const int player = static_cast<int>(luaL_checkinteger(L, 1));
     if (player < 0 || player > 1) return luaL_error(L, "invalid player");
-    const auto drain = state->players[player].GetStage().m_DrainType;
+    const auto drain = state->players[player].m_PlayerOptions.GetStage().m_DrainType;
     if (drain != DrainType_Normal && drain != DrainType_NoRecover &&
         drain != DrainType_SuddenDeath) return luaL_error(L, "invalid drain type");
     state->stats[player].SetLifeRecordAt(drain == DrainType_Normal ? 0.5f : 1.0f, 0.0f);
@@ -232,7 +408,7 @@ void install_option_queries(lua_State* L, bool scoring_control) {
     auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
     const int player = static_cast<int>(luaL_checkinteger(L, 1));
     if (player < 0 || player > 1) return luaL_error(L, "invalid player");
-    state->players[player].Assign(ModsLevel_Preferred, state->players[player].GetSong());
+    state->players[player].m_PlayerOptions.Assign(ModsLevel_Preferred, state->players[player].m_PlayerOptions.GetSong());
     return 0;
   }, 1);
   lua_setglobal(L, "_ITG_OPTIONS_SEED");
@@ -266,7 +442,7 @@ void install_option_queries(lua_State* L, bool scoring_control) {
       if (key == "random" && !named) continue;
       if (key != "clearall" && key != "noteskin" && !named &&
           !NOTESKIN->DoesNoteSkinExist(lower)) continue;
-      PlayerOptions probe = state->players[player].Get(level);
+      PlayerOptions probe = state->players[player].m_PlayerOptions.Get(level);
       // A copy with an impossible skin distinguishes the native skin branch
       // from a same-name numeric modifier without mutating live options.
       probe.m_sNoteSkin = "\1harness-skin-probe";
@@ -302,7 +478,7 @@ void install_option_queries(lua_State* L, bool scoring_control) {
       // Do not consume RNG again or classify native skin branches as errors.
       if (key == "random" || NOTESKIN->DoesNoteSkinExist(key) ||
           NOTESKIN->DoesNoteSkinExist(lower)) continue;
-      const PlayerOptions& current = state->players[player].Get(level);
+      const PlayerOptions& current = state->players[player].m_PlayerOptions.Get(level);
       PlayerOptions probe = current;
       std::string error;
       if (probe.FromOneModString(part, error)) continue;
@@ -324,7 +500,7 @@ void install_option_queries(lua_State* L, bool scoring_control) {
     const std::string modifiers = luaL_checkstring(L, 2);
     if (player < 0 || player > 1) return luaL_error(L, "invalid player");
     // GameState::ApplyStageModifiers calls the native ModsGroup at Stage.
-    state->players[player].FromString(ModsLevel_Stage, modifiers);
+    state->players[player].m_PlayerOptions.FromString(ModsLevel_Stage, modifiers);
     GAMESTATE->m_SongOptions.FromString(ModsLevel_Stage, modifiers);
     return 0;
   }, 1);
@@ -336,13 +512,23 @@ void install_option_queries(lua_State* L, bool scoring_control) {
 // Native assertion controls use the manager's persistent Lua state. Release
 // their query closures and restore the clock/GameState before the next oracle.
 void clear_option_queries(lua_State* L) {
-  clear_score_queries(L);
   for (const char* name : {"_ITG_OPTIONS_UPDATE", "_ITG_OPTIONS_AT", "_ITG_OPTIONS_LEVEL",
       "_ITG_OPTIONS_ADVANCE", "_ITG_OPTIONS_SEED", "_ITG_OPTIONS_RATE_TWEENS",
       "_ITG_OPTIONS_SKINS", "_ITG_OPTIONS_REJECTED", "_ITG_APPLY_STAGE_MODIFIERS",
       "_ITG_USING_MODIFIER", "_ITG_STAGE_LIFE_RECORD",
-      "_ITG_STAGE_LIFE_SEED", "_ITG_STAGE_STATS"}) {
+      "_ITG_STAGE_LIFE_SEED", "_ITG_STAGE_STATS", "_ITG_STAGE_SCORE_LOAD",
+      "_ITG_SCORE_CHART", "_ITG_SCORE_ROW", "_ITG_SCORE_HOLD"}) {
     lua_pushnil(L); lua_setglobal(L, name);
   }
+  lua_pushnil(L); lua_setfield(L, LUA_REGISTRYINDEX, "ITG_SCORE_STATE");
   lua_gc(L, LUA_GCCOLLECT, 0);
+  clear_score_queries(L);
+}
+
+void bind_score_song(lua_State* L, Song* song) {
+  lua_getfield(L, LUA_REGISTRYINDEX, "ITG_SCORE_STATE");
+  auto* state = static_cast<OptionState*>(lua_touserdata(L, -1));
+  if (!state) throw std::runtime_error("native score state not installed");
+  state->song = song;
+  lua_pop(L, 1);
 }

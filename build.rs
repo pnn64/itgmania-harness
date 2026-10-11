@@ -28,6 +28,11 @@ const ITG_SOURCES: &[&str] = &[
     "src/ScreenMessage.cpp",
     "src/MessageManager.cpp",
     "src/PlayerStageStats.cpp",
+    "src/PlayerState.cpp",
+    "src/SampleHistory.cpp",
+    "src/Attack.cpp",
+    "src/NoteDataWithScoring.cpp",
+    "src/GamePreferences.cpp",
     "src/HighScore.cpp",
     "src/Grade.cpp",
     "src/DateTime.cpp",
@@ -147,6 +152,7 @@ fn main() {
     println!("cargo:rerun-if-changed=native/oracle_bridge.h");
     println!("cargo:rerun-if-changed=native/actor_oracle.cpp");
     println!("cargo:rerun-if-changed=native/options_oracle.cpp");
+    println!("cargo:rerun-if-changed=native/scoring_oracle.cpp");
     println!("cargo:rerun-if-changed=native/runtime_stubs.cpp");
     println!("cargo:rerun-if-changed=native/runtime_stubs.h");
 
@@ -246,6 +252,7 @@ fn main() {
         .file(manifest.join("native/chart_theme.cpp"))
         .file(manifest.join("native/actor_oracle.cpp"))
         .file(manifest.join("native/options_oracle.cpp"))
+        .file(manifest.join("native/scoring_oracle.cpp"))
         .file(manifest.join("native/runtime_stubs.cpp"));
 
     if target_os == "windows" {
@@ -363,22 +370,18 @@ fn compile_image_deps(root: &Path, out: &Path, target_os: &str) {
     if target_os == "windows" {
         configure.args(["-G", "NMake Makefiles"]);
     }
-    assert!(
-        configure
-            .status()
-            .expect("configure native JPEG codec")
-            .success()
-    );
-    assert!(
-        Command::new("cmake")
-            .envs(tool.env().iter().cloned())
-            .arg("--build")
-            .arg(&destination)
-            .args(["--target", "jpeg-static", "--config", "Release"])
-            .status()
-            .expect("build native JPEG codec")
-            .success()
-    );
+    assert!(configure
+        .status()
+        .expect("configure native JPEG codec")
+        .success());
+    assert!(Command::new("cmake")
+        .envs(tool.env().iter().cloned())
+        .arg("--build")
+        .arg(&destination)
+        .args(["--target", "jpeg-static", "--config", "Release"])
+        .status()
+        .expect("build native JPEG codec")
+        .success());
     println!("cargo:rustc-link-search=native={}", destination.display());
     // Emit after the oracle library so Unix static archive ordering resolves
     // the native loaders' codec references.
@@ -525,14 +528,59 @@ fn write_song_stats(root: &Path, out: &Path) {
 }
 
 fn write_scoring_state(root: &Path, out: &Path) {
+    let path = root.join("src/LuaManager.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native Lua state pooling");
+    let start = source
+        .find("struct Impl {")
+        .expect("native Lua pool storage");
+    let end = start
+        + source[start..]
+            .find("#if defined(_MSC_VER)")
+            .expect("end of Lua pool storage");
+    let methods = source
+        .find("Lua* LuaManager::Get() {")
+        .expect("native Lua acquisition");
+    let methods_end = methods + source[methods..].find("\n/*").expect("end of Lua release");
+    fs::write(
+        out.join("lua_pool.inc"),
+        format!(
+            "{}\n#define THREAD_POOL 1\n{}",
+            &source[start..end],
+            &source[methods..methods_end]
+        ),
+    )
+    .expect("write unchanged Lua pooling");
+    let path = root.join("src/PrefsManager.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = fs::read_to_string(path).expect("read native scoring preferences");
+    let mut preferences = String::new();
+    for (field, kind) in [("m_AllowW1", "AllowW1"), ("m_bMercifulBeginner", "bool")] {
+        let (_, args) = source
+            .split_once(&format!("{field}("))
+            .expect("native scoring preference initializer");
+        let (args, _) = args.split_once(')').expect("end of scoring preference");
+        preferences.push_str(&format!(
+            "new (&prefs_raw->{field}) Preference<{kind}>({args});\n"
+        ));
+    }
+    fs::write(out.join("score_preferences.inc"), preferences).expect("write scoring preferences");
     let path = root.join("src/GameState.cpp");
     println!("cargo:rerun-if-changed={}", path.display());
     let source = fs::read_to_string(&path).expect("read native scoring game state");
     let mut methods = String::new();
     for (start, end) in [
         (
-            "const Game* GameState::GetCurrentGame() const {",
-            "void GameState::SetCurrentStyle(",
+            "int GameState::GetNumSidesJoined() const {",
+            "bool GameState::SetCompatibleStyle(",
+        ),
+        (
+            "PlayerNumber GameState::GetMasterPlayerNumber() const {",
+            "void GameState::SetMasterPlayerNumber(",
+        ),
+        (
+            "int GameState::GetNumStagesMultiplierForSong(",
+            "int GameState::GetNumStagesForCurrentSongAndStepsOrCourse(",
         ),
         (
             "bool GameState::ShowW1() const {",
@@ -549,31 +597,47 @@ fn write_scoring_state(root: &Path, out: &Path) {
         methods.push_str(&source[start..end]);
     }
     fs::write(out.join("game_state_scoring.inc"), methods).expect("write unchanged native methods");
-    let path = root.join("src/ScoreKeeperNormal.cpp");
-    println!("cargo:rerun-if-changed={}", path.display());
-    let source = fs::read_to_string(path).expect("read native scoring methods");
-    let weights = source
-        .find("static std::string PercentScoreWeightName(")
-        .expect("native weight names");
-    let weights_end = source
-        .find("ScoreKeeperNormal::ScoreKeeperNormal(")
-        .expect("end of weight declarations");
-    let totals = source
-        .find("int ScoreKeeperNormal::GetPossibleDancePoints(")
-        .expect("native possible points");
-    let methods_end = totals
-        + source[totals..]
-            .find("\n/*")
-            .expect("end of native scoring methods");
-    fs::write(
-        out.join("score_points.inc"),
-        format!(
-            "{}{}",
-            &source[weights..weights_end],
-            &source[totals..methods_end]
+    let mut support = String::new();
+    for (file, start, end) in [
+        (
+            "PrefsManager.cpp",
+            "static const char* AllowW1Names[]",
+            "static const char* MaybeNames[]",
         ),
-    )
-    .expect("write unchanged native scoring methods");
+        (
+            "ScoreKeeper.cpp",
+            "ScoreKeeper::ScoreKeeper(",
+            "#include \"ScoreKeeperNormal.h\"",
+        ),
+        (
+            "Style.cpp",
+            "void Style::GetTransformedNoteDataForStyle(",
+            "void Style::StyleInputToGameInput(",
+        ),
+        (
+            "Song.cpp",
+            "static Preference<float> g_fLongVerSongSeconds(",
+            "static Preference<bool> g_BackUpAllSongSaves(",
+        ),
+        ("Song.cpp", "bool Song::IsLong() const {", "// lua start"),
+        (
+            "Player.cpp",
+            "ThemeMetric<bool> PENALIZE_TAP_SCORE_NONE(",
+            "ThemeMetric<bool> JUDGE_HOLD_NOTES_ON_SAME_ROW_TOGETHER(",
+        ),
+    ] {
+        let path = root.join("src").join(file);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let source = fs::read_to_string(path).expect("read scoring support");
+        let start = source.find(start).expect("native scoring support method");
+        let end = start + source[start..].find(end).expect("end of scoring support");
+        support.push_str(&source[start..end]);
+    }
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("src/ScoreKeeperNormal.cpp").display()
+    );
+    fs::write(out.join("score_support.inc"), support).expect("write unchanged scoring support");
     write_score_metrics(root, out);
     let path = root.join("src/GameManager.cpp");
     println!("cargo:rerun-if-changed={}", path.display());
@@ -620,6 +684,28 @@ fn write_score_metrics(root: &Path, out: &Path) {
     let mut output = format!(
         "static const char* harness_score_settings = R\"ITGMETRIC({metrics})ITGMETRIC\";\n"
     );
+    let mut helpers = String::new();
+    for (path, start, end) in [
+        (
+            root.join("Themes/_fallback/Scripts/03 Gameplay.lua"),
+            "function ComboContinue()",
+            "function EvalUsesCheckpointsWithJudgments()",
+        ),
+        (
+            theme.join("Scripts/SL-Helpers.lua"),
+            "GetComboThreshold = function(",
+            "-- FailType is a PlayerOption",
+        ),
+    ] {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let source = fs::read_to_string(path).expect("read source combo rules");
+        let start = source.find(start).expect("source combo function");
+        let end = start + source[start..].find(end).expect("end of combo function");
+        helpers.push_str(&source[start..end]);
+    }
+    output.push_str(&format!(
+        "static const char* harness_combo_rules = R\"ITGMETRIC({helpers})ITGMETRIC\";\n"
+    ));
     output.push_str("static const char* harness_score_metrics[][3] = {\n");
     for path in [
         root.join("Themes/_fallback/metrics.ini"),
@@ -634,7 +720,10 @@ fn write_score_metrics(root: &Path, out: &Path) {
             let line = line.trim();
             if line.starts_with('[') && line.ends_with(']') {
                 group = line[1..line.len() - 1].to_owned();
-            } else if ["ScoreKeeperNormal", "PlayerStageStats"].contains(&group.as_str()) {
+            } else if ["ScoreKeeperNormal", "PlayerStageStats", "Gameplay"]
+                .contains(&group.as_str())
+                || (group == "Player" && line.starts_with("PenalizeTapScoreNone="))
+            {
                 if let Some((name, value)) = line.split_once('=') {
                     if !name.starts_with('#') && !name.starts_with(';') && !value.is_empty() {
                         output.push_str(&format!(

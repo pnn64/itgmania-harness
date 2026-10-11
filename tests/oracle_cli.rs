@@ -124,6 +124,42 @@ return Def.ActorFrame{}
 }
 
 #[test]
+fn loads_native_stage_totals_before_song_lua() {
+    let directory = temp_dir("stage-score-load");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, steps_type, notes) in [
+        ("single", "dance-single", "1100\n2000\n3000\n00L0"),
+        ("double", "dance-double", "10001000\n20000000\n30000000\n000000L0"),
+    ] {
+        let chart = format!("#TITLE:Native score load;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n#NOTES:{steps_type}::Challenge:1:0,0,0,0,0:\n{notes}\n;\n");
+        std::fs::write(directory.join(format!("{name}.sm")), chart).unwrap();
+    }
+    std::fs::write(directory.join("control.lua"), r#"
+assert(_ITG_SCORE_CHART == nil and _ITG_SCORE_ROW == nil and _ITG_SCORE_HOLD == nil)
+local stage = STATSMAN:GetCurStageStats()
+for pn = 0, 1 do
+    local stats = stage:GetPlayerStageStats(pn)
+    assert(stats:GetPossibleDancePoints() == (GAMESTATE:IsPlayerEnabled(pn) and 20 or 0))
+    assert(stats:GetCurrentPossibleDancePoints() == 0)
+    assert(stats:GetActualDancePoints() == 0)
+end
+return Def.ActorFrame{}
+"#).unwrap();
+    let out = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+        "--out", out.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for name in ["single", "double"] {
+        let trace: Value = serde_json::from_slice(
+            &std::fs::read(out.join(format!("{name}.sm.semantic.json"))).unwrap(),
+        ).unwrap();
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["capabilities"]["native_stage_score_load"], true);
+        assert_eq!(trace["capabilities"]["stage_score_judgments"], false);
+    }
+}
+
+#[test]
 fn excludes_unexecuted_screen_reload_archives() {
     let directory = temp_dir("screen-reload");
     let corpus = directory.join("corpus");

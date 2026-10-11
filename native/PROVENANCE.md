@@ -311,6 +311,47 @@ stage grade queries until their native judgment state is populated.
 Requested screen reloads still
 produce a partial capture and no complete archive.
 
+Harness 0.1.71 compiles the complete pinned `ScoreKeeperNormal.cpp` through
+`scoring_oracle.cpp`. Its two manager references are guarded at the application
+boundary: missing native screen/profile managers throw before dereference.
+The scoring methods are unchanged. The copied possible-point-only extraction
+is removed. Native `PlayerState`, `Attack`, `SampleHistory`,
+`NoteDataWithScoring` and `GamePreferences` now link alongside the scorekeeper.
+Base scorekeeper methods, Style note transformation, song length classification
+and GameState scoring methods are extracted unchanged. The dance game/styles,
+AllowW1 enum, scoring preference initializers, fallback combo functions and
+Simply Love combo function/metric expressions come from the pinned sources.
+
+Song captures load actual stage totals before foreground Lua. Their native
+player options and scorekeeper use one PlayerState, replacing the independent
+ModsGroup-only owner. The selected Steps and Stage transformations also supply
+the scorekeeper's OnNextSong data. Fresh stages use a new PlayerStageStats
+value, matching GameState::ResetStageStatistics instead of calling the
+player-number-only Init overload as a reset.
+
+`scorekeeper.json` dispatches explicit judgments through HandleTapScore,
+HandleTapRowScore and HandleHoldScore. It checks row-based dance points versus
+note-based combo, missed/let-go progress, completed totals, failed-stage
+behavior, player isolation, stage reset, modifier max(pre, post), scoring modes,
+W1 preferences, merciful beginner and rejection of an unavailable toasty.
+The CLI regression separately checks actual selected single/double chart
+totals before foreground Lua, with judgment controls absent from song captures.
+
+Reentrant scoring exposed the old LuaManager stub's shared argument stack.
+The Get/Release pool storage and methods now come unchanged from LuaManager.cpp;
+the main-state member reference selects the active oracle VM. Each song owns
+its Lua root and native pool together, executes on an acquired coroutine, and
+restores the previous pool, enum bindings and metric references at teardown.
+This prevents foreign registry handles from being reused by the next oracle.
+Manager-owned actor returns compare registry identity across coroutines.
+The outer harness mutex still serializes native calls; native thread scheduling
+and debugger behavior are outside this control's scope.
+
+Song judgment timing, life updates, complete theme initialization, courses and
+delayed gameplay screen loading remain open. Scoring controls do not establish
+those capabilities. Song grade queries still fail explicitly, and captures
+requiring a reload remain partial and excluded from complete archives.
+
 Song file calls now invoke the unchanged `LunaRageFile` class and registration
 from the compiled `src/RageFile.cpp`. This replaces the translated Lua methods
 and deletes the copied outer RageFile implementation, whose `Flush`, return
