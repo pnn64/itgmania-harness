@@ -2267,7 +2267,9 @@ mod tests {
             ("def-0002", "Quad.y", 0.7203244895202072),
             ("def-0002", "Quad.z", 1.0),
             ("def-0002", "Quad.zoom", 0.12812444777230592),
-            ("def-0003", "Quad.x", 0.7856989287092829),
+            // Raw native JSON yields 0x1.924721469e018p-1. The former value
+            // contained a one-bit rounding error from JSON deserialization.
+            ("def-0003", "Quad.x", 0.7856989287092828),
             ("def-0003", "Quad.y", 0.3580021715717493),
             ("def-0003", "Quad.z", 445541548.0),
             ("def-0004", "Quad.x", -2.0),

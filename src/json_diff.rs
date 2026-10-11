@@ -164,6 +164,16 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_float_roundtrip() {
+        // Native percent fixture case 6: PlayerStageStats::MakePercentScore
+        // returns this f32 promoted to Lua's f64. Preserve its exact value.
+        let expected = serde_json::json!({"percent": 0.9999000430107117_f64});
+        let parsed: Value = serde_json::from_str(r#"{"percent":0.9999000430107117}"#)
+            .expect("native JSON number");
+        assert_eq!(parsed, expected);
+    }
     use serde_json::json;
 
     #[test]
