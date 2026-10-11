@@ -1,0 +1,15 @@
+#VERSION:0.83;
+#TITLE:Native broadcast parameter control;
+#MUSIC:music.wav;
+#BPMS:0=120;
+#FGCHANGES:0=broadcast-params.lua=1=0=0=1=====;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Challenge;
+#METER:1;
+#NOTES:
+1000
+0000
+0000
+0000
+;

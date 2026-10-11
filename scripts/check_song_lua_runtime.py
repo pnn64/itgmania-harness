@@ -81,6 +81,21 @@ def check_reload_queue(document):
     assert len(transitions) == 1 and transitions[0]["args"] == ["SM_DoNextScreen"], transitions
 
 
+def check_broadcast_params(document):
+    events = [event for event in document["events"]
+              if event["operation"] == "MessageManager.Broadcast"
+              and event["args"][0].startswith("HarnessParams")]
+    assert [event["args"][0] for event in events] == [
+        "HarnessParamsSnapshot", "HarnessParamsObserved", "HarnessParamsEmpty"], events
+    assert events[0]["args"][1] == {"count": 2, "nested": [True, "original"], "3": "mixed"}, events
+    # MessageManager.cpp retains the parameter table and dispatches it. It
+    # never probes arbitrary data for GetName or GetParent actor methods.
+    assert events[1]["args"][1] == {"lookups": 0, "count": 99, "text": "mutated"}, events
+    assert events[2]["args"][1] == [], events
+    assert document["completion"]["reason"] == "gameplay-exit", document["completion"]
+    assert document["completion"]["stage_committed"], document["completion"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--itgmania-bin", type=Path, required=True)
@@ -89,7 +104,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
-    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row"), default="reload")
+    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params"), default="reload")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -157,7 +172,8 @@ def main():
         assert not [event for event in document["events"] if event["kind"] == "error"]
         if args.fixture != "reload":
             {"foreground": check_foregrounds, "hold-row": check_hold_row,
-             "reload-queue": check_reload_queue}[args.fixture](document)
+             "reload-queue": check_reload_queue,
+             "broadcast-params": check_broadcast_params}[args.fixture](document)
             print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
                               "completion": document["completion"], "update_frames": len(frames)}))
             return

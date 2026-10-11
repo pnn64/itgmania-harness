@@ -16,6 +16,7 @@ local next_sequence = 0
 local dropped_events = 0
 local finished = false
 local original_methods = {}
+local raw_metatable = debug.getmetatable
 
 local function pack(...)
 	return {n = select("#", ...), ...}
@@ -108,11 +109,14 @@ local function external_actor(actor, suggested_path)
 end
 
 local function looks_like_actor(value)
-	return type(value) == "table" and (
-		actor_ids[value] ~= nil
-		or type(value.GetName) == "function"
-		or type(value.GetParent) == "function"
-	)
+	if type(value) ~= "table" then return false end
+	if actor_ids[value] ~= nil then return true end
+	-- LuaBinding::Register exposes the native inheritance table through the
+	-- actual metatable. GetName/GetParent lookups on arbitrary parameter data
+	-- can run authored __index functions and change the behavior we observe.
+	local metatable = raw_metatable(value)
+	local hierarchy = type(metatable) == "table" and rawget(metatable, "heirarchy")
+	return type(hierarchy) == "table" and rawget(hierarchy, "Actor") ~= nil
 end
 
 local function safe_value(value, depth, seen)
