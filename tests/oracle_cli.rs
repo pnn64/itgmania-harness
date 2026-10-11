@@ -93,6 +93,47 @@ fn timing_data_keeps_each_native_owner() {
 }
 
 #[test]
+fn excludes_unexecuted_screen_reload_archives() {
+    let directory = temp_dir("screen-reload");
+    let corpus = directory.join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::write(corpus.join("control.sm"),
+        "#TITLE:Reload;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n#NOTES:dance-single::Challenge:1:0,0,0,0,0:\n1000\n;\n",
+    ).unwrap();
+    std::fs::write(corpus.join("control.lua"), r#"
+return Def.ActorFrame { OnCommand=function()
+    SCREENMAN:SetNewScreen('ScreenGameplay')
+end }
+"#).unwrap();
+    let traces = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", corpus.to_str().unwrap(),
+        "--out", traces.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let trace: Value = serde_json::from_slice(
+        &std::fs::read(traces.join("control.sm.semantic.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(trace["capabilities"]["runtime_complete"], false);
+    assert_eq!(trace["capabilities"]["delayed_screen_loading"], false);
+    let errors = trace["runtime_errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["operation"], "ScreenManager.SetNewScreen");
+    assert_eq!(errors[0]["name"], "ScreenGameplay");
+    assert!(errors[0]["message"].as_str().unwrap().contains("delayed screen loading"));
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(traces.join("_semantic_manifest.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(manifest["simfiles"][0]["status"], "partial");
+    let archives = directory.join("archives");
+    let output = run(&["song-lua-archive", corpus.to_str().unwrap(),
+        "--traces", traces.to_str().unwrap(), "--out", archives.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let index: Value = serde_json::from_slice(
+        &std::fs::read(archives.join("index.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(index["archives"], serde_json::json!([]));
+}
+
+#[test]
 fn captures_selected_empty_charts_and_isolates_file_writes() {
     let directory = temp_dir("song-host");
     let corpus = directory.join("corpus");

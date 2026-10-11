@@ -2028,7 +2028,14 @@ end
 SCREENMAN = {
 	GetTopScreen = function() return top_screen end,
 	SystemMessage = function(_, message) emit("call", nil, "ScreenManager.SystemMessage", safe_args(message)) end,
-	SetNewScreen = function(_, screen) emit("call", nil, "ScreenManager.SetNewScreen", safe_args(screen)) end,
+	SetNewScreen = function(_, screen)
+		emit("call", nil, "ScreenManager.SetNewScreen", safe_args(screen))
+		-- ScreenManager::SetNewScreen queues a load that Update executes after
+		-- updating the current screen. This host has no screen-load dispatcher.
+		-- Preserve the request for diagnosis without certifying its old scene.
+		record_runtime_error(nil, "ScreenManager.SetNewScreen", screen,
+			"native delayed screen loading is unavailable in the headless song host")
+	end,
 }
 
 DISPLAY = {
@@ -3410,6 +3417,7 @@ return json_encode({
         native_column_splines = true,
 		native_stage_life_records = true,
 		stage_life_judgments = false,
+		delayed_screen_loading = false,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
 		sprite_shadow_samples = true,

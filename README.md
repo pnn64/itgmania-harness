@@ -441,6 +441,13 @@ with `--beat-step` and `--max-events`. A runtime error or event limit marks that
 fixture `partial`; the command still writes its usable trace and records the
 exact error or dropped count in `_semantic_manifest.json`.
 
+`SCREENMAN:SetNewScreen` requires the delayed screen load performed by native
+`ScreenManager::Update` after updating the current screen. The headless host
+currently records the request and an explicit unsupported-load error, marks
+the trace `partial`, and excludes it from `song-lua-archive`. Logging the request
+while continuing the first actor scene cannot verify a gameplay reload. The
+`delayed_screen_loading` capability remains false until that lifecycle runs.
+
 Use repeatable `--simfile relative/path.ssc` arguments to retry selected files.
 Selections must resolve to simfiles inside the corpus; duplicates run once.
 Charts with no Lua references produce complete empty actor captures, so their
