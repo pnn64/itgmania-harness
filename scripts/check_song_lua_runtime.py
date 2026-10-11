@@ -1,12 +1,43 @@
-"""Check screen replacement using a complete native ITGmania install."""
+"""Check song actor lifecycles using a complete native ITGmania install."""
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import wave
+
+
+def check_foregrounds(document):
+    events = [event for event in document["events"]
+              if event["operation"] == "MessageManager.Broadcast"
+              and event["args"][0].startswith("HarnessForeground")]
+    constructs = [event for event in events if event["args"][0] == "HarnessForegroundConstruct"]
+    starts = [event for event in events if event["args"][0] == "HarnessForegroundOn"]
+    later = [event for event in events if event["args"][0] == "HarnessForegroundLater"]
+    assert [event["args"][1]["label"] for event in constructs] == ["early", "late"], constructs
+    assert [event["args"][1]["label"] for event in starts] == ["early", "late"], starts
+    assert [event["args"][1]["label"] for event in later] == ["early", "late"], later
+    assert constructs[-1]["seq"] < starts[0]["seq"], events
+    assert 2 <= starts[0]["beat"] < 2.02 and 4 <= starts[1]["beat"] < 4.02, starts
+    for label in ("early", "late"):
+        updates = [event for event in events if event["args"][0] == "HarnessForegroundUpdate"
+                   and event["args"][1]["label"] == label]
+        assert len(updates) == 2, updates
+        assert [event["args"][1]["count"] for event in updates] == [1, 2], updates
+        # Foreground::Update starts with music_seconds - start_second. At this
+        # fixture's constant 120 BPM that is the beat overshoot divided by two.
+        start_beat = 2 if label == "early" else 4
+        assert math.isclose(updates[0]["args"][1]["delta"],
+                            (updates[0]["beat"] - start_beat) / 2, abs_tol=1e-7), updates
+        assert updates[1]["args"][1]["delta"] > 0, updates
+        assert math.isclose(updates[1]["args"][1]["delta"],
+                            updates[1]["seconds"] - updates[0]["seconds"], abs_tol=1e-7), updates
+    assert document["completion"]["reason"] == "gameplay-exit", document["completion"]
+    assert document["completion"]["stage_committed"], document["completion"]
+    assert any(event["operation"].endswith("StartTransitioningScreen") for event in document["events"])
 
 
 def main():
@@ -17,9 +48,11 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
+    parser.add_argument("--fixture", choices=("reload", "foreground"), default="reload")
+    parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    fixture = root / "tests/fixtures/song-lua-runtime-reload"
+    fixture = root / f"tests/fixtures/song-lua-runtime-{args.fixture}"
     with tempfile.TemporaryDirectory(prefix="native-reload-control-") as temporary:
         song = Path(temporary) / "song"
         shutil.copytree(fixture, song)
@@ -30,14 +63,21 @@ def main():
             music.writeframes(b"\0\0" * 44100 * 8)
         trace = Path(temporary) / "trace.json"
         command = [str(args.harness_bin.resolve()), "song-lua-trace",
-                   str(song / "reload.ssc"), "--itgmania-bin",
+                   str(song / f"{args.fixture}.ssc"), "--itgmania-bin",
                    str(args.itgmania_bin.resolve()), "--fallback-theme",
                    args.fallback_theme, "--difficulty", "Challenge",
                    "--headless", "--autoplay", args.autoplay, "--timeout", "45",
                    "--out", str(trace)]
         command += ["--until-gameplay-end"] if args.until_gameplay_end else ["--until-beat", "2"]
+        if args.keep_run_dir:
+            command += ["--keep-run-dir"]
         subprocess.run(command, cwd=root, check=True, timeout=60)
         document = json.loads(trace.read_bytes())
+        # Keep the requested diagnostic trace even if validation fails. The
+        # nonzero exit status still prevents treating it as an accepted control.
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_bytes(trace.read_bytes())
         samples = [event["args"][1] for event in document["events"]
                    if event["operation"] == "MessageManager.Broadcast"
                    and event["args"][0] == "HarnessReloadControl"]
@@ -69,10 +109,15 @@ def main():
         assert document["dropped_update_frames"] == 0
         assert document["update_frame_phase"] == "gameplay-overlay-probe"
         assert [frame["sequence"] for frame in frames] == list(range(1, len(frames) + 1))
-        assert {frame["scene"] for frame in frames} == {1, 2}
+        assert {frame["scene"] for frame in frames} == ({1, 2} if args.fixture == "reload" else {1})
         assert all(frame["delta"] >= 0 for frame in frames)
         assert all(right["wall_seconds"] >= left["wall_seconds"] for left, right in zip(frames, frames[1:]))
         assert not [event for event in document["events"] if event["kind"] == "error"]
+        if args.fixture == "foreground":
+            check_foregrounds(document)
+            print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
+                              "completion": document["completion"], "update_frames": len(frames)}))
+            return
         assert [sample["count"] for sample in samples] == [1, 2], samples
         assert [sample["difficulty"] for sample in samples] == [
             "Difficulty_Challenge", "Difficulty_Easy"], samples
@@ -103,9 +148,6 @@ def main():
                 assert final["actual"] == 2 * document["scoring_weights"]["Miss"], final
                 assert final["life_latest"] < final["life_begin"], final
             assert any(sample["phase"] == "screen-end" for sample in stages), stages
-        if args.out:
-            args.out.parent.mkdir(parents=True, exist_ok=True)
-            args.out.write_bytes(trace.read_bytes())
         with args.itgmania_bin.open("rb") as executable:
             native_hash = hashlib.file_digest(executable, "sha256").hexdigest()
         print(json.dumps({"native_exe_sha256": native_hash,

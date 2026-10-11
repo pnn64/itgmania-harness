@@ -1,0 +1,16 @@
+#VERSION:0.83;
+#TITLE:Native foreground clock control;
+#MUSIC:music.wav;
+#BPMS:0=120;
+#FGCHANGES:2=early.lua=1=0=0=1=====,4=late.lua=1=0=0=1=====;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DESCRIPTION:foreground clock;
+#DIFFICULTY:Challenge;
+#METER:1;
+#NOTES:
+1000
+0100
+0010
+0001
+;
