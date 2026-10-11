@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include "NoteSkinManager.h"
+#include "GameManager.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "ScoreKeeperNormal.h"
@@ -47,6 +48,7 @@ struct OptionState {
   Song* saved_current_song = GAMESTATE->m_pCurSong;
   Steps* saved_steps[2] = {GAMESTATE->m_pCurSteps[0], GAMESTATE->m_pCurSteps[1]};
   PlayerState* saved_players[2] = {GAMESTATE->m_pPlayerState[0], GAMESTATE->m_pPlayerState[1]};
+  bool saved_joined[2] = {GAMESTATE->m_bSideIsJoined[0], GAMESTATE->m_bSideIsJoined[1]};
   TimingData* saved_timing = GAMESTATE->GetProcessedTimingData();
   ModsGroup<SongOptions> saved_song = GAMESTATE->m_SongOptions;
   int64_t current_time = 0;
@@ -77,6 +79,7 @@ struct OptionState {
         GAMESTATE->SetCurrentStyle(saved_style[player], static_cast<PlayerNumber>(player));
         GAMESTATE->m_pCurSteps[player].Set(saved_steps[player]);
         GAMESTATE->m_pPlayerState[player] = saved_players[player];
+        GAMESTATE->m_bSideIsJoined[player] = saved_joined[player];
       }
       GAMESTATE->m_pCurGame.Set(saved_game);
       GAMESTATE->m_PlayMode.Set(saved_play);
@@ -97,7 +100,14 @@ struct OptionState {
     GAMESTATE->m_pCurSong.Set(song);
     GAMESTATE->m_pCurSteps[player].Set(steps);
     GAMESTATE->m_pPlayerState[player] = &players[player];
-    const Style* style = harness_score_style(StepsTypeToString(steps->m_StepsType));
+    // Canonical captures enable two sides for four-column dance and one side
+    // for double. Select the native compatible style (versus for two singles),
+    // rather than taking the first same-type style in the game's array.
+    GAMESTATE->m_bSideIsJoined[0] = true;
+    GAMESTATE->m_bSideIsJoined[1] = steps->m_StepsType != StepsType_dance_double;
+    const Style* style = GAMEMAN->GetFirstCompatibleStyle(
+        GAMESTATE->m_pCurGame, GAMESTATE->GetNumSidesJoined(), steps->m_StepsType);
+    if (!style) throw std::runtime_error("native gameplay style is unavailable for the joined sides");
     GAMESTATE->SetCurrentStyle(style, static_cast<PlayerNumber>(player));
     scores[player].reset();
     stats[player] = PlayerStageStats();
@@ -237,6 +247,19 @@ void install_option_queries(lua_State* L, bool scoring_control) {
   lua_setmetatable(L, -2);
   lua_pushvalue(L, -1);
   lua_setfield(L, LUA_REGISTRYINDEX, "ITG_SCORE_STATE");
+  GAMESTATE->PushSelf(L);
+  lua_setglobal(L, "_ITG_NATIVE_GAMESTATE");
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, [](lua_State* L) -> int {
+    auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const int index = luaL_checkint(L, 1);
+    if (!state->song || state->song->GetAllSteps().empty()) { lua_pushnil(L); return 1; }
+    const auto& steps = state->song->GetAllSteps();
+    if (index < 1 || index > static_cast<int>(steps.size())) return luaL_error(L, "invalid native Steps index");
+    steps[index - 1]->PushSelf(L);
+    return 1;
+  }, 1);
+  lua_setglobal(L, "_ITG_NATIVE_STEPS");
   lua_pushvalue(L, -1);
   lua_pushcclosure(L, [](lua_State* L) -> int {
     auto* state = static_cast<OptionState*>(lua_touserdata(L, lua_upvalueindex(1)));
@@ -517,7 +540,8 @@ void clear_option_queries(lua_State* L) {
       "_ITG_OPTIONS_SKINS", "_ITG_OPTIONS_REJECTED", "_ITG_APPLY_STAGE_MODIFIERS",
       "_ITG_USING_MODIFIER", "_ITG_STAGE_LIFE_RECORD",
       "_ITG_STAGE_LIFE_SEED", "_ITG_STAGE_STATS", "_ITG_STAGE_SCORE_LOAD",
-      "_ITG_SCORE_CHART", "_ITG_SCORE_ROW", "_ITG_SCORE_HOLD"}) {
+      "_ITG_SCORE_CHART", "_ITG_SCORE_ROW", "_ITG_SCORE_HOLD",
+      "_ITG_NATIVE_GAMESTATE", "_ITG_NATIVE_STEPS"}) {
     lua_pushnil(L); lua_setglobal(L, name);
   }
   lua_pushnil(L); lua_setfield(L, LUA_REGISTRYINDEX, "ITG_SCORE_STATE");

@@ -1874,7 +1874,7 @@ for index, chart in ipairs(harness.steps or { harness }) do
 			return first:upper() .. rest
 		end)
 	end
-	all_steps[index] = {
+	all_steps[index] = _ITG_NATIVE_STEPS(index) or {
 		GetDifficulty = function() return chart.difficulty end,
 		GetStepsType = function() return steps_type end,
         GetDescription = function() return chart.description end,
@@ -1945,15 +1945,36 @@ GAMESTATE = {
 	GetSongBPS = function() return current_bps end,
 	GetCurBPS = function() return current_bps end,
 	GetCurrentSong = function() return song end,
-	GetCurrentSteps = function(_, player) return _ITG_CURRENT_STEPS[player_key(player)] end,
-	GetCurrentStyle = function() return style end,
+	GetCurrentSteps = function(_, player)
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:GetCurrentSteps(player) end
+        return _ITG_CURRENT_STEPS[player_key(player)]
+    end,
+	GetCurrentStyle = function(_, player)
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:GetCurrentStyle(player) end
+        return style
+    end,
 	GetCurrentGame = function() return game end,
 	GetPlayerState = function(_, player) return player_states[player_key(player)] end,
-	GetEnabledPlayers = function() return is_double and { PLAYER_1 } or { PLAYER_1, PLAYER_2 } end,
-	GetNumPlayersEnabled = function() return is_double and 1 or 2 end,
-	GetHumanPlayers = function() return is_double and { PLAYER_1 } or { PLAYER_1, PLAYER_2 } end,
-	IsPlayerEnabled = function(_, player) return not is_double or player_key(player) == "PLAYER_1" end,
-	IsHumanPlayer = function(_, player) return not is_double or player_key(player) == "PLAYER_1" end,
+	GetEnabledPlayers = function()
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:GetEnabledPlayers() end
+        return is_double and { PLAYER_1 } or { PLAYER_1, PLAYER_2 }
+    end,
+	GetNumPlayersEnabled = function()
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:GetNumPlayersEnabled() end
+        return is_double and 1 or 2
+    end,
+	GetHumanPlayers = function()
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:GetHumanPlayers() end
+        return is_double and { PLAYER_1 } or { PLAYER_1, PLAYER_2 }
+    end,
+	IsPlayerEnabled = function(_, player)
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:IsPlayerEnabled(player) end
+        return not is_double or player_key(player) == "PLAYER_1"
+    end,
+	IsHumanPlayer = function(_, player)
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:IsHumanPlayer(player) end
+        return not is_double or player_key(player) == "PLAYER_1"
+    end,
 	GetSongOptionsObject = function(_, level) return manual.song_options[_ITG_OPTIONS_LEVEL(level)] end,
 	GetSongOptions = function(_, level) return manual.option_call(manual.song_options[_ITG_OPTIONS_LEVEL(level)], "GetString") end,
     GetSongOptionsString = function() return manual.option_call(manual.song_options.ModsLevel_Current, "GetString") end,
@@ -1966,18 +1987,33 @@ GAMESTATE = {
     GetCoinMode = function() return "CoinMode_Home" end,
     GetPremium = function() return "Premium_Off" end,
     IsEventMode = function() return PREFSMAN:GetPreference("EventMode") end,
-	GetEasiestStepsDifficulty = function() return harness.difficulty end,
-    SetCurrentSteps = function(_, player, chart)
-        assert(chart, "SetCurrentSteps requires a Steps object")
-        _ITG_CURRENT_STEPS[player_key(player)] = chart
-        emit("call", nil, "GameState.SetCurrentSteps", safe_args(player, chart:GetStepsType(), chart:GetDifficulty(), chart:GetDescription()))
+	GetEasiestStepsDifficulty = function()
+        if harness.native_stage_scores_loaded then return _ITG_NATIVE_GAMESTATE:GetEasiestStepsDifficulty() end
+        return harness.difficulty
     end,
-    SetCurrentStyle = function(_, name)
+    SetCurrentSteps = function(self, player, chart)
+        if harness.native_stage_scores_loaded then
+            _ITG_NATIVE_GAMESTATE:SetCurrentSteps(player, chart)
+        else
+            _ITG_CURRENT_STEPS[player_key(player)] = chart
+        end
+        emit("call", nil, "GameState.SetCurrentSteps", chart
+            and safe_args(player, chart:GetStepsType(), chart:GetDifficulty(), chart:GetDescription())
+            or safe_args(player, nil))
+        return self
+    end,
+    SetCurrentStyle = function(self, name, player)
+        if harness.native_stage_scores_loaded then
+            _ITG_NATIVE_GAMESTATE:SetCurrentStyle(name, player)
+            emit("call", nil, "GameState.SetCurrentStyle", safe_args(type(name) == "string" and name or name:GetName(), player))
+            return self
+        end
         assert(name == "single" or name == "double" or name == "couple" or name == "routine", "unsupported dance style: " .. tostring(name))
         style_name = name
         is_double = name == "double"
         column_count = (name == "double" or name == "routine") and 8 or 4
         emit("call", nil, "GameState.SetCurrentStyle", safe_args(name))
+        return self
     end,
     ApplyStageModifiers = function(_, player, modifiers)
         local key = player_key(player)
@@ -3384,8 +3420,8 @@ return json_encode({
 	title = harness.title,
 	theme = "headless",
 	game = "dance",
-	style = style_name,
-	enabled_players = { true, not is_double },
+	style = GAMESTATE:GetCurrentStyle():GetName(),
+	enabled_players = { GAMESTATE:IsPlayerEnabled(0), GAMESTATE:IsPlayerEnabled(1) },
 	steps_type = harness.steps_type,
 	difficulty = harness.difficulty,
 	description = harness.description,
@@ -3422,6 +3458,7 @@ return json_encode({
 		native_stage_life_records = true,
 		stage_life_judgments = false,
 		native_stage_score_load = harness.native_stage_scores_loaded == true,
+		native_step_selection = harness.native_stage_scores_loaded == true,
 		stage_score_judgments = false,
 		delayed_screen_loading = false,
 		sprite_texture_alias_samples = true,

@@ -352,6 +352,44 @@ delayed gameplay screen loading remain open. Scoring controls do not establish
 those capabilities. Song grade queries still fail explicitly, and captures
 requiring a reload remain partial and excluded from complete archives.
 
+Harness 0.1.72 replaces parsed chart tables with the already compiled native
+Steps Lua binding. Selected GameState and Style Lua methods are extracted
+unchanged from the pinned source, with only the class registration list scoped
+to the linked methods. GameState::SetCompatibleStyle,
+ForceOtherPlayersToCompatibleSteps, player enumeration and easiest difficulty
+also execute unchanged source. The GameManager compatible-style iteration and
+string lookup replace their null/no-op stubs. Style width executes the source
+column-offset calculation. The obsolete first-same-type scoring-style helper
+is deleted.
+
+Canonical captures inject joined-side flags at the gameplay setup boundary:
+two sides for single, one for double. Source GetFirstCompatibleStyle selects
+versus for two singles. Native Steps selection broadcasts its native messages
+and synchronizes another player's chart for different music or shared sides;
+equal music with independent difficulties is retained. A nil selection clears
+only that side. Selection changes GameState pointers, without silently loading
+new Player note data or score totals. The CLI control verifies those distinctions,
+native style objects and case-insensitive names, incompatible styles, invalid
+chart objects and invalid player enums.
+
+AutoSetStyle evaluates the exact Simply Love metric expression with the source
+PreferredStyle default from `99 SL-ThemePrefs.lua` (`none`). The private scoring
+metric environment exposes that preference only. This establishes the canonical
+default, not user preference changes or full theme initialization. The rest of
+GameState, input controller joining, course lifecycle and delayed screen loading
+remain outside this source subset. Synthetic assertion requests without a
+simfile retain their explicit metadata Steps fallback and do not advertise
+native_step_selection.
+
+`LuaBinding.cpp` is compiled from a generated copy with one storage adaptation:
+`GetGlobalTable` retains its userdata table in the active Lua registry. The
+reference implementation retains a static `LuaReference`, valid for ITGmania's
+single process VM. Reusing that numeric reference across the harness's song
+VMs can instead select a foreign registry value and crash native Actor teardown.
+All other binding code, including type checks, pointer lookup, registration
+and object removal, remains unchanged. The existing actor lookup control runs
+native actor assertions followed by a separate song VM and covers this lifetime.
+
 Song file calls now invoke the unchanged `LunaRageFile` class and registration
 from the compiled `src/RageFile.cpp`. This replaces the translated Lua methods
 and deletes the copied outer RageFile implementation, whose `Flush`, return

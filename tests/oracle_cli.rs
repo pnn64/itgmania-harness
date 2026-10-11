@@ -160,6 +160,72 @@ return Def.ActorFrame{}
 }
 
 #[test]
+fn selects_native_steps_and_matches_player_music() {
+    let directory = temp_dir("native-step-selection");
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut chart = String::from("#VERSION:0.83;\n#TITLE:Native step selection;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n");
+    for (steps_type, difficulty, description, music, notes) in [
+        ("dance-single", "Easy", "first", "a.ogg", "1000\n0100\n0010\n0001"),
+        ("dance-single", "Medium", "second", "a.ogg", "1000\n0100\n0010"),
+        ("dance-single", "Challenge", "third", "b.ogg", "1000\n0100"),
+        ("dance-double", "Beginner", "double", "b.ogg", "10000000\n00001000"),
+    ] {
+        chart.push_str(&format!("#NOTEDATA:;\n#STEPSTYPE:{steps_type};\n#DIFFICULTY:{difficulty};\n#DESCRIPTION:{description};\n#METER:1;\n#MUSIC:{music};\n#NOTES:\n{notes}\n;\n"));
+    }
+    std::fs::write(directory.join("control.ssc"), chart).unwrap();
+    std::fs::write(directory.join("control.lua"), r#"
+local all = GAMESTATE:GetCurrentSong():GetAllSteps()
+assert(#all == 4, 'number of native Steps: ' .. #all)
+assert(all[1]:GetDescription() == 'first', 'first native description: ' .. all[1]:GetDescription())
+assert(GAMESTATE:GetCurrentSteps(0) == all[3] and GAMESTATE:GetCurrentSteps(1) == all[3])
+local style = GAMESTATE:GetCurrentStyle()
+assert(style:GetName() == 'versus' and style:GetStyleType() == 'StyleType_TwoPlayersTwoSides')
+assert(style:ColumnsPerPlayer() == 4 and style:GetWidth(0) == 256)
+assert(GAMESTATE:SetCurrentStyle('VeRsUs') == GAMESTATE)
+assert(GAMESTATE:SetCurrentStyle(style) == GAMESTATE)
+assert(not pcall(function() GAMESTATE:SetCurrentStyle('single') end))
+assert(not pcall(function() GAMESTATE:SetCurrentStyle('double') end))
+assert(not pcall(function() GAMESTATE:SetCurrentStyle('missing') end))
+assert(#GAMESTATE:GetEnabledPlayers() == 2 and #GAMESTATE:GetHumanPlayers() == 2)
+assert(GAMESTATE:GetNumPlayersEnabled() == 2 and GAMESTATE:IsHumanPlayer(1))
+assert(GAMESTATE:GetEasiestStepsDifficulty() == 'Difficulty_Challenge')
+local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(0)
+assert(stats:GetPossibleDancePoints() == 10)
+assert(GAMESTATE:SetCurrentSteps(0, all[1]) == GAMESTATE)
+assert(GAMESTATE:GetCurrentSteps(0) == all[1] and GAMESTATE:GetCurrentSteps(1) == all[1])
+assert(GAMESTATE:GetEasiestStepsDifficulty() == 'Difficulty_Easy')
+-- Selection changes pointers; native gameplay chart loading happens at reload.
+assert(stats:GetPossibleDancePoints() == 10)
+GAMESTATE:SetCurrentSteps(1, all[2])
+assert(GAMESTATE:GetCurrentSteps(0) == all[1] and GAMESTATE:GetCurrentSteps(1) == all[2])
+assert(not pcall(function() GAMESTATE:SetCurrentSteps(0, all[4]) end))
+assert(not pcall(function() GAMESTATE:SetCurrentSteps(2, all[1]) end))
+assert(not pcall(function() GAMESTATE:SetCurrentSteps(0, {}) end))
+assert(GAMESTATE:GetCurrentSteps(0) == all[1] and GAMESTATE:GetCurrentSteps(1) == all[2])
+GAMESTATE:SetCurrentSteps(0, nil)
+assert(GAMESTATE:GetCurrentSteps(0) == nil and GAMESTATE:GetCurrentSteps(1) == all[2])
+GAMESTATE:SetCurrentSteps(1, all[2])
+assert(GAMESTATE:GetCurrentSteps(0) == all[2] and GAMESTATE:GetCurrentSteps(1) == all[2])
+return Def.ActorFrame{}
+"#).unwrap();
+    let out = directory.join("traces");
+    let output = run(&["song-lua-semantic-baseline", directory.to_str().unwrap(),
+        "--out", out.to_str().unwrap(), "--until-beat", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(out.join("_semantic_manifest.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(manifest["simfiles"][0]["status"], "ok", "{manifest}");
+    let trace: Value = serde_json::from_slice(
+        &std::fs::read(out.join("control.ssc.semantic.json")).unwrap(),
+    ).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    assert_eq!(trace["capabilities"]["native_step_selection"], true);
+    assert_eq!(trace["capabilities"]["delayed_screen_loading"], false);
+    assert_eq!(trace["style"], "versus");
+}
+
+#[test]
 fn excludes_unexecuted_screen_reload_archives() {
     let directory = temp_dir("screen-reload");
     let corpus = directory.join("corpus");

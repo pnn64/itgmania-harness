@@ -462,6 +462,15 @@ Native toasties require an unavailable screen/profile boundary and fail
 explicitly. Stage grade queries and delayed screen reloads remain unsupported
 in song captures and cannot produce complete archives.
 
+Harness 0.1.72 exposes parsed charts through native Steps bindings and executes
+the native GameState chart/style methods. A chart switch can select compatible
+Steps for another player when music files differ; different difficulties using
+the same music remain independent. Nil Steps, invalid enums and incompatible
+styles follow the native Lua binding. Two enabled dance-single sides now use
+the native versus style, including its getters and width. `native_step_selection`
+records this capability. Selecting Steps does not reload note data or reset
+stage totals; the delayed gameplay reload remains a separate requirement.
+
 Use repeatable `--simfile relative/path.ssc` arguments to retry selected files.
 Selections must resolve to simfiles inside the corpus; duplicates run once.
 Charts with no Lua references produce complete empty actor captures, so their

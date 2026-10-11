@@ -36,7 +36,6 @@ const ITG_SOURCES: &[&str] = &[
     "src/HighScore.cpp",
     "src/Grade.cpp",
     "src/DateTime.cpp",
-    "src/LuaBinding.cpp",
     "src/NotesLoader.cpp",
     "src/NotesLoaderSMA.cpp",
     "src/NotesLoaderSM.cpp",
@@ -217,6 +216,7 @@ fn main() {
     write_player_option_methods(&root, &out);
     write_song_stats(&root, &out);
     write_scoring_state(&root, &out);
+    write_lua_binding(&root, &out);
     prepare_texture_sources(&root, &out);
     compile_image_deps(&root, &out, &target_os);
     write_compat_headers(&out, &target_os);
@@ -253,7 +253,8 @@ fn main() {
         .file(manifest.join("native/actor_oracle.cpp"))
         .file(manifest.join("native/options_oracle.cpp"))
         .file(manifest.join("native/scoring_oracle.cpp"))
-        .file(manifest.join("native/runtime_stubs.cpp"));
+        .file(manifest.join("native/runtime_stubs.cpp"))
+        .file(out.join("lua_binding.cpp"));
 
     if target_os == "windows" {
         build
@@ -370,18 +371,22 @@ fn compile_image_deps(root: &Path, out: &Path, target_os: &str) {
     if target_os == "windows" {
         configure.args(["-G", "NMake Makefiles"]);
     }
-    assert!(configure
-        .status()
-        .expect("configure native JPEG codec")
-        .success());
-    assert!(Command::new("cmake")
-        .envs(tool.env().iter().cloned())
-        .arg("--build")
-        .arg(&destination)
-        .args(["--target", "jpeg-static", "--config", "Release"])
-        .status()
-        .expect("build native JPEG codec")
-        .success());
+    assert!(
+        configure
+            .status()
+            .expect("configure native JPEG codec")
+            .success()
+    );
+    assert!(
+        Command::new("cmake")
+            .envs(tool.env().iter().cloned())
+            .arg("--build")
+            .arg(&destination)
+            .args(["--target", "jpeg-static", "--config", "Release"])
+            .status()
+            .expect("build native JPEG codec")
+            .success()
+    );
     println!("cargo:rustc-link-search=native={}", destination.display());
     // Emit after the oracle library so Unix static archive ordering resolves
     // the native loaders' codec references.
@@ -527,6 +532,38 @@ fn write_song_stats(root: &Path, out: &Path) {
         .expect("write native song stats method");
 }
 
+fn write_lua_binding(root: &Path, out: &Path) {
+    let path = root.join("src/LuaBinding.cpp");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let source = std::fs::read_to_string(path).expect("native Lua binding source");
+    let start = source
+        .find("static void GetGlobalTable(Lua* L) {")
+        .expect("native userdata table");
+    let end = source[start..]
+        .find("\n}\n")
+        .expect("native userdata table end")
+        + start
+        + 3;
+    // ITGmania has one process-wide VM. The harness has one VM per song, so
+    // retain the same table/pointer mapping in that VM's registry instead of
+    // retaining a numeric LuaReference from a different or closed registry.
+    let table = r#"static void GetGlobalTable(Lua* L) {
+  static const char key = 0;
+  lua_pushlightuserdata(L, const_cast<char*>(&key));
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushlightuserdata(L, const_cast<char*>(&key));
+    lua_pushvalue(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+  }
+}
+"#;
+    let adapted = format!("{}{}{}", &source[..start], table, &source[end..]);
+    std::fs::write(out.join("lua_binding.cpp"), adapted).expect("VM-owned native Lua bindings");
+}
+
 fn write_scoring_state(root: &Path, out: &Path) {
     let path = root.join("src/LuaManager.cpp");
     println!("cargo:rerun-if-changed={}", path.display());
@@ -586,6 +623,22 @@ fn write_scoring_state(root: &Path, out: &Path) {
             "bool GameState::ShowW1() const {",
             "static ThemeMetric<bool> PROFILE_RECORD_FEATS(",
         ),
+        (
+            "bool GameState::SetCompatibleStyle(",
+            "int GameState::GetNumHumanPlayers() const {",
+        ),
+        (
+            "void GameState::ForceOtherPlayersToCompatibleSteps(",
+            "void GameState::Update(",
+        ),
+        (
+            "Difficulty GameState::GetEasiestStepsDifficulty() const {",
+            "Difficulty GameState::GetHardestStepsDifficulty() const {",
+        ),
+        (
+            "PlayerNumber GetNextHumanPlayer(",
+            "PlayerNumber GetNextCpuPlayer(",
+        ),
     ] {
         let start = source
             .find(start)
@@ -597,6 +650,59 @@ fn write_scoring_state(root: &Path, out: &Path) {
         methods.push_str(&source[start..end]);
     }
     fs::write(out.join("game_state_scoring.inc"), methods).expect("write unchanged native methods");
+    let mut bindings = String::from("class LunaGameState : public Luna<GameState> {\n public:\n");
+    for (start, end) in [
+        (
+            "  DEFINE_METHOD(\n      IsPlayerEnabled,",
+            "  DEFINE_METHOD(\n      GetPlayerDisplayName,",
+        ),
+        (
+            "  static void SetCompatibleStyleOrError(",
+            "  static int GetCurrentCourse(",
+        ),
+        (
+            "  static int GetHumanPlayers(",
+            "  static int IsAnyHumanPlayerUsingMemoryCard(",
+        ),
+        (
+            "  static bool AreStyleAndPlayModeCompatible(",
+            "  static int SetCurrentPlayMode(",
+        ),
+    ] {
+        let start = source.find(start).expect("native chart Lua binding");
+        let end = start + source[start..].find(end).expect("end of chart Lua binding");
+        bindings.push_str(&source[start..end]);
+    }
+    for name in [
+        "GetMasterPlayerNumber",
+        "GetNumPlayersEnabled",
+        "GetEasiestStepsDifficulty",
+    ] {
+        let line = source
+            .lines()
+            .find(|line| line.contains(&format!("DEFINE_METHOD({name},")))
+            .expect("native GameState getter macro");
+        bindings.push_str(line);
+        bindings.push('\n');
+    }
+    bindings.push_str("  LunaGameState() {\n");
+    for name in [
+        "GetCurrentSteps",
+        "SetCurrentSteps",
+        "GetCurrentStyle",
+        "SetCurrentStyle",
+        "IsPlayerEnabled",
+        "IsHumanPlayer",
+        "GetEnabledPlayers",
+        "GetHumanPlayers",
+        "GetNumPlayersEnabled",
+        "GetMasterPlayerNumber",
+        "GetEasiestStepsDifficulty",
+    ] {
+        bindings.push_str(&format!("    ADD_METHOD({name});\n"));
+    }
+    bindings.push_str("  }\n};\nLUA_REGISTER_CLASS(GameState)\n");
+    fs::write(out.join("game_state_lua.inc"), bindings).expect("write unchanged chart Lua methods");
     let mut support = String::new();
     for (file, start, end) in [
         (
@@ -625,6 +731,31 @@ fn write_scoring_state(root: &Path, out: &Path) {
             "ThemeMetric<bool> PENALIZE_TAP_SCORE_NONE(",
             "ThemeMetric<bool> JUDGE_HOLD_NOTES_ON_SAME_ROW_TOGETHER(",
         ),
+        (
+            "Style.cpp",
+            "void Style::GetMinAndMaxColX(",
+            "std::string Style::ColToButtonName(",
+        ),
+        (
+            "CommonMetrics.cpp",
+            "ThemeMetric<bool> CommonMetrics::AUTO_SET_STYLE(",
+            "ThemeMetric<int> CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES(",
+        ),
+        (
+            "GameManager.cpp",
+            "void GameManager::GetStylesForGame(",
+            "const Game* GameManager::GetGameForStyle(",
+        ),
+        (
+            "GameManager.cpp",
+            "void GameManager::GetCompatibleStyles(",
+            "void GameManager::GetEnabledGames(",
+        ),
+        (
+            "GameManager.cpp",
+            "const Style* GameManager::GameAndStringToStyle(",
+            "// lua start",
+        ),
     ] {
         let path = root.join("src").join(file);
         println!("cargo:rerun-if-changed={}", path.display());
@@ -638,6 +769,30 @@ fn write_scoring_state(root: &Path, out: &Path) {
         root.join("src/ScoreKeeperNormal.cpp").display()
     );
     fs::write(out.join("score_support.inc"), support).expect("write unchanged scoring support");
+    let path = root.join("src/Style.cpp");
+    let source = fs::read_to_string(path).expect("read native Style Lua methods");
+    let start = source
+        .find("class LunaStyle : public Luna<Style>")
+        .expect("native Style Lua class");
+    let end = start
+        + source[start..]
+            .find("  static int GetColumnInfo(")
+            .expect("end of Style getters");
+    let mut bindings = source[start..end].to_owned();
+    bindings.push_str("  LunaStyle() {\n");
+    for name in [
+        "GetName",
+        "GetStyleType",
+        "GetStepsType",
+        "ColumnsPerPlayer",
+        "NeedsZoomOutWith2Players",
+        "GetWidth",
+        "LockedDifficulty",
+    ] {
+        bindings.push_str(&format!("    ADD_METHOD({name});\n"));
+    }
+    bindings.push_str("  }\n};\nLUA_REGISTER_CLASS(Style)\n");
+    fs::write(out.join("style_lua.inc"), bindings).expect("write unchanged Style getter bindings");
     write_score_metrics(root, out);
     let path = root.join("src/GameManager.cpp");
     println!("cargo:rerun-if-changed={}", path.display());
@@ -706,6 +861,21 @@ fn write_score_metrics(root: &Path, out: &Path) {
     output.push_str(&format!(
         "static const char* harness_combo_rules = R\"ITGMETRIC({helpers})ITGMETRIC\";\n"
     ));
+    let prefs = theme.join("Scripts/99 SL-ThemePrefs.lua");
+    println!("cargo:rerun-if-changed={}", prefs.display());
+    let prefs = fs::read_to_string(prefs).expect("read Simply Love style preference");
+    let (_, style) = prefs
+        .split_once("PreferredStyle =")
+        .expect("PreferredStyle preference");
+    let (_, default) = style
+        .split_once("Default = ")
+        .expect("PreferredStyle default");
+    let (default, _) = default
+        .split_once(',')
+        .expect("end of PreferredStyle default");
+    output.push_str(&format!(
+        "static const char* harness_style_default = {default};\n"
+    ));
     output.push_str("static const char* harness_score_metrics[][3] = {\n");
     for path in [
         root.join("Themes/_fallback/metrics.ini"),
@@ -723,6 +893,7 @@ fn write_score_metrics(root: &Path, out: &Path) {
             } else if ["ScoreKeeperNormal", "PlayerStageStats", "Gameplay"]
                 .contains(&group.as_str())
                 || (group == "Player" && line.starts_with("PenalizeTapScoreNone="))
+                || (group == "Common" && line.starts_with("AutoSetStyle="))
             {
                 if let Some((name, value)) = line.split_once('=') {
                     if !name.starts_with('#') && !name.starts_with(';') && !value.is_empty() {

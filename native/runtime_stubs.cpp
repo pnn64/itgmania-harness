@@ -44,6 +44,7 @@ extern "C" {
 #include "RageBitmapTexture.h"
 #include "ScreenMessage.h"
 #include "Song.h"
+#include "Steps.h"
 #include "Style.h"
 #include "ThemeManager.h"
 #include "FontCharAliases.h"
@@ -1368,7 +1369,6 @@ Song* GameState::GetDefaultSong() const { return nullptr; }
 bool GameState::CanSafelyEnterGameplay(RString&) { return true; }
 void GameState::SetCompatibleStylesForPlayers() {}
 void GameState::ForceSharedSidesMatch() {}
-void GameState::ForceOtherPlayersToCompatibleSteps(PlayerNumber) {}
 void GameState::Update(float) {}
 void GameState::SetCurGame(const Game*) {}
 bool GameState::DifficultiesLocked() const { return false; }
@@ -1379,6 +1379,8 @@ bool GameState::ChangePreferredCourseDifficulty(PlayerNumber, int) { return fals
 #include "game_state_scoring.inc"
 #include "score_support.inc"
 #include "dance_score.inc"
+#include "style_lua.inc"
+#include "game_state_lua.inc"
 InputMapper* INPUTMAPPER = nullptr;
 void InputMapper::SetJoinControllers(PlayerNumber) {
 	throw std::runtime_error("native input controller joining is unavailable");
@@ -1399,27 +1401,17 @@ void ProfileManager::IncrementToastiesCount(PlayerNumber) {
 	throw std::runtime_error("native toasty profile is unavailable");
 }
 const Game* harness_score_game() { return &g_Game_Dance; }
-const Style* harness_score_style(const std::string& steps_type) {
-	for (const Style* const* style = g_Game_Dance.m_apStyles; *style; ++style) {
-		if ((*style)->m_bUsedForGameplay && StepsTypeToString((*style)->m_StepsType) == steps_type)
-			return *style;
-	}
-	throw std::runtime_error("native scoring style unavailable: " + steps_type);
-}
 void GameState::SetProcessedTimingData(TimingData* td) { processedTiming = td; }
 TimingData* GameState::GetProcessedTimingData() const { return processedTiming; }
 bool GameState::IsCourseDifficultyShown(CourseDifficulty) { return true; }
 
 GameManager::GameManager() = default;
 GameManager::~GameManager() = default;
-void GameManager::GetStylesForGame(const Game*, std::vector<const Style*>&, bool) {}
 const Game* GameManager::GetGameForStyle(const Style*) { return nullptr; }
 void GameManager::GetStepsTypesForGame(const Game*, std::vector<StepsType>&) {}
 const Style* GameManager::GetEditorStyleForStepsType(StepsType) { return nullptr; }
 void GameManager::GetDemonstrationStylesForGame(const Game*, std::vector<const Style*>&) {}
 const Style* GameManager::GetHowToPlayStyleForGame(const Game*) { return nullptr; }
-void GameManager::GetCompatibleStyles(const Game*, int, std::vector<const Style*>&) {}
-const Style* GameManager::GetFirstCompatibleStyle(const Game*, int, StepsType) { return nullptr; }
 void GameManager::GetEnabledGames(std::vector<const Game*>&) {}
 const Game* GameManager::GetDefaultGame() { return nullptr; }
 bool GameManager::IsGameEnabled(const Game*) { return true; }
@@ -1498,7 +1490,6 @@ StepsType GameManager::StringToStepsType(RString s) {
 	return StepsType_Invalid;
 }
 const Game* GameManager::StringToGame(RString) { return nullptr; }
-const Style* GameManager::GameAndStringToStyle(const Game*, RString) { return nullptr; }
 RString GameManager::StyleToLocalizedString(const Style*) { return ""; }
 void GameManager::PushSelf(lua_State*) {}
 
@@ -1532,6 +1523,15 @@ bool push_score_metric(Lua* state, const RString& group, const RString& name) {
 	if (!failed) {
 		// Keep the real expression's SL references separate from chart globals.
 		lua_newtable(state);
+		lua_newtable(state);
+		lua_pushcfunction(state, ([](lua_State* L) -> int {
+			const char* key = luaL_checkstring(L, 1);
+			if (std::strcmp(key, "PreferredStyle") != 0)
+				return luaL_error(L, "unavailable native theme preference: %s", key);
+			lua_pushstring(L, harness_style_default); return 1;
+		}));
+		lua_setfield(state, -2, "Get");
+		lua_setfield(state, -2, "ThemePrefs");
 		lua_newtable(state);
 		lua_getglobal(state, "_HARNESS_SCORE_SETTINGS"); lua_setfield(state, -2, "Metrics");
 		lua_newtable(state);
