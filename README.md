@@ -179,6 +179,12 @@ preferred `options_string` before gameplay loads song Lua. The
 `native_display_preference` and `native_initial_player_options` capabilities
 require these inputs to be present and valid. They describe initial settings;
 replayers must not initialize Lua from later query results.
+`player_tween_children_per_frame` records the native child tree on the first
+positive player tween observation in each captured frame. This extends the
+older one-time owner observation so later differences can be traced to the
+actual descendant. The observer calls unwrapped native getters and does not
+change the authored call stream or actor state. Trees retain the depth and
+node limits and mark truncated branches.
 The bootstrap calls the fallback theme's `SetGameModePreferences()` helper and
 reloads its metrics when that helper exists, as Simply Love does when selecting
 a game mode. `input.gameplay_preferences` records the resulting timing windows,

@@ -11,6 +11,7 @@ local actor_paths = setmetatable({}, {__mode = "k"})
 local actor_records = setmetatable({}, {__mode = "k"})
 local actors = {}
 local events = {}
+local update_frames = {}
 local active_context = nil
 local next_sequence = 0
 local dropped_events = 0
@@ -507,7 +508,7 @@ local function native_tween_time_left(actor)
 end
 
 local function native_tween_children(actor)
-	-- Observe the native owner once, without invoking wrapped methods or
+	-- Observe native descendants without invoking wrapped methods or
 	-- changing an actor. ActorFrame's total includes descendant tween queues.
 	local children_getter = original_methods.ActorFrame and original_methods.ActorFrame.GetChildren
 	local name_getter = original_methods.Actor and original_methods.Actor.GetName
@@ -625,10 +626,11 @@ local function install_class_hook(class)
 				if time_left ~= nil then
 					event.detail = event.detail or {}
 					event.detail.native_tween_time_left = time_left
-					if type(time_left) == "number" and time_left > 0 and not tween_owner_observed[args[1]]
+					if type(time_left) == "number" and time_left > 0
+						and tween_owner_observed[args[1]] ~= #update_frames
 						and actor_name(args[1]):match("^PlayerP[12]$") then
 						event.detail.native_tween_children = native_tween_children(args[1])
-						tween_owner_observed[args[1]] = true
+						tween_owner_observed[args[1]] = #update_frames
 					end
 				end
 			end
@@ -680,7 +682,6 @@ end
 local trace = {}
 local stage_samples = {}
 local dropped_stage_samples = 0
-local update_frames = {}
 local dropped_update_frames = 0
 local stages_before = nil
 local last_screen = nil
@@ -855,6 +856,7 @@ function trace.finish(completion)
 			modifier_mutations = true,
 			public_tween_time = true,
 			player_tween_children = true,
+			player_tween_children_per_frame = true,
 			draw_order_calls = true,
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
