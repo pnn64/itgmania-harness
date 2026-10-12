@@ -843,6 +843,7 @@ function trace.capture_inputs(game_mode_initialized)
 	end
 	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
 		local options = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+		local theme_player = SL and SL[ToEnumShortString(player)]
 		local disabled = {}
 		for _, window in ipairs(options:GetDisabledTimingWindows()) do
 			disabled[#disabled + 1] = tostring(window)
@@ -852,6 +853,8 @@ function trace.capture_inputs(game_mode_initialized)
 			options_string = GAMESTATE:GetPlayerState(player):GetPlayerOptionsString("ModsLevel_Preferred"),
 			min_tns_to_hide_notes = tostring(options:MinTNSToHideNotes()),
 			disabled_timing_windows = disabled,
+			theme_modifiers = theme_player and type(theme_player.ActiveModifiers) == "table"
+				and safe_value(theme_player.ActiveModifiers, 0, {}) or nil,
 		}
 	end
 	gameplay_preferences = {
@@ -863,6 +866,7 @@ function trace.capture_inputs(game_mode_initialized)
 		timing_window_add = PREFSMAN:GetPreference("TimingWindowAdd"),
 		max_input_latency_seconds = PREFSMAN:GetPreference("MaxInputLatencySeconds"),
 		music_rate = GAMESTATE:GetSongOptionsObject("ModsLevel_Preferred"):MusicRate(),
+		column_cue_min_time = SL and SL.Global and SL.Global.ColumnCueMinTime or nil,
 	}
 end
 
@@ -1025,6 +1029,8 @@ function trace.finish(completion)
 			native_display_preference = input_preferences ~= nil,
 			native_initial_player_options = gameplay_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
+			native_initial_theme_modifiers = gameplay_preferences ~= nil
+				and gameplay_preferences.column_cue_min_time ~= nil,
 		},
 		roots = roots,
 		actor_definitions = live_definitions,

@@ -409,6 +409,7 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     validate_declaration_forest(document)?;
     validate_actor_queries(document)?;
     validate_gameplay_preferences(document)?;
+    validate_theme_inputs(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")
     })?;
@@ -690,6 +691,31 @@ fn validate_gameplay_preferences(document: &Value) -> Result<(), Error> {
         }))
     {
         return Err(Error::new("native initial player option inputs are incomplete"));
+    }
+    Ok(())
+}
+
+fn validate_theme_inputs(document: &Value) -> Result<(), Error> {
+    if document.pointer("/capabilities/native_initial_theme_modifiers").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    let preferences = &document["input"]["gameplay_preferences"];
+    let scalar = |value: &Value| value.is_boolean() || value.is_string()
+        || value.as_f64().is_some_and(f64::is_finite);
+    let mut names = std::collections::BTreeSet::new();
+    let valid = preferences["column_cue_min_time"].as_f64().is_some_and(|time| time.is_finite() && time >= 0.0)
+        && preferences["players"].as_array().is_some_and(|players| !players.is_empty() && players.len() <= 2
+            && players.iter().all(|player| {
+                let name = player["player"].as_str();
+                matches!(name, Some("PlayerNumber_P1" | "PlayerNumber_P2")) && names.insert(name)
+                    && player["theme_modifiers"].as_object().is_some_and(|modifiers| {
+                        modifiers.get("ColumnCues").is_some_and(Value::is_boolean)
+                            && modifiers.values().all(|value| scalar(value)
+                                || value.as_array().is_some_and(|values| values.iter().all(scalar)))
+                    })
+            }));
+    if !valid {
+        return Err(Error::new("native initial theme modifier inputs are incomplete"));
     }
     Ok(())
 }
@@ -1240,6 +1266,35 @@ mod tests {
         let mut missing = document.clone();
         missing["actor_creation_inputs"].as_array_mut().expect("creation inputs").pop();
         assert!(validate_actor_creations(&missing).is_err());
+    }
+
+    #[test]
+    fn theme_inputs_require_initial_settings() {
+        let document = serde_json::json!({
+            "capabilities": {"native_initial_theme_modifiers": true},
+            "input": {"gameplay_preferences": {"column_cue_min_time": 1.5,
+                "players": [{"player": "PlayerNumber_P1", "theme_modifiers": {
+                    "ColumnCues": true, "SpeedMod": 250, "ComboFont": "Wendy",
+                    "TimingWindows": [true, true, true, true, true]}}]}}
+        });
+        assert!(validate_theme_inputs(&document).is_ok());
+        assert!(validate_theme_inputs(&serde_json::json!({})).is_ok());
+        for (path, value) in [
+            ("/input/gameplay_preferences/column_cue_min_time", serde_json::json!(-1)),
+            ("/input/gameplay_preferences/column_cue_min_time", Value::Null),
+            ("/input/gameplay_preferences/players/0/player", serde_json::json!("unknown")),
+            ("/input/gameplay_preferences/players/0/theme_modifiers", Value::Null),
+            ("/input/gameplay_preferences/players/0/theme_modifiers/ColumnCues", serde_json::json!("true")),
+            ("/input/gameplay_preferences/players/0/theme_modifiers/TimingWindows", serde_json::json!([{"type": "function"}])),
+        ] {
+            let mut invalid = document.clone();
+            *invalid.pointer_mut(path).expect("initial theme input field") = value;
+            assert!(validate_theme_inputs(&invalid).is_err(), "accepted invalid {path}");
+        }
+        let mut duplicate = document.clone();
+        duplicate["input"]["gameplay_preferences"]["players"].as_array_mut().expect("players")
+            .push(document["input"]["gameplay_preferences"]["players"][0].clone());
+        assert!(validate_theme_inputs(&duplicate).is_err());
     }
 
     #[test]
