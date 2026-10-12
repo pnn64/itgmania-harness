@@ -12,6 +12,8 @@ local actor_records = setmetatable({}, {__mode = "k"})
 local actors = {}
 local events = {}
 local update_frames = {}
+local random_reseeds = {}
+local dropped_random_reseeds = 0
 local active_context = nil
 local next_sequence = 0
 local dropped_events = 0
@@ -686,6 +688,24 @@ local dropped_update_frames = 0
 local stages_before = nil
 local last_screen = nil
 
+-- RandomNumbers.cpp gives Lua its own MT19937, initially seeded from wall
+-- time. Set a declared input once before gameplay loads, then retain reseeds
+-- across ScreenGameplay reloads instead of restarting the song's stream.
+function trace.seed_random()
+	local seed = MersenneTwister.Seed
+	seed(cfg.random_seed)
+	local function reseed(value, ...)
+		seed(value, ...)
+		if #random_reseeds >= cfg.max_events then
+			dropped_random_reseeds = dropped_random_reseeds + 1
+		else
+			random_reseeds[#random_reseeds + 1] = tonumber(value) or false
+		end
+	end
+	MersenneTwister.Seed = reseed
+	math.randomseed = reseed
+end
+
 -- Capture after theme initialization, before gameplay loads any song Lua.
 -- Keep these input settings separate from observed scores and life.
 function trace.capture_inputs(game_mode_initialized)
@@ -841,12 +861,16 @@ function trace.finish(completion)
 		},
 		trace_until_beat = cfg.until_beat,
 		capture_limits = {max_events = cfg.max_events},
+		random_seed = cfg.random_seed,
+		random_reseeds = random_reseeds,
+		dropped_random_reseeds = dropped_random_reseeds,
 		completion = completion,
 		input = {autoplay = cfg.autoplay, injected_inputs = false,
 			requested_difficulty = cfg.difficulty, style = cfg.style,
 			preferences = input_preferences, gameplay_preferences = gameplay_preferences},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
+			native_random_seed = true,
 			actor_definitions = true,
 			child_layer_order = true,
 			command_execution = true,

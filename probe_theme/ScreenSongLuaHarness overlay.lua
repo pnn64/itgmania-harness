@@ -66,6 +66,7 @@ local function configure_song()
 		GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred"):PlayerAutoPlay(cfg.autoplay)
 	end
 	ITGMANIA_HARNESS_TRACE.capture_inputs(game_mode_initialized)
+	ITGMANIA_HARNESS_TRACE.seed_random()
 	return selected, nil
 end
 

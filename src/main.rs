@@ -168,6 +168,7 @@ fn parse_song_lua_trace_args(
     let mut until_gameplay_end = false;
     let mut autoplay = None;
     let mut max_events = None;
+    let mut random_seed = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -252,6 +253,16 @@ fn parse_song_lua_trace_args(
                 }
                 set_once(&mut max_events, value, "--max-events")?;
             }
+            Some("--random-seed") => {
+                let raw = next_utf8(&mut args, "--random-seed")?;
+                let seed = raw.parse::<u32>().map_err(|_| {
+                    CliError::Usage(format!("random seed `{raw}` is not an integer"))
+                })?;
+                if seed == 0 || seed > i32::MAX as u32 {
+                    return Err(CliError::Usage("random seed must be in 1..=2147483647".into()));
+                }
+                set_once(&mut random_seed, seed, "--random-seed")?;
+            }
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -282,6 +293,7 @@ fn parse_song_lua_trace_args(
             until_gameplay_end,
             autoplay: autoplay.unwrap_or(true),
             max_events: max_events.unwrap_or(song_lua_runtime::DEFAULT_MAX_EVENTS),
+            random_seed: random_seed.unwrap_or(1),
         },
         out,
     })
@@ -1292,7 +1304,7 @@ fn print_help() {
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
-             [--keep-run-dir] [--headless] [--autoplay 0|1]\n\
+              [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
@@ -1475,6 +1487,7 @@ mod tests {
         assert!(trace.options.headless);
         assert!(!trace.options.autoplay);
         assert_eq!(trace.options.max_events, song_lua_runtime::DEFAULT_MAX_EVENTS);
+        assert_eq!(trace.options.random_seed, 1);
     }
 
     #[test]
@@ -1483,6 +1496,21 @@ mod tests {
             .map(OsString::from);
         let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
         assert_eq!(trace.options.max_events, 2_000_000);
+    }
+
+    #[test]
+    fn trace_requires_reproducible_seed() {
+        for value in ["0", "-1", "1.5", "nan", "2147483648", "4294967296"] {
+            let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--random-seed", value]
+                .map(OsString::from);
+            assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
+        }
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--random-seed", "73"]
+            .map(OsString::from);
+        assert_eq!(parse_song_lua_trace_args(args.into_iter()).unwrap().options.random_seed, 73);
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--random-seed", "1", "--random-seed", "2"]
+            .map(OsString::from);
+        assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
     }
 
     #[test]

@@ -719,6 +719,14 @@ During parity development, pass `--uncompressed` to write content-addressed
 `.tar` candidates outside the published fixture folder. DeadSync accepts these
 with the same manifest, member hashes, and full replay checks:
 
+Native `song-lua-trace` captures also accept `--random-seed N` (default 1,
+range `1..=2147483647`). The probe seeds ITGmania's Lua MersenneTwister once,
+after initial theme configuration and before loading gameplay. The stream
+continues across gameplay reloads. `native_random_seed` declares the recorded
+seed and subsequent Lua reseeds; seed-zero reseeds remain dependent on wall
+time. Older native captures without this input cannot establish equality of
+random effects with a replay starting from seed 1.
+
 ```powershell
 itgmania-harness-rs song-lua-archive ..\rework\lua-songs --traces traces --out target\candidates --uncompressed
 cargo test --test full_song_lua -- --archive ..\itgmania-harness\target\candidates\<sha256>.tar --report save\candidate-report.json

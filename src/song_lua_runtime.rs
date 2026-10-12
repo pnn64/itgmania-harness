@@ -28,6 +28,7 @@ pub struct Options {
     pub until_gameplay_end: bool,
     pub autoplay: bool,
     pub max_events: u32,
+    pub random_seed: u32,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -57,6 +58,9 @@ pub fn capture(options: &Options) -> Result<Value, Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
+    if options.random_seed == 0 || options.random_seed > i32::MAX as u32 {
+        return Err(Error::new("random seed must be in 1..=2147483647"));
+    }
     if options.max_events == 0 {
         return Err(Error::new("runtime event limit must be greater than zero"));
     }
@@ -393,6 +397,13 @@ fn metrics(fallback_theme: &str) -> String {
 }
 
 pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
+    if document.pointer("/capabilities/native_random_seed").and_then(Value::as_bool) == Some(true)
+        && (!document["random_seed"].as_u64().is_some_and(|seed| seed > 0 && seed <= i32::MAX as u64)
+            || !document["random_reseeds"].is_array()
+            || document["dropped_random_reseeds"] != 0)
+    {
+        return Err(Error::new("native Lua random inputs are missing or incomplete"));
+    }
     validate_gameplay_preferences(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")
@@ -558,6 +569,7 @@ fn config_lua(options: &Options) -> String {
          \tuntil_gameplay_end = {},\n\
          \tautoplay = {},\n\
          \tmax_events = {},\n\
+         \trandom_seed = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
         lua_quote(&options.style),
@@ -568,7 +580,8 @@ fn config_lua(options: &Options) -> String {
         options.until_beat,
         options.until_gameplay_end,
         u8::from(options.autoplay),
-        options.max_events
+        options.max_events,
+        options.random_seed
     )
 }
 
@@ -763,12 +776,19 @@ mod tests {
             until_gameplay_end: false,
             autoplay: true,
             max_events: DEFAULT_MAX_EVENTS,
+            random_seed: 73,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
         assert!(lua.contains("until_beat = 4.500000000"));
         assert!(lua.contains("difficulty = \"Challenge\""));
         assert!(lua.contains("max_events = 250000"));
+        assert!(lua.contains("random_seed = 73"));
+        for seed in [0, u32::MAX] {
+            options.random_seed = seed;
+            assert!(validate_options(&options).is_err());
+        }
+        options.random_seed = 1;
         options.max_events = 2_000_000;
         assert!(validate_options(&options).is_ok());
         assert!(config_lua(&options).contains("max_events = 2000000"));
@@ -800,6 +820,20 @@ mod tests {
             ]
         });
         assert!(validate_runtime_inputs(&document).is_ok());
+        let mut seeded = document.clone();
+        seeded["capabilities"]["native_random_seed"] = serde_json::json!(true);
+        assert!(validate_runtime_inputs(&seeded).is_err());
+        seeded["random_seed"] = serde_json::json!(73);
+        seeded["random_reseeds"] = serde_json::json!([]);
+        seeded["dropped_random_reseeds"] = serde_json::json!(0);
+        assert!(validate_runtime_inputs(&seeded).is_ok());
+        for seed in [serde_json::json!(0), serde_json::json!(2147483648_u64), Value::Null] {
+            seeded["random_seed"] = seed;
+            assert!(validate_runtime_inputs(&seeded).is_err());
+        }
+        seeded["random_seed"] = serde_json::json!(1);
+        seeded["dropped_random_reseeds"] = serde_json::json!(1);
+        assert!(validate_runtime_inputs(&seeded).is_err());
         let mut recorded = document.clone();
         recorded["capabilities"]["native_display_preference"] = serde_json::json!(true);
         recorded["capabilities"]["native_initial_player_options"] = serde_json::json!(true);
@@ -964,6 +998,7 @@ mod tests {
             until_gameplay_end: false,
             autoplay: true,
             max_events: DEFAULT_MAX_EVENTS,
+            random_seed: 1,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();
