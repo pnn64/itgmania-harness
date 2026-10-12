@@ -264,7 +264,6 @@ fn main() {
             .define("WINDOWS", None)
             .define("WIN32", None)
             .define("NOMINMAX", None)
-            .define("ITGMANIA_BUNDLED_LUA", None)
             .define("_CRT_SECURE_NO_WARNINGS", None)
             .flag("/EHsc")
             .flag(format!("/FI{}", out.join("lua_compat.hpp").display()));
@@ -468,9 +467,6 @@ fn compile_audio_deps(root: &Path, out: &Path) {
         ogg.join("src/framing.c").is_file() && vorbis.join("lib/vorbisfile.c").is_file(),
         "initialize native audio dependencies: git -C vendor/itgmania submodule update --init extern/ogg extern/vorbis"
     );
-    let types = out.join("ogg");
-    fs::create_dir_all(&types).expect("create Ogg compatibility include");
-    fs::write(types.join("config_types.h"), "#include <stdint.h>\ntypedef int16_t ogg_int16_t;\ntypedef uint16_t ogg_uint16_t;\ntypedef int32_t ogg_int32_t;\ntypedef uint32_t ogg_uint32_t;\ntypedef int64_t ogg_int64_t;\ntypedef uint64_t ogg_uint64_t;\n").expect("write fixed-width Ogg types");
     let mut codec = cc::Build::new();
     codec
         .warnings(false)
@@ -1159,6 +1155,10 @@ fn watch_git_metadata(root: &Path) {
 }
 
 fn write_compat_headers(out: &Path, target_os: &str) {
+    // Native sound readers need this before the Ogg/Vorbis archives compile.
+    let types = out.join("ogg");
+    fs::create_dir_all(&types).expect("create Ogg compatibility include");
+    fs::write(types.join("config_types.h"), "#include <stdint.h>\ntypedef int16_t ogg_int16_t;\ntypedef uint16_t ogg_uint16_t;\ntypedef int32_t ogg_int32_t;\ntypedef uint32_t ogg_uint32_t;\ntypedef int64_t ogg_int64_t;\ntypedef uint64_t ogg_uint64_t;\n").expect("write fixed-width Ogg types");
     let config = if target_os == "windows" {
         r#"#pragma once
 #define HAVE__MKDIR 1

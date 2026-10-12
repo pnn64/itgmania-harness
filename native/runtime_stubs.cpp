@@ -780,11 +780,6 @@ void LuaTable::Get(Lua* state, const RString& key) {
 }
 
 
-template<> LuaReference EnumTraits<PlayerNumber>::StringToEnum;
-template<> LuaReference EnumTraits<PlayerNumber>::EnumToString;
-template<> PlayerNumber EnumTraits<PlayerNumber>::Invalid = PLAYER_INVALID;
-template<> const char* EnumTraits<PlayerNumber>::szName = "PlayerNumber";
-
 namespace LuaHelpers {
 Dialog::Result ReportScriptError(
 	const std::string& error, std::string, bool use_abort) {
@@ -2340,12 +2335,4 @@ struct GlobalInit {
 
 #ifndef ITGMANIA_HARNESS_SOURCE
 void init_itgmania_runtime(int, char**) { init_globals_once(); }
-#endif
-
-#if !defined(ITGMANIA_BUNDLED_LUA)
-int luaL_pushtype(lua_State* L, int n) {
-	const char* t = lua_typename(L, lua_type(L, n));
-	lua_pushstring(L, t ? t : "");
-	return 1;
-}
 #endif
