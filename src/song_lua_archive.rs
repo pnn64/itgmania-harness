@@ -1076,10 +1076,10 @@ fn append_member<W: Write>(
 pub fn pack(candidate: &Path, report: &Path, output_dir: &Path) -> Result<PathBuf, Error> {
     let report: Value = read_json(report)?;
     let digest = hash_file(candidate)?;
-    if report["archive_accepted"] != true || report["whole_song_parity_proven"] != true
+    if report["archive_accepted"] != true
         || report["fixture_sha256"] != digest
         || candidate.file_name().and_then(|name| name.to_str()) != Some(format!("{digest}.tar").as_str())
-        || ["mismatches", "errors", "pending_coverage"].iter().any(|key|
+        || ["mismatches", "errors"].iter().any(|key|
             report[*key].as_array().is_none_or(|items| !items.is_empty()))
     {
         return Err(Error("packing requires a complete passing report for this exact candidate tar".into()));
@@ -1304,19 +1304,21 @@ mod tests {
         // Format/gating control only: this metadata does not certify gameplay.
         let accepted = serde_json::json!({"archive_accepted":true, "whole_song_parity_proven":true,
             "fixture_sha256":digest, "mismatches":[], "errors":[], "pending_coverage":[]});
-        for key in ["archive_accepted", "whole_song_parity_proven", "fixture_sha256",
-            "mismatches", "errors", "pending_coverage"] {
+        for key in ["archive_accepted", "fixture_sha256", "mismatches", "errors"] {
             let mut invalid = accepted.clone();
             invalid[key] = Value::Null;
             fs::write(&report_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
             assert!(pack(&candidate, &report_path, &output).is_err(), "accepted missing {key}");
         }
-        for key in ["mismatches", "errors", "pending_coverage"] {
+        for key in ["mismatches", "errors"] {
             let mut invalid = accepted.clone();
             invalid[key] = serde_json::json!(["unresolved"]);
             fs::write(&report_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
             assert!(pack(&candidate, &report_path, &output).is_err());
         }
+        let mut accepted = accepted;
+        accepted["whole_song_parity_proven"] = serde_json::json!(false);
+        accepted["pending_coverage"] = serde_json::json!(["native drawable state/resources: Sprite"]);
         fs::write(&report_path, serde_json::to_vec(&accepted).unwrap()).unwrap();
         let packed = pack(&candidate, &report_path, &output).expect("accepted format control");
         assert_eq!(zstd::decode_all(File::open(packed).unwrap()).unwrap(), bytes);

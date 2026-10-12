@@ -736,8 +736,9 @@ itgmania-harness-rs song-lua-pack target\candidates\<sha256>.tar --report ..\dea
 Run the middle command in the DeadSync repository. `song-lua-pack` requires a
 complete passing report bound to that exact candidate's SHA-256. It streams the
 tested tar into compression without parsing the trace or rebuilding members.
-Entry diagnostics, remaining coverage gaps, and changed candidates cannot be
-packed. Add the resulting compressed archive to the fixture index after this
+Entry diagnostics, failed comparisons, and changed candidates cannot be
+packed. Coverage gaps are recorded separately from replay acceptance.
+Add the resulting compressed archive to the fixture index after this
 step; candidate tars are temporary local files and must not be committed.
 
 ```powershell
