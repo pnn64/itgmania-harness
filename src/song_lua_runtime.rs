@@ -208,19 +208,22 @@ fn prepare_install(
         source_program,
         &run_dir.join(relative_program),
         cfg!(windows),
+        None,
     )?;
-    copy_dir(&data, &run_dir.join("Data"), true)?;
+    copy_dir(&data, &run_dir.join("Data"), true, None)?;
     copy_dir(
         simfile
             .parent()
             .ok_or_else(|| Error::new("simfile has no song directory"))?,
         &run_dir.join("Songs/Harness/Probe"),
         true,
+        Some(simfile),
     )?;
     copy_dir(
         &fallback.join("Scripts"),
         &run_dir.join("Themes/itgmania-harness/Scripts"),
         true,
+        None,
     )?;
 
     for directory in [
@@ -590,7 +593,7 @@ fn create_run_dir() -> Result<PathBuf, Error> {
     Err(Error::new("could not allocate a unique runtime directory"))
 }
 
-fn copy_dir(source: &Path, destination: &Path, recursive: bool) -> Result<(), Error> {
+fn copy_dir(source: &Path, destination: &Path, recursive: bool, simfile: Option<&Path>) -> Result<(), Error> {
     create_dir(destination)?;
     let entries =
         fs::read_dir(source).map_err(|error| io_error("read directory", source, error))?;
@@ -602,9 +605,17 @@ fn copy_dir(source: &Path, destination: &Path, recursive: bool) -> Result<(), Er
             .map_err(|error| io_error("read file metadata", &source_path, error))?;
         if metadata.is_dir() {
             if recursive {
-                copy_dir(&source_path, &destination_path, true)?;
+                copy_dir(&source_path, &destination_path, true, None)?;
             }
         } else if metadata.is_file() {
+            // NotesLoader.cpp tries SSC before SM and loads a song directory,
+            // not the requested filename. A peer chart must not silently
+            // replace the capture's declared source. Keep nested Lua/assets.
+            if simfile.is_some_and(|selected| source_path != selected)
+                && source_path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension|
+                    extension.eq_ignore_ascii_case("ssc") || extension.eq_ignore_ascii_case("sm")) {
+                continue;
+            }
             link_or_copy(&source_path, &destination_path)?;
         }
     }
@@ -893,6 +904,11 @@ mod tests {
         create_dir(&fallback.join("Scripts")).unwrap();
         write(&fallback.join("Scripts/SL_Init.lua"), b"SL = {}\n").unwrap();
         write(&song.join("song.ssc"), b"#TITLE:Probe;\n").unwrap();
+        write(&song.join("song.sm"), b"#TITLE:Requested SM;\n").unwrap();
+        write(&song.join("other.SSC"), b"#TITLE:Competing SSC;\n").unwrap();
+        create_dir(&song.join("lua")).unwrap();
+        write(&song.join("lua/default.lua"), b"return Def.ActorFrame{}\n").unwrap();
+        write(&song.join("lua/nested.ssc"), b"nested resource\n").unwrap();
 
         let options = Options {
             simfile: song.join("song.ssc"),
@@ -921,6 +937,10 @@ mod tests {
         assert!(run_dir.join("Portable.ini").is_file());
         assert!(run_dir.join("Program/runtime.dll").is_file());
         assert!(run_dir.join("Songs/Harness/Probe/song.ssc").is_file());
+        assert!(!run_dir.join("Songs/Harness/Probe/song.sm").exists());
+        assert!(!run_dir.join("Songs/Harness/Probe/other.SSC").exists());
+        assert!(run_dir.join("Songs/Harness/Probe/lua/default.lua").is_file());
+        assert!(run_dir.join("Songs/Harness/Probe/lua/nested.ssc").is_file());
         assert!(run_dir
             .join("Themes/itgmania-harness/Scripts/SL_Init.lua")
             .is_file());
@@ -931,6 +951,17 @@ mod tests {
         assert!(preferences.contains("AdditionalFoldersReadOnly="));
         assert!(preferences.contains("TestInitialScreen=ScreenSongLuaHarness"));
         assert!(preferences.contains("VideoRenderers=null"));
+        let sm_run = fixture.join("sm-run");
+        create_dir(&sm_run).unwrap();
+        let sm = song.join("song.sm");
+        let sm_options = Options { simfile: sm.clone(), ..options };
+        prepare_install(&sm_options, &sm, &program.join("ITGmania.exe"), &install, &sm_run).unwrap();
+        assert!(sm_run.join("Songs/Harness/Probe/song.sm").is_file());
+        assert!(!sm_run.join("Songs/Harness/Probe/song.ssc").exists());
+        assert!(!sm_run.join("Songs/Harness/Probe/other.SSC").exists());
+        assert!(sm_run.join("Songs/Harness/Probe/lua/nested.ssc").is_file());
+        assert_eq!(fs::read(song.join("song.ssc")).unwrap(), b"#TITLE:Probe;\n");
+        assert_eq!(fs::read(song.join("song.sm")).unwrap(), b"#TITLE:Requested SM;\n");
         fs::remove_dir_all(fixture).unwrap();
     }
 }
