@@ -1,5 +1,6 @@
 use std::env;
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -340,9 +341,11 @@ fn emit_song_lua_analysis(args: SongLuaAnalysisArgs) -> Result<(), CliError> {
 
 fn emit_json_document(document: &serde_json::Value, out: Option<PathBuf>) -> Result<(), CliError> {
     if let Some(path) = out {
-        let file =
-            std::fs::File::create(&path).map_err(|source| CliError::OutputFile { path, source })?;
-        serde_json::to_writer_pretty(file, document).map_err(CliError::Output)?;
+        let file = std::fs::File::create(&path)
+            .map_err(|source| CliError::OutputFile { path: path.clone(), source })?;
+        let mut output = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut output, document).map_err(CliError::Output)?;
+        output.flush().map_err(|source| CliError::OutputFile { path, source })?;
     } else {
         serde_json::to_writer_pretty(std::io::stdout().lock(), document)
             .map_err(CliError::Output)?;
