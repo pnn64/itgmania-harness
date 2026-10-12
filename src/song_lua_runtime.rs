@@ -405,6 +405,7 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
         return Err(Error::new("native Lua random inputs are missing or incomplete"));
     }
     validate_actor_identities(document)?;
+    validate_actor_creations(document)?;
     validate_declaration_forest(document)?;
     validate_actor_queries(document)?;
     validate_gameplay_preferences(document)?;
@@ -611,6 +612,46 @@ fn validate_actor_identities(document: &Value) -> Result<(), Error> {
         {
             return Err(Error::new("invalid native actor identity input or startup anchor"));
         }
+    }
+    Ok(())
+}
+
+fn validate_actor_creations(document: &Value) -> Result<(), Error> {
+    if document.pointer("/capabilities/native_actor_creation").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    if !document["actor_creation_error"].is_null() {
+        return Err(Error::new("native actor creation observer failed"));
+    }
+    let inputs = document["actor_creation_inputs"].as_array()
+        .ok_or_else(|| Error::new("native actor creation inputs are missing"))?;
+    let runtime = document["runtime_actors"].as_array()
+        .ok_or_else(|| Error::new("native actor creation inputs have no runtime actors"))?;
+    let events = document["events"].as_array()
+        .ok_or_else(|| Error::new("native actor creation inputs have no event bounds"))?;
+    let mut actors = std::collections::HashSet::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        let actor = input["actor"].as_str().filter(|id| !id.is_empty());
+        let pointer = input["pointer_hex"].as_str().filter(|value| !value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && u64::from_str_radix(value, 16).is_ok_and(|pointer| pointer != 0));
+        if actor.is_none() || pointer.is_none() || !actors.insert(actor)
+            || input["ordinal"].as_u64() != Some(index as u64 + 1)
+            || input["scene"].as_u64().is_none()
+            || input["before_seq"].as_u64().is_none_or(|seq| seq == 0 || seq > events.len() as u64 + 1)
+            || input["definition_id"].as_str().is_none_or(str::is_empty)
+            || input["provenance"] != "native-ActorUtil-before-LoadFromNode"
+            || !runtime.iter().any(|record| record["id"] == input["actor"]
+                && record["definition_id"] == input["definition_id"])
+            || (!input["parent"].is_null() && !runtime.iter().any(|record| record["id"] == input["parent"]))
+        {
+            return Err(Error::new("invalid native actor creation identity or ownership"));
+        }
+    }
+    if runtime.iter().any(|record| !record["definition_id"].is_null()
+        && !actors.contains(&record["id"].as_str()))
+    {
+        return Err(Error::new("native definition instance has no observed creation identity"));
     }
     Ok(())
 }
@@ -1163,6 +1204,42 @@ mod tests {
         duplicate["actor_identity_inputs"].as_array_mut().expect("input array")
             .push(document["actor_identity_inputs"][0].clone());
         assert!(validate_actor_identities(&duplicate).is_err());
+    }
+
+    #[test]
+    fn actor_creations_require_observed_instances() {
+        let document = serde_json::json!({
+            "capabilities": {"native_actor_creation": true}, "events": [],
+            "runtime_actors": [{"id": "root", "definition_id": "def-1"},
+                {"id": "child", "definition_id": "def-2"}],
+            "actor_creation_inputs": [
+                {"actor": "root", "definition_id": "def-1", "pointer_hex": "abcd",
+                    "scene": 0, "before_seq": 1, "ordinal": 1,
+                    "provenance": "native-ActorUtil-before-LoadFromNode"},
+                {"actor": "child", "definition_id": "def-2", "parent": "root", "pointer_hex": "abce",
+                    "scene": 0, "before_seq": 1, "ordinal": 2,
+                    "provenance": "native-ActorUtil-before-LoadFromNode"}]
+        });
+        assert!(validate_actor_creations(&document).is_ok());
+        assert!(validate_actor_creations(&serde_json::json!({})).is_ok());
+        for (path, value) in [
+            ("/actor_creation_error", serde_json::json!("observer failed")),
+            ("/actor_creation_inputs/1/actor", serde_json::json!("root")),
+            ("/actor_creation_inputs/1/definition_id", serde_json::json!("def-1")),
+            ("/actor_creation_inputs/1/parent", serde_json::json!("unknown")),
+            ("/actor_creation_inputs/1/pointer_hex", serde_json::json!("0")),
+            ("/actor_creation_inputs/1/ordinal", serde_json::json!(1)),
+            ("/actor_creation_inputs/1/before_seq", serde_json::json!(2)),
+            ("/actor_creation_inputs/1/provenance", serde_json::json!("observed-callback-order")),
+        ] {
+            let mut invalid = document.clone();
+            if path == "/actor_creation_error" { invalid["actor_creation_error"] = value; }
+            else { *invalid.pointer_mut(path).expect("creation field") = value; }
+            assert!(validate_actor_creations(&invalid).is_err(), "accepted invalid {path}");
+        }
+        let mut missing = document.clone();
+        missing["actor_creation_inputs"].as_array_mut().expect("creation inputs").pop();
+        assert!(validate_actor_creations(&missing).is_err());
     }
 
     #[test]

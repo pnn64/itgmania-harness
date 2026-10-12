@@ -15,6 +15,8 @@ local update_frames = {}
 local random_reseeds = {}
 local dropped_random_reseeds = 0
 local actor_identity_inputs = {}
+local actor_creation_inputs = {}
+local creation_observed = setmetatable({}, {__mode = "k"})
 local identity_observed = setmetatable({}, {__mode = "k"})
 local active_context = nil
 local next_sequence = 0
@@ -159,6 +161,25 @@ local function external_actor(actor, suggested_path)
 	actor_records[actor] = record
 	actors[#actors + 1] = record
 	return id
+end
+
+if ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE then
+	ITGMANIA_HARNESS_ACTOR_CREATED = function(actor, actor_def, parent, pointer)
+		local definition = definition_by_table[actor_def]
+		if not definition then return end
+		assert(not creation_observed[actor], "native actor observed at multiple factory loads")
+		creation_observed[actor] = true
+		local actor_id = bind_actor(actor, definition)
+		local pointer_hex = pointer:lower():gsub("^0x", ""):gsub("^0+", "")
+		assert(pointer_hex ~= "" and pointer_hex:match("^[0-9a-f]+$"), "invalid native subscriber pointer")
+		actor_creation_inputs[#actor_creation_inputs + 1] = {
+			actor = actor_id, definition_id = definition.id,
+			parent = parent and external_actor(parent) or nil,
+			pointer_hex = pointer_hex, scene = scene_count,
+			before_seq = next_sequence + 1, ordinal = #actor_creation_inputs + 1,
+			provenance = "native-ActorUtil-before-LoadFromNode",
+		}
+	end
 end
 
 local function looks_like_actor(value)
@@ -950,6 +971,8 @@ function trace.finish(completion)
 		random_reseeds = random_reseeds,
 		dropped_random_reseeds = dropped_random_reseeds,
 		actor_identity_inputs = actor_identity_inputs,
+		actor_creation_inputs = actor_creation_inputs,
+		actor_creation_error = ITGMANIA_HARNESS_ACTOR_CREATION_ERROR,
 		completion = completion,
 		input = {autoplay = cfg.autoplay, injected_inputs = false,
 			requested_difficulty = cfg.difficulty, style = cfg.style,
@@ -958,6 +981,7 @@ function trace.finish(completion)
 		capabilities = {
 			native_random_seed = true,
 			native_actor_identities = true,
+			native_actor_creation = ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE == true,
 			native_actor_query_ancestry = true,
 			native_declaration_ancestry = true,
 			actor_definitions = true,
