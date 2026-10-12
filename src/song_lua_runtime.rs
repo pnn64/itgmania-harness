@@ -456,10 +456,12 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             if !matches!(event.get("phase").and_then(Value::as_str), Some("construction" | "callback")) {
                 return Err(Error::new("native method capture has no construction/callback phase"));
             }
-            if event.get("kind").and_then(Value::as_str) == Some("query")
+            if (event.get("kind").and_then(Value::as_str) == Some("query")
+                || document.pointer("/capabilities/native_modifier_results").and_then(Value::as_bool) == Some(true)
+                    && event.get("kind").and_then(Value::as_str) == Some("modifier"))
                 && event.pointer("/detail/results").and_then(Value::as_array).is_none()
             {
-                return Err(Error::new("native query capture has no result tuple"));
+                return Err(Error::new("native query or modifier capture has no result tuple"));
             }
         }
     }
@@ -849,6 +851,15 @@ mod tests {
             let mut invalid = epochs.clone();
             invalid["capabilities"]["native_query_classes"] = value;
             assert!(validate_runtime_inputs(&invalid).is_err(), "accepted invalid query class inventory");
+        }
+        epochs["capabilities"]["native_modifier_results"] = serde_json::json!(true);
+        epochs["events"][1]["kind"] = serde_json::json!("modifier");
+        epochs["events"][1]["detail"] = serde_json::json!({"results":[0.25, 1.0]});
+        assert!(validate_runtime_inputs(&epochs).is_ok());
+        for result in [Value::Null, serde_json::json!({})] {
+            let mut invalid = epochs.clone();
+            invalid["events"][1]["detail"]["results"] = result;
+            assert!(validate_runtime_inputs(&invalid).is_err(), "accepted missing modifier returns");
         }
     }
 

@@ -17,6 +17,7 @@ local dropped_events = 0
 local finished = false
 local scene_count = 0
 local original_methods = {}
+local method_hooks = setmetatable({}, {__mode = "k"})
 local hooked_classes = {}
 local raw_metatable = debug.getmetatable
 
@@ -469,7 +470,10 @@ local function assign_result_path(class, method, args, result)
 			end
 		end
 	elseif class == "GameState" and method == "GetPlayerState" then
-		actor_paths[result] = "player-state:" .. tostring(args[2])
+		-- Numeric and enum arguments address the same native PlayerState.
+		-- Identify the returned object through its original binding, without
+		-- recursively adding an instrumentation query to the authored stream.
+		actor_paths[result] = "player-state:" .. tostring(original_methods.PlayerState.GetPlayerNumber(result))
 	elseif class == "PlayerState" and method == "GetPlayerOptions" then
 		actor_paths[result] = (actor_paths[args[1]] or "player-state")
 			.. "/options:" .. tostring(args[2])
@@ -509,9 +513,16 @@ local function install_class_hook(class)
 	for name, method in pairs(methods) do
 		if type(name) == "string" and type(method) == "function" then names[#names + 1] = name end
 	end
+	table.sort(names)
 	for _, name in ipairs(names) do
 		local original = methods[name]
-		original_methods[class][name] = original
+		local shared = method_hooks[original]
+		original_methods[class][name] = shared and shared.original or original
+		if shared then
+			-- Luna copies inherited functions into subclass tables. Reuse the
+			-- wrapper so inherited calls are observed and function identity holds.
+			methods[name] = shared.wrapper
+		else
 		methods[name] = function(...)
 			local args = pack(...)
 			local caller = debug.getinfo(2, "S") or {}
@@ -543,7 +554,7 @@ local function install_class_hook(class)
 			end
 			local result = pack(original(unpack(args, 1, args.n)))
 			assign_result_path(class, name, args, result[1])
-			if event and is_query then
+			if event and (is_query or event.kind == "modifier") then
 				event.detail = {results = safe_args(result, 1)}
 				if class == "ScreenManager" and name == "GetTopScreen" and result[1] ~= nil then
 					event.detail.results = {{type = "Screen", name = actor_name(result[1])}}
@@ -557,6 +568,9 @@ local function install_class_hook(class)
 				end
 			end
 			return unpack(result, 1, result.n)
+		end
+		local hook = {original = original, wrapper = methods[name]}
+		method_hooks[original], method_hooks[methods[name]] = hook, hook
 		end
 	end
 end
@@ -778,6 +792,8 @@ function trace.finish(completion)
 			native_event_scenes = true,
 			native_call_sources = true,
 			native_constructor_queries = true,
+			native_modifier_results = true,
+			native_player_number_paths = true,
 			native_query_classes = hooked_classes,
 			native_machine_preferences = input_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
@@ -796,14 +812,18 @@ function trace.finish(completion)
 end
 
 install_definition_hook()
+local shared_player_child = Player.GetChild == ActorFrame.GetChild
 for _, class in ipairs({
-	"Actor", "ActorFrame", "ActorFrameTexture", "ActorMultiVertex", "ActorProxy",
+	"Actor", "ActorFrame", "Player", "ActorFrameTexture", "ActorMultiVertex", "ActorProxy",
 	"ActorScroller", "ActorSound", "BitmapText", "Model", "Sprite", "Screen",
 	"ScreenWithMenuElements", "ScreenGameplay", "StatsManager", "StageStats", "PlayerStageStats",
 	"GameState", "MessageManager", "PlayerOptions", "PlayerState", "ScreenManager",
 	"SongOptions", "Song", "Steps", "RageDisplay", "PrefsManager", "Style",
 }) do
 	install_class_hook(class)
+end
+if shared_player_child then
+	assert(Player.GetChild == ActorFrame.GetChild, "trace hooks changed native Player:GetChild identity")
 end
 
 ITGMANIA_HARNESS_TRACE = trace
