@@ -692,6 +692,7 @@ function trace.capture_inputs(game_mode_initialized)
 		global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
 		default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
 		visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
+		display_aspect_ratio = PREFSMAN:GetPreference("DisplayAspectRatio"),
 	}
 	local windows, players = {}, {}
 	for _, window in ipairs({"W1", "W2", "W3", "W4", "W5", "Hold", "Mine", "Roll", "Attack", "Checkpoint"}) do
@@ -705,6 +706,7 @@ function trace.capture_inputs(game_mode_initialized)
 		end
 		players[#players + 1] = {
 			player = tostring(player), fail_setting = tostring(options:FailSetting()),
+			options_string = GAMESTATE:GetPlayerState(player):GetPlayerOptionsString("ModsLevel_Preferred"),
 			min_tns_to_hide_notes = tostring(options:MinTNSToHideNotes()),
 			disabled_timing_windows = disabled,
 		}
@@ -865,6 +867,8 @@ function trace.finish(completion)
 			native_c_method_hooks = type(native_wrap) == "function",
 			native_query_classes = hooked_classes,
 			native_machine_preferences = input_preferences ~= nil,
+			native_display_preference = input_preferences ~= nil,
+			native_initial_player_options = gameplay_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
 		},
 		roots = roots,

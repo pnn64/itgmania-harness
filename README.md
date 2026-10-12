@@ -173,6 +173,12 @@ The capture rejects missing, invalid or dropped update frames. The
 `input.preferences` records the native machine offset, default sync offset and
 visual delay before song Lua loads. Replayers must use these settings when
 loading timing and reject captures that omit them rather than assume defaults.
+New captures also record the configured `display_aspect_ratio`, independently
+of the null driver's zero physical dimensions, and each enabled player's
+preferred `options_string` before gameplay loads song Lua. The
+`native_display_preference` and `native_initial_player_options` capabilities
+require these inputs to be present and valid. They describe initial settings;
+replayers must not initialize Lua from later query results.
 The bootstrap calls the fallback theme's `SetGameModePreferences()` helper and
 reloads its metrics when that helper exists, as Simply Love does when selecting
 a game mode. `input.gameplay_preferences` records the resulting timing windows,

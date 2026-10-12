@@ -406,6 +406,12 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     {
         return Err(Error::new("native gameplay machine preferences are incomplete"));
     }
+    if document.pointer("/capabilities/native_display_preference").and_then(Value::as_bool) == Some(true)
+        && !preferences.get("display_aspect_ratio").and_then(Value::as_f64)
+            .is_some_and(|value| value.is_finite() && value >= 0.0)
+    {
+        return Err(Error::new("native configured display aspect ratio is missing or invalid"));
+    }
     let frames = document.get("update_frames").and_then(Value::as_array)
         .filter(|frames| !frames.is_empty())
         .ok_or_else(|| Error::new("native gameplay capture has no update-frame clocks"))?;
@@ -516,6 +522,13 @@ fn validate_gameplay_preferences(document: &Value) -> Result<(), Error> {
         }));
     if !valid {
         return Err(Error::new("native initialized gameplay preferences are incomplete"));
+    }
+    if document.pointer("/capabilities/native_initial_player_options").and_then(Value::as_bool) == Some(true)
+        && !players.is_some_and(|players| players.iter().all(|player| {
+            player.get("options_string").and_then(Value::as_str).is_some()
+        }))
+    {
+        return Err(Error::new("native initial player option inputs are incomplete"));
     }
     Ok(())
 }
@@ -787,6 +800,17 @@ mod tests {
             ]
         });
         assert!(validate_runtime_inputs(&document).is_ok());
+        let mut recorded = document.clone();
+        recorded["capabilities"]["native_display_preference"] = serde_json::json!(true);
+        recorded["capabilities"]["native_initial_player_options"] = serde_json::json!(true);
+        assert!(validate_runtime_inputs(&recorded).is_err());
+        recorded["input"]["preferences"]["display_aspect_ratio"] = serde_json::json!(16.0_f32 / 9.0);
+        assert!(validate_runtime_inputs(&recorded).is_err());
+        recorded["input"]["gameplay_preferences"]["players"][0]["options_string"] =
+            serde_json::json!("NoHideLights, PlayerAutoPlay, Overhead");
+        assert!(validate_runtime_inputs(&recorded).is_ok());
+        recorded["input"]["preferences"]["display_aspect_ratio"] = serde_json::json!(-1);
+        assert!(validate_runtime_inputs(&recorded).is_err());
         let mut lost = document.clone();
         lost["dropped_update_frames"] = serde_json::json!(1);
         assert!(validate_runtime_inputs(&lost).is_err());
