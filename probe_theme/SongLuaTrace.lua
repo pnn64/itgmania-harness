@@ -120,6 +120,31 @@ local function looks_like_actor(value)
 	return type(hierarchy) == "table" and rawget(hierarchy, "Actor") ~= nil
 end
 
+local function native_object(value)
+	local metatable = raw_metatable(value)
+	local hierarchy = type(metatable) == "table" and rawget(metatable, "heirarchy")
+	if type(hierarchy) ~= "table" then return nil end
+	local class = nil
+	for name, level in pairs(hierarchy) do if level == 0 then class = name end end
+	if not class then return nil end
+	local out = {type = class, path = actor_paths[value]}
+	-- Invoke the saved C bindings, never an authored __index or a traced wrapper.
+	if class == "Song" then
+		out.song_dir = normalize_path(original_methods.Song.GetSongDir(value))
+	elseif class == "Steps" then
+		local song = original_methods.GameState.GetCurrentSong(GAMESTATE)
+		out.song_dir = song and normalize_path(original_methods.Song.GetSongDir(song)) or nil
+		for index, steps in ipairs(song and original_methods.Song.GetAllSteps(song) or {}) do
+			if steps == value then out.index = index; break end
+		end
+		for key, method in pairs({steps_type = "GetStepsType", difficulty = "GetDifficulty",
+			description = "GetDescription", meter = "GetMeter"}) do
+			out[key] = original_methods.Steps[method](value)
+		end
+	end
+	return out
+end
+
 local function safe_value(value, depth, seen)
 	local kind = type(value)
 	if kind == "nil" or kind == "boolean" or kind == "string" then
@@ -136,11 +161,14 @@ local function safe_value(value, depth, seen)
 		source.type = "function"
 		return source
 	end
+	if kind == "userdata" then return native_object(value) or {type = kind} end
 	if kind ~= "table" then return {type = kind, value = normalize_path(value)} end
 	if looks_like_actor(value) then
 		local id = external_actor(value)
 		return {actor = id, path = actor_paths[value], name = actor_name(value)}
 	end
+	local object = native_object(value)
+	if object then return object end
 	if depth >= 5 then return {type = "table", truncated = "depth"} end
 	if seen[value] then return {type = "table", cycle = true} end
 	seen[value] = true
@@ -177,7 +205,7 @@ end
 local function safe_args(args, first)
 	local out = {}
 	for index = first or 1, args.n do
-		out[#out + 1] = safe_value(args[index], 0, {})
+		out[#out + 1] = args[index] == nil and {type = "nil"} or safe_value(args[index], 0, {})
 	end
 	return out
 end
@@ -481,10 +509,9 @@ local function install_class_hook(class)
 		original_methods[class][name] = original
 		methods[name] = function(...)
 			local args = pack(...)
-			local stage_query = class == "PlayerStageStats" and (
-				name == "GetPossibleDancePoints" or name == "GetCurrentPossibleDancePoints"
-				or name == "GetActualDancePoints")
-			local should_emit = active_context ~= nil and (stage_query or not query_method(class, name, args.n))
+			local caller = debug.getinfo(2, "S") or {}
+			local is_query = query_method(class, name, args.n)
+			local should_emit = active_context ~= nil or song_source(caller.source)
 			local event_args = should_emit and safe_args(args, 2) or nil
 			local actor_id = nil
 			if should_emit and looks_like_actor(args[1]) then actor_id = external_actor(args[1]) end
@@ -493,22 +520,29 @@ local function install_class_hook(class)
 			end
 			local event = nil
 			if should_emit then
-				event = emit(stage_query and "query" or event_kind(class, name), actor_id or actor_paths[args[1]],
+				event = emit(is_query and "query" or event_kind(class, name), actor_id or actor_paths[args[1]],
 					class .. "." .. name, event_args)
 				if event then
 					-- The active song command can call native methods that run theme
 					-- Lua synchronously. Preserve its context and the immediate caller
 					-- separately; those nested theme calls are not authored song calls.
-					local caller = debug.getinfo(2, "S") or {}
 					event.caller = {
 						source = normalize_path(caller.source or ""),
 						line = caller.linedefined or -1,
 					}
+					event.phase = active_context and "callback" or "construction"
+					if not active_context then
+						event.source, event.line = event.caller.source, event.caller.line
+					end
 				end
 			end
 			local result = pack(original(unpack(args, 1, args.n)))
-			if event and stage_query then
+			assign_result_path(class, name, args, result[1])
+			if event and is_query then
 				event.detail = {results = safe_args(result, 1)}
+				if class == "ScreenManager" and name == "GetTopScreen" and result[1] ~= nil then
+					event.detail.results = {{type = "Screen", name = actor_name(result[1])}}
+				end
 			end
 			if event and actor_id then
 				local time_left = native_tween_time_left(args[1])
@@ -517,7 +551,6 @@ local function install_class_hook(class)
 					event.detail.native_tween_time_left = time_left
 				end
 			end
-			assign_result_path(class, name, args, result[1])
 			return unpack(result, 1, result.n)
 		end
 	end
@@ -739,6 +772,7 @@ function trace.finish(completion)
 			native_update_frames = true,
 			native_event_scenes = true,
 			native_call_sources = true,
+			native_constructor_queries = true,
 			native_machine_preferences = input_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
 		},
@@ -761,7 +795,7 @@ for _, class in ipairs({
 	"ActorScroller", "ActorSound", "BitmapText", "Model", "Sprite", "Screen",
 	"ScreenWithMenuElements", "ScreenGameplay", "StatsManager", "StageStats", "PlayerStageStats",
 	"GameState", "MessageManager", "PlayerOptions", "PlayerState", "ScreenManager",
-	"SongOptions",
+	"SongOptions", "Song", "Steps",
 }) do
 	install_class_hook(class)
 end

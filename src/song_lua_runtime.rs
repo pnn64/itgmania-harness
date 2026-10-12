@@ -445,6 +445,24 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             }
         }
     }
+    if document.pointer("/capabilities/native_constructor_queries").and_then(Value::as_bool) == Some(true) {
+        if document.pointer("/capabilities/native_call_sources").and_then(Value::as_bool) != Some(true) {
+            return Err(Error::new("native construction capture requires immediate callers"));
+        }
+        for event in document.get("events").and_then(Value::as_array).into_iter().flatten() {
+            if !matches!(event.get("kind").and_then(Value::as_str), Some("call" | "query" | "message" | "modifier")) {
+                continue;
+            }
+            if !matches!(event.get("phase").and_then(Value::as_str), Some("construction" | "callback")) {
+                return Err(Error::new("native method capture has no construction/callback phase"));
+            }
+            if event.get("kind").and_then(Value::as_str) == Some("query")
+                && event.pointer("/detail/results").and_then(Value::as_array).is_none()
+            {
+                return Err(Error::new("native query capture has no result tuple"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -798,6 +816,22 @@ mod tests {
             let mut invalid = epochs.clone();
             *invalid.pointer_mut(pointer).expect("native caller field") = value;
             assert!(validate_runtime_inputs(&invalid).is_err(), "accepted invalid caller at {pointer}");
+        }
+        epochs["capabilities"]["native_constructor_queries"] = serde_json::json!(true);
+        epochs["events"][1]["phase"] = serde_json::json!("callback");
+        epochs["events"][2]["phase"] = serde_json::json!("construction");
+        epochs["events"][2]["detail"] = serde_json::json!({"results":[{"type":"Steps","index":2}]});
+        assert!(validate_runtime_inputs(&epochs).is_ok());
+        for (pointer, value) in [
+            ("/capabilities/native_call_sources", serde_json::json!(false)),
+            ("/events/1/phase", Value::Null),
+            ("/events/2/phase", serde_json::json!("unknown")),
+            ("/events/2/detail/results", Value::Null),
+            ("/events/2/detail/results", serde_json::json!({})),
+        ] {
+            let mut invalid = epochs.clone();
+            *invalid.pointer_mut(pointer).expect("native query field") = value;
+            assert!(validate_runtime_inputs(&invalid).is_err(), "accepted incomplete query at {pointer}");
         }
     }
 
