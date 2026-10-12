@@ -251,7 +251,9 @@ RageTextureManager* TEXTUREMAN = &gTextureManager;
 GameState* GAMESTATE = &gGameState;
 GameManager* GAMEMAN = &gGameManager;
 PrefsManager* PREFSMAN = nullptr;
-ThemeManager* THEME = &gThemeManager;
+// Native ThemeManager publishes itself only after LuaManager exists. Metrics
+// registered by other translation units must not read an unconstructed VM.
+ThemeManager* THEME = nullptr;
 RageFileManager* FILEMAN = &gFileManager;
 LuaManager* LUA = &gLuaManager;
 SongManager* SONGMAN = &gSongManager;
@@ -1799,6 +1801,7 @@ SongLuaVM* create_song_vm(lua_State*& state) {
 void destroy_song_vm(SongLuaVM* vm) { delete vm; }
 
 ThemeManager::ThemeManager() : m_sCurThemeName("Harness"), m_sCurLanguage("en"), m_bPseudoLocalize(false) {
+	THEME = this;
 	for (IThemeMetric* metric : harness_theme_metrics()) {
 		if (metric) metric->Read();
 	}
