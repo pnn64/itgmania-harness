@@ -18,6 +18,7 @@ local finished = false
 local scene_count = 0
 local original_methods = {}
 local method_hooks = setmetatable({}, {__mode = "k"})
+local tween_owner_observed = setmetatable({}, {__mode = "k"})
 local hooked_classes = {}
 local raw_metatable = debug.getmetatable
 local native_wrap = ITGMANIA_HARNESS_WRAP
@@ -505,6 +506,53 @@ local function native_tween_time_left(actor)
 	return nil
 end
 
+local function native_tween_children(actor)
+	-- Observe the native owner once, without invoking wrapped methods or
+	-- changing an actor. ActorFrame's total includes descendant tween queues.
+	local children_getter = original_methods.ActorFrame and original_methods.ActorFrame.GetChildren
+	local name_getter = original_methods.Actor and original_methods.Actor.GetName
+	if type(children_getter) ~= "function" or type(name_getter) ~= "function" then return nil end
+	local previous = active_context
+	active_context = nil
+	local count, seen = 0, {}
+	local function visit(value, depth)
+		if seen[value] then return nil end
+		seen[value] = true
+		if not looks_like_actor(value) then
+			local nodes = {}
+			if type(value) == "table" then
+				for _, child in ipairs(value) do
+					if count >= 64 then break end
+					local node = visit(child, depth)
+					if node then nodes[#nodes + 1] = node end
+				end
+			end
+			return #nodes > 0 and {children = nodes} or nil
+		end
+		local left = native_tween_time_left(value)
+		if type(left) ~= "number" or left <= 0 then return nil end
+		local ok, name = pcall(name_getter, value)
+		local node = {name = ok and name or "", time_left = left, children = {}}
+		count = count + 1
+		if depth >= 6 or count >= 64 then node.truncated = true; return node end
+		local hierarchy = rawget(raw_metatable(value), "heirarchy")
+		if rawget(hierarchy, "ActorFrame") ~= nil then
+			local got, children = pcall(children_getter, value)
+			if got and type(children) == "table" then
+				for _, child in pairs(children) do
+					if count >= 64 then node.truncated = true; break end
+					local child_node = visit(child, depth + 1)
+					if child_node then node.children[#node.children + 1] = child_node end
+				end
+			end
+		end
+		return node
+	end
+	local ok, result = pcall(visit, actor, 0)
+	active_context = previous
+	return ok and result or {error = tostring(result)}
+end
+
 local function install_class_hook(class)
 	local methods = rawget(_G, class)
 	if type(methods) ~= "table" then return end
@@ -577,6 +625,11 @@ local function install_class_hook(class)
 				if time_left ~= nil then
 					event.detail = event.detail or {}
 					event.detail.native_tween_time_left = time_left
+					if type(time_left) == "number" and time_left > 0 and not tween_owner_observed[args[1]]
+						and actor_name(args[1]):match("^PlayerP[12]$") then
+						event.detail.native_tween_children = native_tween_children(args[1])
+						tween_owner_observed[args[1]] = true
+					end
 				end
 			end
 			return unpack(result, 1, result.n)
@@ -798,6 +851,7 @@ function trace.finish(completion)
 			message_broadcasts = true,
 			modifier_mutations = true,
 			public_tween_time = true,
+			player_tween_children = true,
 			draw_order_calls = true,
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
