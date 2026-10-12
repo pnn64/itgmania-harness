@@ -20,6 +20,7 @@ local original_methods = {}
 local method_hooks = setmetatable({}, {__mode = "k"})
 local hooked_classes = {}
 local raw_metatable = debug.getmetatable
+local native_wrap = ITGMANIA_HARNESS_WRAP
 
 local function pack(...)
 	return {n = select("#", ...), ...}
@@ -519,13 +520,23 @@ local function install_class_hook(class)
 		local shared = method_hooks[original]
 		original_methods[class][name] = shared and shared.original or original
 		if shared then
-			-- Luna copies inherited functions into subclass tables. Reuse the
-			-- wrapper so inherited calls are observed and function identity holds.
+			-- Reuse hooks for shared binding functions. Luna inheritance itself
+			-- remains through the native class method-table metatables.
 			methods[name] = shared.wrapper
 		else
 		methods[name] = function(...)
 			local args = pack(...)
-			local caller = debug.getinfo(2, "S") or {}
+			local caller = {}
+			local caller_tail = false
+			for level = 2, 32 do
+				local frame = debug.getinfo(level, "S")
+				if not frame then break end
+				if frame.what == "tail" then caller_tail = true end
+				if frame.what == "Lua" or frame.what == "main" then
+					caller = frame
+					break
+				end
+			end
 			local is_query = query_method(class, name, args.n)
 			local should_emit = active_context ~= nil or song_source(caller.source)
 			local event_args = should_emit and safe_args(args, 2) or nil
@@ -545,6 +556,7 @@ local function install_class_hook(class)
 					event.caller = {
 						source = normalize_path(caller.source or ""),
 						line = caller.linedefined or -1,
+							tail_call = caller_tail,
 					}
 					event.phase = active_context and "callback" or "construction"
 					if not active_context then
@@ -569,6 +581,7 @@ local function install_class_hook(class)
 			end
 			return unpack(result, 1, result.n)
 		end
+		if type(native_wrap) == "function" then methods[name] = native_wrap(methods[name]) end
 		local hook = {original = original, wrapper = methods[name]}
 		method_hooks[original], method_hooks[methods[name]] = hook, hook
 		end
@@ -794,6 +807,7 @@ function trace.finish(completion)
 			native_constructor_queries = true,
 			native_modifier_results = true,
 			native_player_number_paths = true,
+			native_c_method_hooks = type(native_wrap) == "function",
 			native_query_classes = hooked_classes,
 			native_machine_preferences = input_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
@@ -812,6 +826,27 @@ function trace.finish(completion)
 end
 
 install_definition_hook()
+if type(native_wrap) == "function" then
+	local marker = {}
+	local passthrough = native_wrap(function(a, b) return a, nil, b end)
+	local results = pack(passthrough(marker, 7))
+	assert(results.n == 3 and results[1] == marker and results[2] == nil and results[3] == 7,
+		"native trace adapter changed arguments or return values")
+	local ok, failure = pcall(native_wrap(function() error(marker) end))
+	assert(not ok and failure == marker, "native trace adapter changed the Lua error object")
+	local caller_line
+	local observed = native_wrap(function()
+		for level = 2, 32 do
+			local frame = debug.getinfo(level, "S")
+			if not frame then break end
+			if frame.what == "Lua" then caller_line = frame.linedefined; break end
+		end
+	end)
+	local function tail_helper() return observed() end
+	tail_helper()
+	assert(caller_line == debug.getinfo(tail_helper, "S").linedefined,
+		"native trace adapter lost the authored tail-call caller")
+end
 local shared_player_child = Player.GetChild == ActorFrame.GetChild
 for _, class in ipairs({
 	"Actor", "ActorFrame", "Player", "ActorFrameTexture", "ActorMultiVertex", "ActorProxy",
