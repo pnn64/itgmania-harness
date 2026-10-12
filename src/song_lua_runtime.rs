@@ -474,7 +474,10 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             }
             let source = event.pointer("/caller/source").and_then(Value::as_str);
             let line = event.pointer("/caller/line").and_then(Value::as_i64);
-            if source.is_none_or(str::is_empty) || line.is_none_or(|line| line < -1) {
+            // NoteSkinManager::GetMetricA compiles ActorUtil::ParseActorCommands
+            // with its default empty chunk name. Lua's caller source is then
+            // the empty string, which is distinct from a missing observation.
+            if source.is_none() || line.is_none_or(|line| line < -1) {
                 return Err(Error::new("native method event has no valid immediate caller"));
             }
         }
@@ -1079,9 +1082,12 @@ mod tests {
         epochs["events"][2]["kind"] = serde_json::json!("query");
         epochs["events"][2]["caller"] = serde_json::json!({"source":"song:/reload.lua", "line":24});
         assert!(validate_runtime_inputs(&epochs).is_ok());
+        let mut metric_command = epochs.clone();
+        metric_command["events"][1]["caller"] = serde_json::json!({"source":"", "line":1});
+        assert!(validate_runtime_inputs(&metric_command).is_ok(), "native metric commands have an empty Lua chunk name");
         for (pointer, value) in [
             ("/events/1/caller", Value::Null),
-            ("/events/1/caller/source", serde_json::json!("")),
+            ("/events/1/caller/source", Value::Null),
             ("/events/2/caller/line", serde_json::json!(-2)),
             ("/events/2/caller/line", serde_json::json!(1.5)),
             ("/events", Value::Null),
