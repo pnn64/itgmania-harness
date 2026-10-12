@@ -328,6 +328,34 @@ end
 
 local register_tree
 
+local function declaration_children(actor_def)
+	-- XmlFileUtil::XNodeFromTableRecursive visits the contiguous array first,
+	-- then the remaining table entries. ActorFrame gives `children` precedence
+	-- over direct array entries; only the direct form filters integer names.
+	local children = rawget(actor_def, "children")
+	local array_only = type(children) ~= "table"
+	if array_only then children = actor_def end
+	local nodes = {}
+	for index, value in ipairs(children) do
+		if type(value) == "table" then nodes[#nodes + 1] = {key = index, value = value} end
+	end
+	local prefix = #nodes
+	for key, value in pairs(children) do
+		local already_added = type(key) == "number" and key % 1 == 0
+			and key >= 1 and key <= prefix
+		if type(value) == "table" and not already_added then
+			nodes[#nodes + 1] = {key = key, value = value}
+		end
+	end
+	local out = {}
+	for _, node in ipairs(nodes) do
+		if not array_only or tostring(node.key):match("^%d+$") then
+			out[#out + 1] = node.value
+		end
+	end
+	return out
+end
+
 local function register_definition(actor_def)
 	local existing = definition_by_table[actor_def]
 	if existing then return existing end
@@ -360,14 +388,7 @@ register_tree = function(actor_def, visiting)
 	definition.properties = definition_properties(actor_def)
 	definition.children = {}
 
-	local child_defs = {}
-	for index = 1, #actor_def do child_defs[#child_defs + 1] = actor_def[index] end
-	if type(actor_def.children) == "table" then
-		for index = 1, #actor_def.children do
-			child_defs[#child_defs + 1] = actor_def.children[index]
-		end
-	end
-	for index, child_def in ipairs(child_defs) do
+	for index, child_def in ipairs(declaration_children(actor_def)) do
 		local child = register_tree(child_def, visiting)
 		if child then
 			child.parent_id = definition.id
@@ -430,8 +451,7 @@ local function install_definition_hook()
 				end
 			end
 			if not is_song_definition then
-				for index = 1, #result do
-					local child = result[index]
+				for _, child in ipairs(declaration_children(result)) do
 					if type(child) == "table" and (
 						definition_by_table[child] or song_source(child._Source)
 					) then
@@ -671,22 +691,34 @@ end
 local function reachable_definitions()
 	local reachable = {}
 	local roots = {}
+	local by_id = {}
+	local live_roots = {}
+	for _, definition in ipairs(definitions) do by_id[definition.id] = definition end
 	local function visit(id)
 		if reachable[id] then return end
 		reachable[id] = true
-		local number = tonumber(id:match("(%d+)$"))
-		local definition = number and definitions[number] or nil
-		if not definition then return end
+		local definition = assert(by_id[id], "missing declared actor child: " .. id)
 		for _, child in ipairs(definition.children) do visit(child.definition_id) end
 	end
+	-- A container can have no authored callbacks even when its children are
+	-- instantiated. Preserve its declaration ancestry; do not invent a runtime
+	-- actor binding or an allocation identity for that unobserved container.
 	for _, definition in ipairs(definitions) do
-		if not definition.parent_id and #definition.runtime_actors > 0 then
-			roots[#roots + 1] = definition.id
-			visit(definition.id)
+		if #definition.runtime_actors > 0 then
+			local ancestor, visiting = definition, {}
+			while ancestor.parent_id do
+				assert(not visiting[ancestor.id], "cyclic declared actor ancestry")
+				visiting[ancestor.id] = true
+				ancestor = assert(by_id[ancestor.parent_id], "missing declared actor parent")
+			end
+			live_roots[ancestor.id] = true
 		end
 	end
 	for _, definition in ipairs(definitions) do
-		if #definition.runtime_actors > 0 then visit(definition.id) end
+		if live_roots[definition.id] then
+			roots[#roots + 1] = definition.id
+			visit(definition.id)
+		end
 	end
 	local out = {}
 	for _, definition in ipairs(definitions) do
@@ -896,6 +928,7 @@ function trace.finish(completion)
 		capabilities = {
 			native_random_seed = true,
 			native_actor_identities = true,
+			native_declaration_ancestry = true,
 			actor_definitions = true,
 			child_layer_order = true,
 			command_execution = true,

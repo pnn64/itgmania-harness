@@ -35,3 +35,15 @@ results or message delivery order. Actors without an observed startup callback
 have no identity input; their identities must never be inferred from expected
 message events. These inputs help diagnose `MessageManager`'s native pointer
 ordering without treating allocator-dependent callback permutations as passes.
+
+`native_declaration_ancestry` preserves declared ancestors of actors observed
+at runtime, including containers with no authored startup callbacks. The
+exported forest has no dangling parent or child references. Unbound ancestors
+keep empty `runtime_actors` arrays and receive no invented pointer input.
+Child declarations follow `XmlFileUtil::XNodeFromTableRecursive` traversal,
+including entries beyond nil holes. An explicit `children` table takes
+precedence over direct array children, as in `ActorFrame::LoadChildrenFromNode`.
+Declaration trees with no observed descendants remain excluded. Paths do not establish
+complete physical ownership: foreground root names are overwritten by
+`Foreground::LoadFromSong`, and reused definitions still require instance
+ownership evidence before replay mapping.

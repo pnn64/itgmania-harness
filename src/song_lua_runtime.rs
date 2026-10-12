@@ -405,6 +405,7 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
         return Err(Error::new("native Lua random inputs are missing or incomplete"));
     }
     validate_actor_identities(document)?;
+    validate_declaration_forest(document)?;
     validate_gameplay_preferences(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")
@@ -504,6 +505,57 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             }
         }
     }
+    Ok(())
+}
+
+fn validate_declaration_forest(document: &Value) -> Result<(), Error> {
+    if document.pointer("/capabilities/native_declaration_ancestry").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    let invalid = || Error::new("native actor declaration forest is incomplete or cyclic");
+    let definitions = document["actor_definitions"].as_array().ok_or_else(invalid)?;
+    let roots = document["roots"].as_array().ok_or_else(invalid)?;
+    let mut nodes = std::collections::BTreeMap::new();
+    for node in definitions {
+        let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+        if nodes.insert(id, node).is_some() { return Err(invalid()); }
+    }
+    for (id, node) in &nodes {
+        if let Some(parent) = node.get("parent_id") {
+            let owner = parent.as_str().and_then(|parent| nodes.get(parent)).ok_or_else(invalid)?;
+            if !owner["children"].as_array().is_some_and(|children| children.iter()
+                .any(|child| child["definition_id"].as_str() == Some(*id))) { return Err(invalid()); }
+        }
+        let children = node["children"].as_array().ok_or_else(invalid)?;
+        let mut layers = std::collections::HashSet::with_capacity(children.len());
+        for child in children {
+            if !child["definition_id"].as_str().is_some_and(|id| nodes.contains_key(id))
+                || !child["layer_index"].as_u64().is_some_and(|layer| layer > 0 && layers.insert(layer))
+            { return Err(invalid()); }
+        }
+    }
+    let mut root_ids = std::collections::HashSet::with_capacity(roots.len());
+    let mut stack = Vec::new();
+    for root in roots {
+        let id = root.as_str().ok_or_else(invalid)?;
+        let node = nodes.get(id).ok_or_else(invalid)?;
+        if node.get("parent_id").is_some() || !root_ids.insert(id) { return Err(invalid()); }
+        stack.push((id, false));
+    }
+    let mut active = std::collections::HashSet::new();
+    let mut reached = std::collections::HashSet::new();
+    while let Some((id, exiting)) = stack.pop() {
+        if exiting { active.remove(id); reached.insert(id); continue; }
+        if active.contains(id) { return Err(invalid()); }
+        if reached.contains(id) { continue; }
+        active.insert(id);
+        stack.push((id, true));
+        // Every referenced ID and children array was validated above.
+        for child in nodes[id]["children"].as_array().expect("validated children").iter().rev() {
+            stack.push((child["definition_id"].as_str().expect("validated child ID"), false));
+        }
+    }
+    if reached.len() != nodes.len() { return Err(invalid()); }
     Ok(())
 }
 
@@ -981,6 +1033,42 @@ mod tests {
             invalid["events"][1]["detail"]["results"] = result;
             assert!(validate_runtime_inputs(&invalid).is_err(), "accepted missing modifier returns");
         }
+    }
+
+    #[test]
+    fn declaration_forest_requires_closed_ancestry() {
+        let document = serde_json::json!({
+            "capabilities": {"native_declaration_ancestry": true}, "roots": ["root"],
+            "actor_definitions": [
+                {"id":"root", "children":[{"layer_index":1,"definition_id":"child"}],"runtime_actors":[]},
+                {"id":"child", "parent_id":"root", "children":[],"runtime_actors":["child"]},
+            ],
+        });
+        assert!(validate_declaration_forest(&document).is_ok());
+        assert!(validate_declaration_forest(&serde_json::json!({})).is_ok());
+        for (pointer, value) in [
+            ("/roots", Value::Null), ("/roots", serde_json::json!([])),
+            ("/roots/0", serde_json::json!("absent")),
+            ("/actor_definitions/1/parent_id", serde_json::json!("absent")),
+            ("/actor_definitions/1/parent_id", serde_json::json!("child")),
+            ("/actor_definitions/1/id", serde_json::json!("root")),
+            ("/actor_definitions/0/children/0/definition_id", serde_json::json!("absent")),
+            ("/actor_definitions/0/children/0/layer_index", serde_json::json!(0)),
+            ("/actor_definitions/1/children", serde_json::json!([{"layer_index":1,"definition_id":"root"}])),
+        ] {
+            let mut invalid = document.clone();
+            *invalid.pointer_mut(pointer).expect("declaration field") = value;
+            assert!(validate_declaration_forest(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let mut unused = document.clone();
+        unused["actor_definitions"].as_array_mut().expect("definition array")
+            .push(serde_json::json!({"id":"unused","children":[]}));
+        assert!(validate_declaration_forest(&unused).is_err());
+        let mut shared = document.clone();
+        shared["roots"].as_array_mut().expect("roots").push(serde_json::json!("other"));
+        shared["actor_definitions"].as_array_mut().expect("definition array")
+            .push(serde_json::json!({"id":"other","children":[{"layer_index":1,"definition_id":"child"}]}));
+        assert!(validate_declaration_forest(&shared).is_ok());
     }
 
     #[test]
