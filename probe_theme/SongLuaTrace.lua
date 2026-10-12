@@ -341,8 +341,9 @@ local function declaration_children(actor_def)
 	end
 	local prefix = #nodes
 	for key, value in pairs(children) do
-		local already_added = type(key) == "number" and key % 1 == 0
-			and key >= 1 and key <= prefix
+		-- lua_isnumber also accepts numeric strings in XmlFileUtil's skip range.
+		local index = tonumber(key)
+		local already_added = index and index % 1 == 0 and index >= 1 and index <= prefix
 		if type(value) == "table" and not already_added then
 			nodes[#nodes + 1] = {key = key, value = value}
 		end
