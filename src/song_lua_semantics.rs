@@ -580,10 +580,9 @@ const fn is_false(value: &bool) -> bool {
 }
 
 fn read_array<T: for<'de> Deserialize<'de>>(document: &Value, key: &str) -> Result<Vec<T>, Error> {
-    serde_json::from_value(
+    Vec::<T>::deserialize(
         document
             .get(key)
-            .cloned()
             .ok_or_else(|| Error(format!("semantic trace has no `{key}` array")))?,
     )
     .map_err(|source| Error(format!("invalid semantic trace `{key}`: {source}")))

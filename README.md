@@ -694,6 +694,15 @@ verify this corpus.
 content-addressed `.tar.zst`. It reads the semantic corpus generated above and
 does not launch ITGmania:
 
+Use `cargo build --release` and `target/release/itgmania-harness-rs` for large
+captures and archives. Native gameplay updates remain ordered because Lua and
+engine state carry across frames. Archive compression uses up to four CPU
+workers while keeping tar members in their original order. Enabling parallel
+compression can change an archive's compressed content address; member bytes
+and their manifest hashes are unchanged. Semantic analysis reads the event
+array without making an intermediate copy, and native capture stops the engine
+as soon as its complete trace is published, before analyzing that trace.
+
 ```powershell
 .\target\debug\itgmania-harness-rs.exe song-lua-archive `
   ..\lua-songs `

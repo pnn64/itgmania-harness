@@ -109,6 +109,10 @@ fn capture_in(
     let started = Instant::now();
     let result = (|| loop {
         if result_path.is_file() {
+            // Close atomically publishes the complete trace. Stop the engine before
+            // parsing it so evaluation cannot compete with analysis for CPU/RAM.
+            let _ = child.kill();
+            let _ = child.wait();
             let bytes = fs::read(&result_path).map_err(|source| {
                 Error::new(format!(
                     "could not read runtime result {}: {source}",

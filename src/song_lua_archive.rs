@@ -1019,6 +1019,12 @@ fn write_archive(
         .map_err(|source| Error::io("create compressed archive", path, source))?;
     let mut encoder = zstd::stream::write::Encoder::new(output, 12)
         .map_err(|source| Error::io("start zstd archive", path, source))?;
+    // Compression jobs share one ordered tar stream; native frames stay serial.
+    // Bound memory/CPU use when multiple captures are running on the same host.
+    let workers = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+    encoder
+        .multithread(workers as u32)
+        .map_err(|source| Error::io("configure zstd workers", path, source))?;
     encoder
         .include_checksum(true)
         .map_err(|source| Error::io("configure zstd archive", path, source))?;
