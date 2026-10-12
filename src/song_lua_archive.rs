@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const ARCHIVE_SCHEMA_VERSION: u32 = 1;
@@ -151,7 +151,7 @@ struct ArchiveIndexEntry {
     compressed_bytes: u64,
 }
 
-pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path) -> Result<Report, Error> {
+pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompressed: bool) -> Result<Report, Error> {
     let songs_root = canonical_dir("open song corpus", songs_root)?;
     let trace_root = canonical_dir("open semantic traces", trace_root)?;
     fs::create_dir_all(output_dir)
@@ -186,9 +186,9 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path) -> Resu
             .map(|bytes| bytes.len() as u64)
             .sum::<u64>();
         let temp_path = output_dir.join(format!(".song-lua-archive-{}.tmp", std::process::id()));
-        write_archive(&temp_path, members, &manifest)?;
+        write_archive(&temp_path, members, &manifest, uncompressed)?;
         let digest = hash_file(&temp_path)?;
-        let filename = format!("{digest}.tar.zst");
+        let filename = format!("{digest}.{}", if uncompressed { "tar" } else { "tar.zst" });
         let archive_path = output_dir.join(&filename);
         let compressed_bytes = fs::metadata(&temp_path)
             .map_err(|source| Error::io("stat song archive", &temp_path, source))?
@@ -219,7 +219,7 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path) -> Resu
         &index_path,
         &ArchiveIndex {
             archive_schema_version: ARCHIVE_SCHEMA_VERSION,
-            hash: "sha256-compressed-archive",
+            hash: if uncompressed { "sha256-uncompressed-archive" } else { "sha256-compressed-archive" },
             archives: index_entries,
         },
     )
@@ -1014,9 +1014,20 @@ fn write_archive(
     path: &Path,
     members: BTreeMap<String, Vec<u8>>,
     manifest: &ArchiveManifest,
+    uncompressed: bool,
 ) -> Result<(), Error> {
     let output = File::create(path)
-        .map_err(|source| Error::io("create compressed archive", path, source))?;
+        .map_err(|source| Error::io("create archive", path, source))?;
+    if uncompressed {
+        return write_tar(output, members, manifest);
+    }
+    let mut encoder = archive_encoder(output, path)?;
+    write_tar(&mut encoder, members, manifest)?;
+    encoder.finish().map_err(|source| Error::io("finish zstd archive", path, source))?;
+    Ok(())
+}
+
+fn archive_encoder(output: File, path: &Path) -> Result<zstd::stream::write::Encoder<'static, File>, Error> {
     let mut encoder = zstd::stream::write::Encoder::new(output, 12)
         .map_err(|source| Error::io("start zstd archive", path, source))?;
     // Compression jobs share one ordered tar stream; native frames stay serial.
@@ -1028,26 +1039,23 @@ fn write_archive(
     encoder
         .include_checksum(true)
         .map_err(|source| Error::io("configure zstd archive", path, source))?;
-    {
-        let mut archive = tar::Builder::new(&mut encoder);
-        let manifest_bytes = serde_json::to_vec_pretty(manifest)
-            .map_err(|source| Error(format!("could not serialize archive manifest: {source}")))?;
-        append_member(&mut archive, "manifest.json", &manifest_bytes)?;
-        for (member, bytes) in members {
-            append_member(&mut archive, &member, &bytes)?;
-        }
-        archive
-            .finish()
-            .map_err(|source| Error::io("finish tar archive", path, source))?;
+    Ok(encoder)
+}
+
+fn write_tar(output: impl Write, members: BTreeMap<String, Vec<u8>>, manifest: &ArchiveManifest) -> Result<(), Error> {
+    let mut archive = tar::Builder::new(output);
+    let manifest_bytes = serde_json::to_vec_pretty(manifest)
+        .map_err(|source| Error(format!("could not serialize archive manifest: {source}")))?;
+    append_member(&mut archive, "manifest.json", &manifest_bytes)?;
+    for (member, bytes) in members {
+        append_member(&mut archive, &member, &bytes)?;
     }
-    encoder
-        .finish()
-        .map_err(|source| Error::io("finish zstd archive", path, source))?;
+    archive.finish().map_err(|source| Error(format!("could not finish tar archive: {source}")))?;
     Ok(())
 }
 
-fn append_member(
-    archive: &mut tar::Builder<&mut zstd::stream::write::Encoder<'_, File>>,
+fn append_member<W: Write>(
+    archive: &mut tar::Builder<W>,
     path: &str,
     bytes: &[u8],
 ) -> Result<(), Error> {
@@ -1061,6 +1069,50 @@ fn append_member(
     archive
         .append_data(&mut header, path, bytes)
         .map_err(|source| Error(format!("could not append archive member {path}: {source}")))
+}
+
+/// Compress the exact candidate accepted by a full DeadSync replay, without
+/// rebuilding its manifest or reading the native JSON again.
+pub fn pack(candidate: &Path, report: &Path, output_dir: &Path) -> Result<PathBuf, Error> {
+    let report: Value = read_json(report)?;
+    let digest = hash_file(candidate)?;
+    if report["archive_accepted"] != true || report["whole_song_parity_proven"] != true
+        || report["fixture_sha256"] != digest
+        || candidate.file_name().and_then(|name| name.to_str()) != Some(format!("{digest}.tar").as_str())
+        || ["mismatches", "errors", "pending_coverage"].iter().any(|key|
+            report[*key].as_array().is_none_or(|items| !items.is_empty()))
+    {
+        return Err(Error("packing requires a complete passing report for this exact candidate tar".into()));
+    }
+    fs::create_dir_all(output_dir).map_err(|source| Error::io("create archive directory", output_dir, source))?;
+    let temporary = output_dir.join(format!(".song-lua-pack-{}-{digest}.tmp", std::process::id()));
+    let output = File::options().write(true).create_new(true).open(&temporary)
+        .map_err(|source| Error::io("create packed archive", &temporary, source))?;
+    let result = (|| {
+        let mut input = File::open(candidate).map_err(|source| Error::io("open accepted candidate", candidate, source))?;
+        let mut encoder = archive_encoder(output, &temporary)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let count = input.read(&mut buffer).map_err(|source| Error::io("read accepted candidate", candidate, source))?;
+            if count == 0 { break; }
+            hasher.update(&buffer[..count]);
+            encoder.write_all(&buffer[..count]).map_err(|source| Error::io("compress accepted candidate", candidate, source))?;
+        }
+        encoder.finish().map_err(|source| Error::io("finish packed archive", &temporary, source))?;
+        if encode_hash(hasher.finalize()) != digest {
+            return Err(Error("accepted candidate changed during compression".into()));
+        }
+        let destination = output_dir.join(format!("{}.tar.zst", hash_file(&temporary)?));
+        if destination.exists() {
+            fs::remove_file(&temporary).map_err(|source| Error::io("remove duplicate archive", &temporary, source))?;
+        } else {
+            fs::rename(&temporary, &destination).map_err(|source| Error::io("publish packed archive", &destination, source))?;
+        }
+        Ok(destination)
+    })();
+    if result.is_err() { let _ = fs::remove_file(&temporary); }
+    result
 }
 
 fn frame_grid(reference: &str) -> Option<[u32; 2]> {
@@ -1238,6 +1290,40 @@ impl fmt::Display for Error {
 mod tests {
     use super::*;
 
+    #[test]
+    fn packing_requires_a_passing_report_for_exact_tar_bytes() {
+        let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/accepted-candidate-pack");
+        fs::create_dir_all(&output).expect("pack output directory");
+        let mut tar = tar::Builder::new(Vec::new());
+        append_member(&mut tar, "control.txt", b"archive-format control").unwrap();
+        let bytes = tar.into_inner().unwrap();
+        let digest = hash_bytes(&bytes);
+        let candidate = output.join(format!("{digest}.tar"));
+        fs::write(&candidate, &bytes).unwrap();
+        let report_path = output.join("report.json");
+        // Format/gating control only: this metadata does not certify gameplay.
+        let accepted = serde_json::json!({"archive_accepted":true, "whole_song_parity_proven":true,
+            "fixture_sha256":digest, "mismatches":[], "errors":[], "pending_coverage":[]});
+        for key in ["archive_accepted", "whole_song_parity_proven", "fixture_sha256",
+            "mismatches", "errors", "pending_coverage"] {
+            let mut invalid = accepted.clone();
+            invalid[key] = Value::Null;
+            fs::write(&report_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(pack(&candidate, &report_path, &output).is_err(), "accepted missing {key}");
+        }
+        for key in ["mismatches", "errors", "pending_coverage"] {
+            let mut invalid = accepted.clone();
+            invalid[key] = serde_json::json!(["unresolved"]);
+            fs::write(&report_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(pack(&candidate, &report_path, &output).is_err());
+        }
+        fs::write(&report_path, serde_json::to_vec(&accepted).unwrap()).unwrap();
+        let packed = pack(&candidate, &report_path, &output).expect("accepted format control");
+        assert_eq!(zstd::decode_all(File::open(packed).unwrap()).unwrap(), bytes);
+        fs::write(&candidate, b"changed after validation").unwrap();
+        assert!(pack(&candidate, &report_path, &output).is_err());
+    }
+
     #[cfg(itgmania_oracle)]
     #[test]
     fn archive_runtime_sprite() {
@@ -1321,6 +1407,14 @@ mod tests {
             texture.source_sha256.as_deref(),
             Some(hash_bytes(&image).as_str())
         );
+
+        let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/uncompressed-archive");
+        fs::create_dir_all(&output).expect("archive output directory");
+        let plain = output.join("candidate.tar");
+        let compressed = output.join("candidate.tar.zst");
+        write_archive(&plain, members.clone(), &manifest, true).expect("plain candidate");
+        write_archive(&compressed, members, &manifest, false).expect("compressed candidate");
+        assert_eq!(fs::read(&plain).unwrap(), zstd::decode_all(File::open(&compressed).unwrap()).unwrap());
 
         // Synthetic capture metadata tests archive handling, not gameplay simulation.
         let mut native = trace.clone();

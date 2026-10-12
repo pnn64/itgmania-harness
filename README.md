@@ -703,6 +703,23 @@ and their manifest hashes are unchanged. Semantic analysis reads the event
 array without making an intermediate copy, and native capture stops the engine
 as soon as its complete trace is published, before analyzing that trace.
 
+During parity development, pass `--uncompressed` to write content-addressed
+`.tar` candidates outside the published fixture folder. DeadSync accepts these
+with the same manifest, member hashes, and full replay checks:
+
+```powershell
+itgmania-harness-rs song-lua-archive ..\rework\lua-songs --traces traces --out target\candidates --uncompressed
+cargo test --test full_song_lua -- --archive ..\itgmania-harness\target\candidates\<sha256>.tar --report save\candidate-report.json
+itgmania-harness-rs song-lua-pack target\candidates\<sha256>.tar --report ..\deadsync\save\candidate-report.json --out target\accepted
+```
+
+Run the middle command in the DeadSync repository. `song-lua-pack` requires a
+complete passing report bound to that exact candidate's SHA-256. It streams the
+tested tar into compression without parsing the trace or rebuilding members.
+Entry diagnostics, remaining coverage gaps, and changed candidates cannot be
+packed. Add the resulting compressed archive to the fixture index after this
+step; candidate tars are temporary local files and must not be committed.
+
 ```powershell
 .\target\debug\itgmania-harness-rs.exe song-lua-archive `
   ..\lua-songs `

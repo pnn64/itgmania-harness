@@ -81,6 +81,7 @@ fn run(args: impl Iterator<Item = std::ffi::OsString>) -> Result<(), CliError> {
         Some("song-lua") => emit_song_lua(parse_song_lua_args(args)?),
         Some("song-lua-baseline") => run_song_lua_baseline(parse_song_lua_baseline_args(args)?),
         Some("song-lua-archive") => run_song_lua_archive(parse_song_lua_archive_args(args)?),
+        Some("song-lua-pack") => run_song_lua_pack(parse_song_lua_pack_args(args)?),
         Some("song-lua-semantic-baseline") => {
             run_song_lua_semantic_baseline(parse_song_lua_semantic_baseline_args(args)?)
         }
@@ -564,6 +565,7 @@ struct SongLuaArchiveArgs {
     songs_root: PathBuf,
     trace_root: PathBuf,
     output_dir: PathBuf,
+    uncompressed: bool,
 }
 
 fn parse_song_lua_archive_args(
@@ -575,8 +577,10 @@ fn parse_song_lua_archive_args(
         .ok_or_else(|| CliError::Usage("song-lua-archive requires a songs directory".into()))?;
     let mut trace_root = None;
     let mut output_dir = None;
+    let mut uncompressed = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--uncompressed") if !uncompressed => uncompressed = true,
             Some("--traces") => set_once(
                 &mut trace_root,
                 PathBuf::from(next_utf8(&mut args, "--traces")?),
@@ -605,19 +609,54 @@ fn parse_song_lua_archive_args(
             .ok_or_else(|| CliError::Usage("song-lua-archive requires --traces".into()))?,
         output_dir: output_dir
             .ok_or_else(|| CliError::Usage("song-lua-archive requires --out".into()))?,
+        uncompressed,
     })
 }
 
 fn run_song_lua_archive(args: SongLuaArchiveArgs) -> Result<(), CliError> {
-    let report = song_lua_archive::generate(&args.songs_root, &args.trace_root, &args.output_dir)
+    let report = song_lua_archive::generate(&args.songs_root, &args.trace_root, &args.output_dir, args.uncompressed)
         .map_err(CliError::SongLuaArchive)?;
     println!(
-        "wrote {} content-addressed song archives ({} source bytes to {} compressed bytes); index: {}",
+        "wrote {} content-addressed song fixtures ({} source bytes to {} stored bytes); index: {}",
         report.archives,
         report.source_bytes,
         report.archive_bytes,
         report.index.display()
     );
+    Ok(())
+}
+
+struct SongLuaPackArgs {
+    candidate: PathBuf,
+    report: PathBuf,
+    output_dir: PathBuf,
+}
+
+fn parse_song_lua_pack_args(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<SongLuaPackArgs, CliError> {
+    let candidate = args.next().map(PathBuf::from)
+        .ok_or_else(|| CliError::Usage("song-lua-pack requires a candidate tar".into()))?;
+    let mut report = None;
+    let mut output_dir = None;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--report") => set_once(&mut report, PathBuf::from(next_utf8(&mut args, "--report")?), "--report")?,
+            Some("--out") => set_once(&mut output_dir, PathBuf::from(next_utf8(&mut args, "--out")?), "--out")?,
+            _ => return Err(CliError::Usage(format!("unknown song-lua-pack option `{}`", arg.to_string_lossy()))),
+        }
+    }
+    Ok(SongLuaPackArgs {
+        candidate,
+        report: report.ok_or_else(|| CliError::Usage("song-lua-pack requires --report".into()))?,
+        output_dir: output_dir.ok_or_else(|| CliError::Usage("song-lua-pack requires --out".into()))?,
+    })
+}
+
+fn run_song_lua_pack(args: SongLuaPackArgs) -> Result<(), CliError> {
+    let archive = song_lua_archive::pack(&args.candidate, &args.report, &args.output_dir)
+        .map_err(CliError::SongLuaArchive)?;
+    println!("wrote verified song archive: {}", archive.display());
     Ok(())
 }
 
@@ -1248,7 +1287,8 @@ fn print_help() {
              [--difficulty Challenge] [--steps-type SOURCE]\n\
              [--beat-step BEATS] [--max-events COUNT] [--random-seed 1]\n\
              [--until-beat MINIMUM] [--simfile RELATIVE_PATH ...]\n\
-           itgmania-harness-rs song-lua-archive SONGS_DIR --traces DIR --out DIR\n\
+           itgmania-harness-rs song-lua-archive SONGS_DIR --traces DIR --out DIR [--uncompressed]\n\
+           itgmania-harness-rs song-lua-pack CANDIDATE.tar --report REPORT.json --out DIR\n\
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
@@ -1368,6 +1408,16 @@ impl fmt::Display for CliError {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    #[test]
+    fn uncompressed_candidates_and_verified_pack_have_explicit_arguments() {
+        let args = ["songs", "--traces", "traces", "--out", "candidates", "--uncompressed"].map(OsString::from);
+        assert!(parse_song_lua_archive_args(args.into_iter()).unwrap().uncompressed);
+        let args = ["candidate.tar", "--report", "report.json", "--out", "accepted"].map(OsString::from);
+        let parsed = parse_song_lua_pack_args(args.into_iter()).unwrap();
+        assert_eq!(parsed.report, PathBuf::from("report.json"));
+        assert!(parse_song_lua_pack_args([OsString::from("candidate.tar")].into_iter()).is_err());
+    }
 
     #[test]
     fn explicit_root_wins_over_default() {
