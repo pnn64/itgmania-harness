@@ -404,6 +404,7 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     {
         return Err(Error::new("native Lua random inputs are missing or incomplete"));
     }
+    validate_actor_identities(document)?;
     validate_gameplay_preferences(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")
@@ -501,6 +502,39 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             if class.as_str().is_none_or(str::is_empty) || classes[..index].contains(class) {
                 return Err(Error::new("native query classes contain an invalid or duplicate class"));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_actor_identities(document: &Value) -> Result<(), Error> {
+    if document.pointer("/capabilities/native_actor_identities").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    let inputs = document["actor_identity_inputs"].as_array()
+        .ok_or_else(|| Error::new("native actor identity inputs are missing"))?;
+    let events = document["events"].as_array()
+        .ok_or_else(|| Error::new("native actor identity inputs have no event anchors"))?;
+    let mut actors = std::collections::HashSet::with_capacity(inputs.len());
+    for input in inputs {
+        let actor = input["actor"].as_str().filter(|id| !id.is_empty());
+        let pointer = input["pointer_hex"].as_str().filter(|value| {
+            !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && u64::from_str_radix(value, 16).is_ok_and(|pointer| pointer != 0)
+        });
+        let command = input["command"].as_str();
+        let anchor = input["before_seq"].as_u64().and_then(|seq| seq.checked_sub(1))
+            .and_then(|index| usize::try_from(index).ok()).and_then(|index| events.get(index));
+        if actor.is_none() || pointer.is_none() || !actors.insert(actor)
+            || !matches!(command, Some("InitCommand" | "OnCommand"))
+            || input["scene"].as_u64().is_none()
+            || input["definition_id"].as_str().is_none_or(str::is_empty)
+            || input["provenance"] != "native-Luna-tostring-before-authored-command"
+            || anchor.is_none_or(|event| event["seq"] != input["before_seq"] || event["operation"] != "command.begin"
+                || event["actor"] != input["actor"] || event["command"] != input["command"]
+                || event["definition_id"] != input["definition_id"] || event["scene"] != input["scene"])
+        {
+            return Err(Error::new("invalid native actor identity input or startup anchor"));
         }
     }
     Ok(())
@@ -947,6 +981,45 @@ mod tests {
             invalid["events"][1]["detail"]["results"] = result;
             assert!(validate_runtime_inputs(&invalid).is_err(), "accepted missing modifier returns");
         }
+    }
+
+    #[test]
+    fn actor_identities_require_startup_anchors() {
+        let document = serde_json::json!({
+            "capabilities": {"native_actor_identities": true},
+            "events": [{"seq": 1, "scene": 0, "operation": "command.begin", "actor": "def-0001",
+                "definition_id": "def-0001", "command": "InitCommand"}],
+            "actor_identity_inputs": [{"actor": "def-0001", "definition_id": "def-0001",
+                "pointer_hex": "abcdef123456", "scene": 0, "before_seq": 1, "command": "InitCommand",
+                "provenance": "native-Luna-tostring-before-authored-command"}],
+        });
+        assert!(validate_actor_identities(&document).is_ok());
+        assert!(validate_actor_identities(&serde_json::json!({})).is_ok());
+        for (pointer, value) in [
+            ("/actor_identity_inputs", Value::Null),
+            ("/actor_identity_inputs/0/pointer_hex", serde_json::json!("0")),
+            ("/actor_identity_inputs/0/pointer_hex", serde_json::json!("0xabcdef")),
+            ("/actor_identity_inputs/0/pointer_hex", serde_json::json!("10000000000000000")),
+            ("/actor_identity_inputs/0/before_seq", serde_json::json!(0)),
+            ("/actor_identity_inputs/0/scene", serde_json::json!(1)),
+            ("/actor_identity_inputs/0/definition_id", serde_json::json!("def-0002")),
+            ("/actor_identity_inputs/0/provenance", serde_json::json!("observed-callback-order")),
+            ("/events/0/actor", serde_json::json!("def-0002")),
+            ("/events/0/seq", serde_json::json!(2)),
+            ("/events/0/operation", serde_json::json!("command.end")),
+        ] {
+            let mut invalid = document.clone();
+            *invalid.pointer_mut(pointer).expect("native input field") = value;
+            assert!(validate_actor_identities(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let mut message = document.clone();
+        message["actor_identity_inputs"][0]["command"] = serde_json::json!("GoMessageCommand");
+        message["events"][0]["command"] = serde_json::json!("GoMessageCommand");
+        assert!(validate_actor_identities(&message).is_err());
+        let mut duplicate = document.clone();
+        duplicate["actor_identity_inputs"].as_array_mut().expect("input array")
+            .push(document["actor_identity_inputs"][0].clone());
+        assert!(validate_actor_identities(&duplicate).is_err());
     }
 
     #[test]

@@ -14,6 +14,8 @@ local events = {}
 local update_frames = {}
 local random_reseeds = {}
 local dropped_random_reseeds = 0
+local actor_identity_inputs = {}
+local identity_observed = setmetatable({}, {__mode = "k"})
 local active_context = nil
 local next_sequence = 0
 local dropped_events = 0
@@ -69,6 +71,26 @@ local function actor_name(actor)
 	if type(get_name) ~= "function" then return "" end
 	local ok, name = pcall(get_name, actor)
 	return ok and tostring(name or "") or ""
+end
+
+local function capture_actor_identity(actor, definition, actor_id, command)
+	if identity_observed[actor] or (command ~= "InitCommand" and command ~= "OnCommand") then return end
+	local metatable = raw_metatable(actor)
+	local method = type(metatable) == "table" and rawget(metatable, "__tostring")
+	-- Luna<T>::tostring_T prints the native object pointer. Calling that saved
+	-- C binding observes allocation identity before authored startup code; no
+	-- extra actor command, message delivery, or callback result is introduced.
+	if type(method) ~= "function" or debug.getinfo(method, "S").what ~= "C" then return end
+	local pointer = method(actor):match("%(([0-9a-fA-FxX]+)%)$")
+	if not pointer then return end
+	pointer = pointer:lower():gsub("^0x", ""):gsub("^0+", "")
+	if pointer == "" then return end
+	identity_observed[actor] = true
+	actor_identity_inputs[#actor_identity_inputs + 1] = {
+		actor = actor_id, definition_id = definition.id, pointer_hex = pointer,
+		scene = scene_count, before_seq = next_sequence + 1, command = command,
+		provenance = "native-Luna-tostring-before-authored-command",
+	}
 end
 
 local function bind_actor(actor, definition)
@@ -270,6 +292,7 @@ local function command_wrapper(definition, name, original)
 	}
 	local wrapped = function(actor, ...)
 		local actor_id = bind_actor(actor, definition)
+		capture_actor_identity(actor, definition, actor_id, name)
 		local previous = active_context
 		active_context = context
 		emit("command", actor_id, "command.begin", {}, {name = name})
@@ -864,6 +887,7 @@ function trace.finish(completion)
 		random_seed = cfg.random_seed,
 		random_reseeds = random_reseeds,
 		dropped_random_reseeds = dropped_random_reseeds,
+		actor_identity_inputs = actor_identity_inputs,
 		completion = completion,
 		input = {autoplay = cfg.autoplay, injected_inputs = false,
 			requested_difficulty = cfg.difficulty, style = cfg.style,
@@ -871,6 +895,7 @@ function trace.finish(completion)
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
 			native_random_seed = true,
+			native_actor_identities = true,
 			actor_definitions = true,
 			child_layer_order = true,
 			command_execution = true,

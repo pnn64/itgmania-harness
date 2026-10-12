@@ -25,3 +25,13 @@ prove parity. Modifier return tuples and canonical player-number paths are
 recorded separately from this capability. The returned player-state object's
 original `GetPlayerNumber` binding supplies its identity; the caller's argument
 representation does not define a different player.
+
+The recorder also stores `actor_identity_inputs` before existing authored
+`InitCommand` or `OnCommand` callbacks. It calls the native metatable's C
+`Luna<T>::tostring_T` binding to observe the object pointer as hexadecimal text,
+avoiding Lua number precision loss. No command is added to the actor. Each
+input is anchored to the following startup event and contains no callback
+results or message delivery order. Actors without an observed startup callback
+have no identity input; their identities must never be inferred from expected
+message events. These inputs help diagnose `MessageManager`'s native pointer
+ordering without treating allocator-dependent callback permutations as passes.
