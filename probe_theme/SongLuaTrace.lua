@@ -17,6 +17,7 @@ local dropped_events = 0
 local finished = false
 local scene_count = 0
 local original_methods = {}
+local hooked_classes = {}
 local raw_metatable = debug.getmetatable
 
 local function pack(...)
@@ -141,6 +142,8 @@ local function native_object(value)
 			description = "GetDescription", meter = "GetMeter"}) do
 			out[key] = original_methods.Steps[method](value)
 		end
+	elseif class == "Style" then
+		out.name = original_methods.Style.GetName(value)
 	end
 	return out
 end
@@ -418,7 +421,8 @@ local function query_method(class, name, arg_count)
 	if name:match("^[Gg]et") ~= nil
 		or name:match("^[Ii]s") ~= nil
 		or name:match("^[Hh]as") ~= nil
-		or name:match("^[Cc]an") ~= nil then
+		or name:match("^[Cc]an") ~= nil
+		or name:match("^[Ss]upports") ~= nil then
 		return true
 	end
 	return arg_count == 1 and (class == "PlayerOptions" or class == "SongOptions")
@@ -499,6 +503,7 @@ end
 local function install_class_hook(class)
 	local methods = rawget(_G, class)
 	if type(methods) ~= "table" then return end
+	hooked_classes[#hooked_classes + 1] = class
 	original_methods[class] = original_methods[class] or {}
 	local names = {}
 	for name, method in pairs(methods) do
@@ -773,6 +778,7 @@ function trace.finish(completion)
 			native_event_scenes = true,
 			native_call_sources = true,
 			native_constructor_queries = true,
+			native_query_classes = hooked_classes,
 			native_machine_preferences = input_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
 		},
@@ -795,7 +801,7 @@ for _, class in ipairs({
 	"ActorScroller", "ActorSound", "BitmapText", "Model", "Sprite", "Screen",
 	"ScreenWithMenuElements", "ScreenGameplay", "StatsManager", "StageStats", "PlayerStageStats",
 	"GameState", "MessageManager", "PlayerOptions", "PlayerState", "ScreenManager",
-	"SongOptions", "Song", "Steps",
+	"SongOptions", "Song", "Steps", "RageDisplay", "PrefsManager", "Style",
 }) do
 	install_class_hook(class)
 end

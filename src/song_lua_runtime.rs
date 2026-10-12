@@ -463,6 +463,15 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
             }
         }
     }
+    if let Some(classes) = document.pointer("/capabilities/native_query_classes") {
+        let classes = classes.as_array().filter(|classes| !classes.is_empty())
+            .ok_or_else(|| Error::new("native query classes must be a nonempty array"))?;
+        for (index, class) in classes.iter().enumerate() {
+            if class.as_str().is_none_or(str::is_empty) || classes[..index].contains(class) {
+                return Err(Error::new("native query classes contain an invalid or duplicate class"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -832,6 +841,14 @@ mod tests {
             let mut invalid = epochs.clone();
             *invalid.pointer_mut(pointer).expect("native query field") = value;
             assert!(validate_runtime_inputs(&invalid).is_err(), "accepted incomplete query at {pointer}");
+        }
+        epochs["capabilities"]["native_query_classes"] = serde_json::json!(["Song", "Steps", "PrefsManager", "RageDisplay", "Style"]);
+        assert!(validate_runtime_inputs(&epochs).is_ok());
+        for value in [serde_json::json!([]), serde_json::json!(["Song", "Song"]),
+            serde_json::json!([""]), serde_json::json!([false]), serde_json::json!({})] {
+            let mut invalid = epochs.clone();
+            invalid["capabilities"]["native_query_classes"] = value;
+            assert!(validate_runtime_inputs(&invalid).is_err(), "accepted invalid query class inventory");
         }
     }
 
