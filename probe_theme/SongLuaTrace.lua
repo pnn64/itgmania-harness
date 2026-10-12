@@ -471,7 +471,41 @@ register_tree = function(actor_def, visiting)
 	return definition
 end
 
+local function is_song_definition(actor_def)
+	if song_source(actor_def._Source) then return true end
+	for name, value in pairs(actor_def) do
+		if type(name) == "string" and name:match("Command$") and type(value) == "function" then
+			local prior = wrapped_commands[value]
+			if song_source(function_source(prior and prior.original or value).source) then return true end
+		end
+	end
+	for _, child in ipairs(declaration_children(actor_def)) do
+		if definition_by_table[child] or song_source(child._Source) then return true end
+	end
+	return false
+end
+
 local function install_definition_hook()
+	local definition_metatable = DefMetatable
+	local original_concat = definition_metatable and definition_metatable.__concat
+	if type(original_concat) ~= "function" then error("ActorDef concatenation hook is unavailable") end
+	local function unwrapped_definition(value)
+		if type(value) ~= "table" then return value end
+		local copy = {}
+		for name, field in pairs(value) do
+			local prior = type(name) == "string" and name:match("Command$") and wrapped_commands[field]
+			copy[name] = prior and prior.original or field
+		end
+		return setmetatable(copy, getmetatable(value))
+	end
+	definition_metatable.__concat = function(left, right)
+		-- ActorDef's MergeTables creates another declaration without calling a
+		-- Def constructor. Observe that result before XNode conversion and actor
+		-- creation. Unwrap prior observers so merged commands still run once.
+		local result = original_concat(unwrapped_definition(left), unwrapped_definition(right))
+		if is_song_definition(result) then register_tree(result) end
+		return result
+	end
 	local metatable = getmetatable(Def)
 	local original_index = metatable and metatable.__index
 	if type(original_index) ~= "function" then error("Def constructor hook is unavailable") end
@@ -484,29 +518,9 @@ local function install_definition_hook()
 			actor_def._Level = (previous_level or 1) + 1
 			local result = constructor(actor_def)
 			result._Level = previous_level
-			local is_song_definition = song_source(result._Source)
-			-- A returned Def constructor can lose its caller to Lua's tail-call
-			-- optimization. Command functions retain their native source metadata.
-			if not is_song_definition then
-				for name, value in pairs(result) do
-					if type(name) == "string" and name:match("Command$")
-						and type(value) == "function" and song_source(function_source(value).source) then
-						is_song_definition = true
-						break
-					end
-				end
-			end
-			if not is_song_definition then
-				for _, child in ipairs(declaration_children(result)) do
-					if type(child) == "table" and (
-						definition_by_table[child] or song_source(child._Source)
-					) then
-						is_song_definition = true
-						break
-					end
-				end
-			end
-			if is_song_definition then register_tree(result) end
+			-- Tail calls can hide a constructor's caller; commands and children
+			-- retain their native source metadata.
+			if is_song_definition(result) then register_tree(result) end
 			return result
 		end
 	end

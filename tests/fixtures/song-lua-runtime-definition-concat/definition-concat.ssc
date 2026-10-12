@@ -1,0 +1,16 @@
+#VERSION:0.83;
+#TITLE:Native actor definition composition control;
+#MUSIC:music.wav;
+#OFFSET:0;
+#BPMS:0=120;
+#FGCHANGES:0=lua/default.lua=1=0=0=1;
+#NOTEDATA:;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Challenge;
+#METER:1;
+#NOTES:
+1000
+0100
+0010
+0001
+;

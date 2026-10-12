@@ -132,6 +132,24 @@ def check_percent(document):
     assert document["completion"]["stage_committed"], document["completion"]
 
 
+def check_definition_concat(document):
+    events = [event for event in document['events'] if event['operation'] == 'MessageManager.Broadcast'
+              and event['args'][0].startswith('HarnessConcat')]
+    assert [event['args'][0] for event in events] == [
+        'HarnessConcatBaseInit', 'HarnessConcatAddedInit', 'HarnessConcatOn'], events
+    assert events[0]['args'][1] == {'name': 'Composed', 'x': 11}, events
+    assert events[1]['args'][1] == {'name': 'Composed', 'x': 11, 'y': 22}, events
+    assert events[2]['args'][1] == {'name': 'Composed', 'x': 11, 'y': 22}, events
+    definitions = {definition['id']: definition for definition in document['actor_definitions']}
+    created = [entry for entry in document['actor_creation_inputs']
+               if definitions[entry['definition_id']].get('name') == 'Composed']
+    assert len(created) == 1 and created[0]['before_seq'] <= events[0]['seq'], created
+    commands = {command['name'] for command in definitions[created[0]['definition_id']]['commands']}
+    assert {'InitCommand', 'OnCommand', 'ExtraMessageCommand'} <= commands, commands
+    assert document['completion']['reason'] == 'gameplay-exit', document['completion']
+    assert document['completion']['stage_committed'], document['completion']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--itgmania-bin", type=Path, required=True)
@@ -140,7 +158,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--until-gameplay-end", action="store_true")
     parser.add_argument("--autoplay", choices=("0", "1"), default="1")
-    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params", "end", "percent"), default="reload")
+    parser.add_argument("--fixture", choices=("reload", "reload-queue", "foreground", "hold-row", "broadcast-params", "end", "percent", "definition-concat"), default="reload")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -210,7 +228,8 @@ def main():
             {"foreground": check_foregrounds, "hold-row": check_hold_row,
              "reload-queue": check_reload_queue,
              "broadcast-params": check_broadcast_params,
-             "end": check_end, "percent": check_percent}[args.fixture](document)
+             "end": check_end, "percent": check_percent,
+             "definition-concat": check_definition_concat}[args.fixture](document)
             print(json.dumps({"fixture": args.fixture, "events": len(document["events"]),
                               "completion": document["completion"], "update_frames": len(frames)}))
             return
