@@ -165,6 +165,7 @@ fn parse_song_lua_trace_args(
     let mut headless = false;
     let mut until_gameplay_end = false;
     let mut autoplay = None;
+    let mut max_events = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -239,6 +240,16 @@ fn parse_song_lua_trace_args(
                 };
                 set_once(&mut autoplay, on, "--autoplay")?;
             }
+            Some("--max-events") => {
+                let raw = next_utf8(&mut args, "--max-events")?;
+                let value = raw.parse::<u32>().map_err(|_| {
+                    CliError::Usage(format!("runtime event limit `{raw}` is not an integer"))
+                })?;
+                if value == 0 {
+                    return Err(CliError::Usage("runtime event limit must be greater than zero".into()));
+                }
+                set_once(&mut max_events, value, "--max-events")?;
+            }
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -268,6 +279,7 @@ fn parse_song_lua_trace_args(
             headless,
             until_gameplay_end,
             autoplay: autoplay.unwrap_or(true),
+            max_events: max_events.unwrap_or(song_lua_runtime::DEFAULT_MAX_EVENTS),
         },
         out,
     })
@@ -1238,7 +1250,7 @@ fn print_help() {
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
              [--keep-run-dir] [--headless] [--autoplay 0|1]\n\
-             [--until-gameplay-end]\n\
+             [--until-gameplay-end] [--max-events COUNT]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
@@ -1409,6 +1421,27 @@ mod tests {
         assert!(trace.options.until_gameplay_end);
         assert!(trace.options.headless);
         assert!(!trace.options.autoplay);
+        assert_eq!(trace.options.max_events, song_lua_runtime::DEFAULT_MAX_EVENTS);
+    }
+
+    #[test]
+    fn trace_accepts_larger_event_capacity() {
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--max-events", "2000000"]
+            .map(OsString::from);
+        let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
+        assert_eq!(trace.options.max_events, 2_000_000);
+    }
+
+    #[test]
+    fn trace_rejects_invalid_event_capacity() {
+        for value in ["0", "-1", "1.5", "nan", "4294967296"] {
+            let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--max-events", value]
+                .map(OsString::from);
+            assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
+        }
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--max-events", "1", "--max-events", "2"]
+            .map(OsString::from);
+        assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
     }
 
     #[test]

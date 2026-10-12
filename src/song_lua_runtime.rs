@@ -12,6 +12,7 @@ const INIT_LUA: &str = include_str!("../probe_theme/ScreenSongLuaHarness overlay
 const GAMEPLAY_LUA: &str = include_str!("../probe_theme/ScreenGameplay overlay.lua");
 const SYSTEM_LUA: &str = include_str!("../probe_theme/ScreenSystemLayer overlay.lua");
 const TRACE_LUA: &str = include_str!("../probe_theme/SongLuaTrace.lua");
+pub const DEFAULT_MAX_EVENTS: u32 = 250_000;
 
 #[derive(Debug)]
 pub struct Options {
@@ -26,6 +27,7 @@ pub struct Options {
     pub headless: bool,
     pub until_gameplay_end: bool,
     pub autoplay: bool,
+    pub max_events: u32,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -55,6 +57,9 @@ pub fn capture(options: &Options) -> Result<Value, Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
+    if options.max_events == 0 {
+        return Err(Error::new("runtime event limit must be greater than zero"));
+    }
     if !options.until_beat.is_finite() || options.until_beat < 0.0 {
         return Err(Error::new("trace end beat must be finite and non-negative"));
     }
@@ -535,7 +540,7 @@ fn config_lua(options: &Options) -> String {
          \tuntil_beat = {:.9},\n\
          \tuntil_gameplay_end = {},\n\
          \tautoplay = {},\n\
-         \tmax_events = 250000,\n\
+         \tmax_events = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
         lua_quote(&options.style),
@@ -545,7 +550,8 @@ fn config_lua(options: &Options) -> String {
         lua_quote(&format!("/Themes/{}/BGAnimations/ScreenSystemLayer overlay", options.fallback_theme)),
         options.until_beat,
         options.until_gameplay_end,
-        u8::from(options.autoplay)
+        u8::from(options.autoplay),
+        options.max_events
     )
 }
 
@@ -727,7 +733,7 @@ mod tests {
 
     #[test]
     fn generated_config_has_stable_runtime_contract() {
-        let options = Options {
+        let mut options = Options {
             simfile: PathBuf::from("song.ssc"),
             itgmania_bin: PathBuf::from("ITGmania.exe"),
             until_beat: 4.5,
@@ -739,11 +745,18 @@ mod tests {
             headless: false,
             until_gameplay_end: false,
             autoplay: true,
+            max_events: DEFAULT_MAX_EVENTS,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
         assert!(lua.contains("until_beat = 4.500000000"));
         assert!(lua.contains("difficulty = \"Challenge\""));
+        assert!(lua.contains("max_events = 250000"));
+        options.max_events = 2_000_000;
+        assert!(validate_options(&options).is_ok());
+        assert!(config_lua(&options).contains("max_events = 2000000"));
+        options.max_events = 0;
+        assert!(validate_options(&options).is_err());
     }
 
     #[test]
@@ -922,6 +935,7 @@ mod tests {
             headless: true,
             until_gameplay_end: false,
             autoplay: true,
+            max_events: DEFAULT_MAX_EVENTS,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();

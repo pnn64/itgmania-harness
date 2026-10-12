@@ -195,6 +195,11 @@ before they can serve as accepted whole-song fixtures.
 without injecting inputs. Native `Player::HandleTapRowScore` skips scoring
 for autoplay, so autoplay does not advance current possible dance points.
 
+`--max-events COUNT` sets the native trace recorder's event capacity and
+defaults to 250000. For songs with frequent Lua updates, increase it, for
+example with `--max-events 2000000`. The trace records the configured limit;
+whole-song captures still require zero dropped events, frames and samples.
+
 ITGmania publishes the staged JSON trace atomically when `RageFile` closes
 it. The collector stops and reaps the engine on every exit, including
 invalid output and timeouts.

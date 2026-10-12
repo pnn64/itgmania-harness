@@ -837,6 +837,7 @@ function trace.finish(completion)
 			logical_height = SCREEN_HEIGHT,
 		},
 		trace_until_beat = cfg.until_beat,
+		capture_limits = {max_events = cfg.max_events},
 		completion = completion,
 		input = {autoplay = cfg.autoplay, injected_inputs = false,
 			requested_difficulty = cfg.difficulty, style = cfg.style,
