@@ -406,6 +406,7 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     }
     validate_actor_identities(document)?;
     validate_declaration_forest(document)?;
+    validate_actor_queries(document)?;
     validate_gameplay_preferences(document)?;
     let preferences = document.pointer("/input/preferences").ok_or_else(|| {
         Error::new("native gameplay capture has no machine preferences")
@@ -556,6 +557,28 @@ fn validate_declaration_forest(document: &Value) -> Result<(), Error> {
         }
     }
     if reached.len() != nodes.len() { return Err(invalid()); }
+    Ok(())
+}
+
+fn validate_actor_queries(document: &Value) -> Result<(), Error> {
+    if document.pointer("/capabilities/native_actor_query_ancestry").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    fn valid(value: &Value) -> bool {
+        if let Some(values) = value.as_array() { return values.iter().all(valid); }
+        value.get("type").is_some_and(|kind| kind == "nil")
+            || value["actor"].as_str().is_some_and(|id| !id.is_empty())
+                && value["name"].is_string() && value["path"].is_string()
+                && value.get("ancestry_error").is_none()
+    }
+    let invalid = || Error::new("native actor query ancestry is missing or incomplete");
+    for event in document["events"].as_array().ok_or_else(invalid)? {
+        if event["kind"] == "query" && matches!(event["operation"].as_str(),
+            Some("Actor.GetParent" | "ActorFrame.GetChild" | "ScreenManager.GetTopScreen"))
+            && !event.pointer("/detail/results").and_then(Value::as_array)
+                .is_some_and(|results| results.len() == 1 && results.iter().all(valid))
+        { return Err(invalid()); }
+    }
     Ok(())
 }
 
@@ -1069,6 +1092,38 @@ mod tests {
         shared["actor_definitions"].as_array_mut().expect("definition array")
             .push(serde_json::json!({"id":"other","children":[{"layer_index":1,"definition_id":"child"}]}));
         assert!(validate_declaration_forest(&shared).is_ok());
+    }
+
+    #[test]
+    fn actor_queries_require_observed_ancestry() {
+        let document = serde_json::json!({
+            "capabilities":{"native_actor_query_ancestry":true},
+            "events":[{"kind":"query","operation":"Actor.GetParent",
+                "detail":{"results":[{"actor":"parent","name":"","path":"ScreenGameplay"}]}},
+                {"kind":"query","operation":"Actor.GetParent","detail":{"results":[{"type":"nil"}]}}],
+        });
+        assert!(validate_actor_queries(&document).is_ok());
+        assert!(validate_actor_queries(&serde_json::json!({})).is_ok());
+        let mut duplicates = document.clone();
+        duplicates["events"][0]["operation"] = serde_json::json!("ActorFrame.GetChild");
+        duplicates["events"][0]["detail"]["results"] = serde_json::json!([[
+            {"actor":"first","name":"Twin","path":"ScreenGameplay/Twin"},
+            {"actor":"second","name":"Twin","path":"ScreenGameplay/Twin"},
+        ]]);
+        assert!(validate_actor_queries(&duplicates).is_ok());
+        for (pointer, value) in [
+            ("/events", Value::Null), ("/events/0/detail/results", serde_json::json!([])),
+            ("/events/0/detail/results/0/path", Value::Null),
+            ("/events/0/detail/results/0/name", Value::Null),
+            ("/events/0/detail/results/0/actor", serde_json::json!("")),
+            ("/events/0/detail/results/0/ancestry_error", serde_json::json!("cycle")),
+        ] {
+            let mut invalid = document.clone();
+            if pointer.ends_with("ancestry_error") {
+                invalid["events"][0]["detail"]["results"][0]["ancestry_error"] = value;
+            } else { *invalid.pointer_mut(pointer).expect("query field") = value; }
+            assert!(validate_actor_queries(&invalid).is_err(), "accepted invalid {pointer}");
+        }
     }
 
     #[test]

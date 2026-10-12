@@ -73,6 +73,29 @@ local function actor_name(actor)
 	return ok and tostring(name or "") or ""
 end
 
+local function native_actor_path(actor)
+	local get_name = original_methods.Actor and original_methods.Actor.GetName
+	local get_parent = original_methods.Actor and original_methods.Actor.GetParent
+	local names, seen = {}, {}
+	for _ = 1, 32 do
+		if actor == nil then break end
+		if seen[actor] then return nil, "cycle in native actor ancestry" end
+		seen[actor] = true
+		-- Observe current native names, including the empty loading name during
+		-- child Init. Definition IDs and query lookup aliases are not ancestry.
+		local ok, name = pcall(get_name, actor)
+		if not ok or type(name) ~= "string" then return nil, "native actor name unavailable" end
+		if name ~= "" then names[#names + 1] = name end
+		local got, parent = pcall(get_parent, actor)
+		if not got then return nil, "native actor parent unavailable" end
+		actor = parent
+	end
+	if actor ~= nil then return nil, "native actor ancestry exceeds capture depth" end
+	local path = {}
+	for index = #names, 1, -1 do path[#path + 1] = names[index] end
+	return table.concat(path, "/")
+end
+
 local function capture_actor_identity(actor, definition, actor_id, command)
 	if identity_observed[actor] or (command ~= "InitCommand" and command ~= "OnCommand") then return end
 	local metatable = raw_metatable(actor)
@@ -196,7 +219,8 @@ local function safe_value(value, depth, seen)
 	if kind ~= "table" then return {type = kind, value = normalize_path(value)} end
 	if looks_like_actor(value) then
 		local id = external_actor(value)
-		return {actor = id, path = actor_paths[value], name = actor_name(value)}
+		local path, ancestry_error = native_actor_path(value)
+		return {actor = id, path = path, name = actor_name(value), ancestry_error = ancestry_error}
 	end
 	local object = native_object(value)
 	if object then return object end
@@ -506,7 +530,15 @@ local function assign_result_path(class, method, args, result)
 		external_actor(result, "ScreenGameplay")
 	elseif type(result) == "table" and class == "ActorFrame" and method == "GetChild" then
 		local parent = actor_paths[args[1]] or actor_name(args[1])
-		external_actor(result, parent .. "/" .. tostring(args[2]))
+		-- PushChildTable returns a collection for duplicate names. Its __index
+		-- forwards methods to the children; the collection has no Actor identity.
+		if looks_like_actor(result) then
+			external_actor(result, parent .. "/" .. tostring(args[2]))
+		else
+			for index, child in ipairs(result) do
+				external_actor(child, parent .. "/" .. tostring(args[2]) .. "[" .. index .. "]")
+			end
+		end
 	elseif type(result) == "table" and class == "ActorFrame" and method == "GetChildren" then
 		local parent = actor_paths[args[1]] or actor_name(args[1])
 		for name, child in pairs(result) do
@@ -663,9 +695,6 @@ local function install_class_hook(class)
 			assign_result_path(class, name, args, result[1])
 			if event and (is_query or event.kind == "modifier") then
 				event.detail = {results = safe_args(result, 1)}
-				if class == "ScreenManager" and name == "GetTopScreen" and result[1] ~= nil then
-					event.detail.results = {{type = "Screen", name = actor_name(result[1])}}
-				end
 			end
 			if event and actor_id then
 				local time_left = native_tween_time_left(args[1])
@@ -929,6 +958,7 @@ function trace.finish(completion)
 		capabilities = {
 			native_random_seed = true,
 			native_actor_identities = true,
+			native_actor_query_ancestry = true,
 			native_declaration_ancestry = true,
 			actor_definitions = true,
 			child_layer_order = true,
