@@ -611,6 +611,7 @@ local function native_tween_children(actor)
 	-- changing an actor. ActorFrame's total includes descendant tween queues.
 	local children_getter = original_methods.ActorFrame and original_methods.ActorFrame.GetChildren
 	local name_getter = original_methods.Actor and original_methods.Actor.GetName
+	local command_getter = original_methods.Actor and original_methods.Actor.GetCommand
 	if type(children_getter) ~= "function" or type(name_getter) ~= "function" then return nil end
 	local previous = active_context
 	active_context = nil
@@ -633,6 +634,20 @@ local function native_tween_children(actor)
 		if type(left) ~= "number" or left <= 0 then return nil end
 		local ok, name = pcall(name_getter, value)
 		local node = {name = ok and name or "", time_left = left, children = {}}
+		if type(command_getter) == "function" then
+			node.commands = {}
+			for _, command in ipairs({"Init", "On"}) do
+				local got, callback = pcall(command_getter, value, command)
+				if got and type(callback) == "function" then
+					local info = debug.getinfo(callback, "S")
+					node.commands[command] = {
+						source = normalize_path(info.source or ""),
+						line = info.linedefined or -1,
+						last_line = info.lastlinedefined or -1,
+					}
+				end
+			end
+		end
 		count = count + 1
 		if depth >= 6 or count >= 64 then node.truncated = true; return node end
 		local hierarchy = rawget(raw_metatable(value), "heirarchy")
@@ -724,7 +739,8 @@ local function install_class_hook(class)
 					event.detail.native_tween_time_left = time_left
 					if type(time_left) == "number" and time_left > 0
 						and tween_owner_observed[args[1]] ~= #update_frames
-						and actor_name(args[1]):match("^PlayerP[12]$") then
+						and (actor_name(args[1]):match("^PlayerP[12]$")
+							or actor_name(args[1]) == "Underlay") then
 						event.detail.native_tween_children = native_tween_children(args[1])
 						tween_owner_observed[args[1]] = #update_frames
 					end
