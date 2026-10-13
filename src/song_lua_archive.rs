@@ -462,7 +462,7 @@ fn archive_members(
             },
         },
         lua_closure: LuaClosure {
-            strategy: "complete-song-lua-plus-executed-and-static-loads",
+            strategy: "executed-sources-plus-static-loads",
             files: lua_members,
             external_references: external_lua,
         },
