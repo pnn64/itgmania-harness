@@ -462,7 +462,7 @@ fn archive_members(
             },
         },
         lua_closure: LuaClosure {
-            strategy: "executed-sources-plus-static-loads",
+            strategy: "complete-song-lua-plus-executed-and-static-loads",
             files: lua_members,
             external_references: external_lua,
         },
@@ -537,6 +537,10 @@ fn lua_dependency_closure(
     {
         references.insert(format!("file:{entry}"));
     }
+    // Data-only Lua loads produce no actor observations. Dynamic filenames
+    // and FILEMAN listings therefore need the complete physical Lua namespace,
+    // including files that were not selected during the captured random run.
+    collect_song_lua_sources(song_dir, &mut references)?;
 
     let mut files = BTreeSet::new();
     let mut external = BTreeSet::new();
@@ -570,6 +574,25 @@ fn lua_dependency_closure(
         }
     }
     Ok((files, external.into_iter().collect()))
+}
+
+fn collect_song_lua_sources(directory: &Path, references: &mut BTreeSet<String>) -> Result<(), Error> {
+    for entry in fs::read_dir(directory)
+        .map_err(|error| Error::io("read song Lua directory", directory, error))?
+    {
+        let entry = entry.map_err(|error| Error::io("read song Lua entry", directory, error))?;
+        let path = entry.path();
+        let kind = entry.file_type()
+            .map_err(|error| Error::io("stat song Lua entry", &path, error))?;
+        if kind.is_dir() {
+            collect_song_lua_sources(&path, references)?;
+        } else if kind.is_file() && path.extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
+        {
+            references.insert(format!("file:{}", path.display()));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_lua_reference(
@@ -1681,6 +1704,30 @@ mod tests {
             ),
             ["helpers.lua", "template/std.lua"]
         );
+
+        // Listing-selected data files execute no actor methods, so old native
+        // traces do not name them. Preserve the physical Lua namespace rather
+        // than just the selected files or paths found in quoted literals.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("target/tests/archive-listed-lua-{}", std::process::id()));
+        let puzzles = root.join("puzzles/rects");
+        fs::create_dir_all(&puzzles).expect("puzzle directory");
+        fs::write(root.join("song.sm"), "#TITLE:Puzzles;#FGCHANGES:0=default.lua=1;")
+            .expect("simfile");
+        fs::write(root.join("default.lua"),
+            "local files=FILEMAN:GetDirListing(GAMESTATE:GetCurrentSong():GetSongDir()..'puzzles/rects/')\nreturn LoadActor('puzzles/rects/'..files[math.random(#files)])")
+            .expect("listing-selected Lua source");
+        for name in ["1.lua", "2.LUA"] {
+            fs::write(puzzles.join(name), "return { puzzle=true }").expect("puzzle data");
+        }
+        fs::write(puzzles.join("unrelated.txt"), "not Lua").expect("other input");
+        let root = root.canonicalize().expect("fixture root");
+        let (files, _) = lua_dependency_closure(&root.join("song.sm"), &root, &Value::Null)
+            .expect("physical Lua dependency closure");
+        assert_eq!(files, BTreeSet::from([
+            root.join("default.lua"), root.join("puzzles/rects/1.lua"),
+            root.join("puzzles/rects/2.LUA")
+        ]));
     }
 
     #[test]
