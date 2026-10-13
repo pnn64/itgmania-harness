@@ -65,8 +65,37 @@ fn resolve_lua_entry(song_dir: &Path, file: &str) -> Option<PathBuf> {
     {
         return Some(path);
     }
-    let default = path.join("default.lua");
-    default.is_file().then_some(default)
+    resolve_path_case_insensitive(&path.join("default.lua"))
+        .filter(|entry| entry.is_file())
+}
+
+// Native RageFile's FilenameDB resolves each component without regard to
+// case. Return the physical spelling so dependency archives retain real files
+// even when the native chunk source uses a different spelling.
+pub(crate) fn resolve_path_case_insensitive(path: &Path) -> Option<PathBuf> {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            resolved.push(component);
+            continue;
+        };
+        let direct = resolved.join(name);
+        if direct.exists() {
+            resolved = direct;
+            continue;
+        }
+        let directory = if resolved.as_os_str().is_empty() { Path::new(".") } else { &resolved };
+        let mut matches = std::fs::read_dir(directory).ok()?.filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_name().to_string_lossy().eq_ignore_ascii_case(&name.to_string_lossy())
+                .then(|| entry.path())
+        });
+        resolved = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+    }
+    resolved.exists().then_some(resolved)
 }
 
 fn decode(bytes: &[u8]) -> Result<Document, Error> {
@@ -263,6 +292,19 @@ mod tests {
             Some(PathBuf::from("song/fg/Default.LUA"))
         );
         assert_eq!(resolve_lua_entry(Path::new("song"), "movie.mp4"), None);
+    }
+
+    #[test]
+    fn discovers_directory_default_with_native_case_insensitive_lookup() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("target/tests/oracle-lua-case-{}", std::process::id()));
+        let directory = root.join("Multitap");
+        std::fs::create_dir_all(&directory).expect("case fixture directory");
+        let entry = directory.join("Default.lua");
+        std::fs::write(&entry, b"return Def.ActorFrame{}").expect("case fixture Lua");
+        let found = resolve_lua_entry(&root, "multitap").expect("native directory entry");
+        assert_eq!(found.canonicalize().unwrap(), entry.canonicalize().unwrap());
+        assert!(resolve_lua_entry(&root, "missing").is_none());
     }
 
     #[test]

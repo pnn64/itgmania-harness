@@ -585,7 +585,9 @@ fn resolve_lua_reference(
         return None;
     } else if let Some(source_dir) = source_dir {
         let local = source_dir.join(reference);
-        if local.is_file() {
+        if let Some(local) = song_lua_oracle::resolve_path_case_insensitive(&local)
+            .filter(|path| path.is_file())
+        {
             local
         } else {
             song_dir.join(normalized_relative(reference)?)
@@ -593,7 +595,7 @@ fn resolve_lua_reference(
     } else {
         song_dir.join(normalized_relative(reference)?)
     };
-    path.is_file().then_some(path)
+    song_lua_oracle::resolve_path_case_insensitive(&path).filter(|path| path.is_file())
 }
 
 fn quoted_lua_references(source: &str) -> Vec<String> {
@@ -1699,6 +1701,26 @@ mod tests {
             resolve_lua_reference(root, Some(&root.join("src")), "semantic_host.lua"),
             Some(root.join("semantic_host.lua"))
         );
+    }
+
+    #[test]
+    fn lua_dependencies_resolve_native_case_insensitive_paths() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("target/tests/archive-lua-case-{}", std::process::id()));
+        let directory = root.join("Multitap");
+        fs::create_dir_all(&directory).expect("case fixture directory");
+        let entry = directory.join("Default.lua");
+        let data = directory.join("Data.LUA");
+        fs::write(&entry, b"return Def.ActorFrame{}").expect("case fixture entry");
+        fs::write(&data, b"return {}").expect("case fixture data");
+        let root = root.canonicalize().expect("case fixture root");
+        let native_source = resolve_lua_reference(&root, None, "song:/multitap/default.lua")
+            .expect("native chunk source dependency");
+        assert_eq!(native_source.canonicalize().unwrap(), entry.canonicalize().unwrap());
+        let nested = resolve_lua_reference(&root, native_source.parent(), "data.lua")
+            .expect("case insensitive nested dependency");
+        assert_eq!(nested.canonicalize().unwrap(), data.canonicalize().unwrap());
+        assert!(resolve_lua_reference(&root, None, "song:/missing.lua").is_none());
     }
 
     #[test]
