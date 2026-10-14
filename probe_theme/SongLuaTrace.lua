@@ -489,6 +489,16 @@ local function install_definition_hook()
 	local definition_metatable = DefMetatable
 	local original_concat = definition_metatable and definition_metatable.__concat
 	if type(original_concat) ~= "function" then error("ActorDef concatenation hook is unavailable") end
+	local original_newindex = definition_metatable.__newindex
+	definition_metatable.__newindex = function(actor_def, key, value)
+		if type(original_newindex) == "function" then original_newindex(actor_def, key, value)
+		elseif type(original_newindex) == "table" then original_newindex[key] = value
+		else rawset(actor_def, key, value) end
+		-- Songs can add commands after Def.* returns. Keep the authored key
+		-- insertion and wrap that callback before native XNode conversion.
+		if type(key) == "string" and key:match("Command$") and type(value) == "function"
+			and is_song_definition(actor_def) then register_tree(actor_def) end
+	end
 	local function unwrapped_definition(value)
 		if type(value) ~= "table" then return value end
 		local copy = {}
