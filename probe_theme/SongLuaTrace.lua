@@ -515,9 +515,28 @@ local function install_definition_hook()
 			-- ActorDef derives relative asset paths from the caller's stack frame.
 			-- Account for this wrapper so instrumentation does not change resolution.
 			local previous_level = actor_def._Level
-			actor_def._Level = (previous_level or 1) + 1
-			local result = constructor(actor_def)
-			result._Level = previous_level
+			local result
+			if rawget(actor_def, "_Level") ~= nil then
+				-- Updating an existing slot does not reshape a sparse declaration.
+				actor_def._Level = (previous_level or 1) + 1
+				result = constructor(actor_def)
+				result._Level = previous_level
+			else
+				-- A temporary raw key changes Lua 5.1's sparse array border and
+				-- child iteration. Supply the stack adjustment through lookup;
+				-- Def's constructor installs its normal metatable before returning.
+				local prior = getmetatable(actor_def)
+				local temporary = {}
+				if prior then for key, value in pairs(prior) do temporary[key] = value end end
+				local index = prior and prior.__index
+				temporary.__index = function(value, key)
+					if key == "_Level" then return (previous_level or 1) + 1 end
+					if type(index) == "function" then return index(value, key) end
+					if type(index) == "table" then return index[key] end
+				end
+				setmetatable(actor_def, temporary)
+				result = constructor(actor_def)
+			end
 			-- Tail calls can hide a constructor's caller; commands and children
 			-- retain their native source metadata.
 			if is_song_definition(result) then register_tree(result) end
