@@ -311,7 +311,7 @@ fn archive_members(
     let (lua_paths, external_lua) = lua_dependency_closure(simfile, song_dir, trace)?;
     let mut members = BTreeMap::new();
     if native_gameplay {
-        append_song_audio(song_dir, song_dir, &mut members)?;
+        append_song_media(song_dir, song_dir, &mut members)?;
     }
     let mut asset_members: BTreeSet<String> = members.keys().cloned().collect();
     members.insert(simfile_member.clone(), simfile_bytes);
@@ -483,40 +483,40 @@ fn archive_members(
     Ok((members, manifest))
 }
 
-// Gameplay may select any chart music in the song directory, outside Lua asset loads.
-fn append_song_audio(
+// Gameplay and native theme actors load song media outside authored Lua requests.
+fn append_song_media(
     song_dir: &Path,
     directory: &Path,
     members: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<(), Error> {
     for entry in fs::read_dir(directory)
-        .map_err(|error| Error::io("read song audio directory", directory, error))?
+        .map_err(|error| Error::io("read song media directory", directory, error))?
     {
-        let entry = entry.map_err(|error| Error::io("read song audio entry", directory, error))?;
+        let entry = entry.map_err(|error| Error::io("read song media entry", directory, error))?;
         let path = entry.path();
         let kind = entry
             .file_type()
-            .map_err(|error| Error::io("read song audio type", &path, error))?;
+            .map_err(|error| Error::io("read song media type", &path, error))?;
         if kind.is_symlink() {
             return Err(Error(format!(
-                "song audio collection does not support symlinks: {}",
+                "song media collection does not support symlinks: {}",
                 path.display()
             )));
         } else if kind.is_dir() {
-            append_song_audio(song_dir, &path, members)?;
+            append_song_media(song_dir, &path, members)?;
         } else if kind.is_file()
             && path
                 .extension()
                 .and_then(|value| value.to_str())
                 .is_some_and(|extension| {
-                    ["ogg", "wav", "mp3"]
-                        .iter()
-                        .any(|audio| extension.eq_ignore_ascii_case(audio))
+                    ["ogg", "wav", "mp3", "png", "jpg", "jpeg", "gif", "webp", "bmp"]
+                        .iter().chain(MOVIE_EXTENSIONS)
+                        .any(|media| extension.eq_ignore_ascii_case(media))
                 })
         {
             let relative = portable_relative(song_dir, &path)?;
             let bytes =
-                fs::read(&path).map_err(|error| Error::io("read song audio", &path, error))?;
+                fs::read(&path).map_err(|error| Error::io("read song media", &path, error))?;
             members.insert(format!("song/{relative}"), bytes);
         }
     }
@@ -1323,6 +1323,24 @@ impl fmt::Display for Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_song_media_includes_implicit_theme_artwork() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/tests/native-song-media");
+        std::fs::create_dir_all(root.join("art")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let image = include_bytes!("../tests/fixtures/song-lua-headless/fit-rect.png");
+        std::fs::write(root.join("art/chosen artwork.png"), image).unwrap();
+        std::fs::write(root.join("song.ogg"), b"original audio").unwrap();
+        std::fs::write(root.join("ignored.lua"), b"return {}").unwrap();
+        let mut members = std::collections::BTreeMap::new();
+        super::append_song_media(&root, &root, &mut members).unwrap();
+        assert_eq!(members.get("song/art/chosen artwork.png").map(Vec::as_slice),
+            Some(image.as_slice()), "native theme artwork must survive without a Lua asset request");
+        assert_eq!(members["song/song.ogg"], b"original audio");
+        assert!(!members.contains_key("song/ignored.lua"));
+    }
+
     use super::*;
 
     #[test]
