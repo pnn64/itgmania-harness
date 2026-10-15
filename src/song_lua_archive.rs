@@ -44,6 +44,13 @@ struct SemanticEntry {
     title: String,
     status: String,
     itgmania: Option<SemanticItgmania>,
+    command_observer: Option<CommandObserverMetadata>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct CommandObserverMetadata {
+    dynamic_commands: bool,
+    capture_binary_sha256: String,
 }
 
 #[derive(Serialize)]
@@ -82,6 +89,8 @@ struct RuntimeMetadata {
     display: DisplayMetadata,
     update_hz: Option<f64>,
     frame_clock: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_observer: Option<CommandObserverMetadata>,
     random_state: RandomState,
 }
 
@@ -440,6 +449,7 @@ fn archive_members(
             } else {
                 "fixed-update-rate"
             },
+            command_observer: entry.command_observer.clone(),
             random_state: RandomState {
                 source: "ITGmania MersenneTwister",
                 seed: trace.get("random_seed").and_then(Value::as_u64),
@@ -1412,10 +1422,12 @@ mod tests {
             title: context.title.into(),
             status: "ok".into(),
             itgmania: Some(provenance()),
+            command_observer: None,
         };
         let (members, manifest) =
             archive_members(&root, &simfile, &source, &trace, &semantic, &entry)
                 .expect("complete runtime dependency archive");
+        assert!(serde_json::to_value(&manifest).unwrap()["runtime"].get("command_observer").is_none());
         let image = fs::read(root.join("fit-rect.png")).expect("native loaded image");
         assert_eq!(members.get("song/fit-rect.png"), Some(&image));
         assert!(
@@ -1572,6 +1584,10 @@ mod tests {
             title: "Model".into(),
             status: "ok".into(),
             itgmania: Some(provenance()),
+            command_observer: Some(CommandObserverMetadata {
+                dynamic_commands: true,
+                capture_binary_sha256: "0123456789abcdef".repeat(4),
+            }),
         };
         let (members, manifest) = archive_members(
             &root,
@@ -1582,6 +1598,11 @@ mod tests {
             &entry,
         )
         .expect("model archive");
+        let metadata = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(metadata["runtime"]["command_observer"]["dynamic_commands"], true);
+        assert_eq!(metadata["runtime"]["command_observer"]["capture_binary_sha256"],
+            "0123456789abcdef".repeat(4));
+        assert_eq!(members["trace/semantic.json"], serde_json::to_vec(&trace).unwrap());
         assert_eq!(members["song/lua/body/wall.txt"], model);
         for name in ["first.png", "second.png", "mask.png"] {
             let path = format!("song/lua/body/textures/{name}");
