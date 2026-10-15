@@ -330,14 +330,14 @@ end
 local function command_wrapper(definition, name, original)
 	local source = function_source(original)
 	local context = {
-		definition_id = definition.id,
+		definition_id = definition and definition.id or nil,
 		command = name,
 		source = source.source,
 		line = source.line,
 	}
 	local wrapped = function(actor, ...)
-		local actor_id = bind_actor(actor, definition)
-		capture_actor_identity(actor, definition, actor_id, name)
+		local actor_id = definition and bind_actor(actor, definition) or external_actor(actor)
+		if definition then capture_actor_identity(actor, definition, actor_id, name) end
 		local previous = active_context
 		active_context = context
 		emit("command", actor_id, "command.begin", {}, {name = name})
@@ -750,6 +750,20 @@ local function install_class_hook(class)
 			if should_emit and looks_like_actor(args[1]) then actor_id = external_actor(args[1]) end
 			if (name == "SetUpdateFunction" or name == "SetDrawFunction") and type(args[2]) == "function" then
 				args[2] = wrap_callback(name, args[2])
+			end
+			if name == "addcommand" and type(args[2]) == "string" and type(args[3]) == "function" then
+				local prior = wrapped_commands[args[3]]
+				local callback = prior and prior.original or args[3]
+				if song_source(function_source(callback).source) then
+					local record = actor_records[args[1]]
+					local definition = nil
+					for _, candidate in ipairs(definitions) do
+						if record and candidate.id == record.definition_id then definition = candidate; break end
+					end
+					-- Actor::addcommand stores this callback for later native
+					-- dispatch. Its command context must outlive the installer.
+					args[3] = command_wrapper(definition, args[2] .. "Command", callback)
+				end
 			end
 			local event = nil
 			if should_emit then
