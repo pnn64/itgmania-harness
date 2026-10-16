@@ -1225,3 +1225,42 @@ The control checks zero first-update delta, update-before-End ordering, and
 archive rejection when the replacement cannot be constructed. The harness
 still reports `delayed_screen_loading=false`: native ScreenGameplay construction,
 Player judgment progress and full scene reconstruction remain unsupported.
+
+### Interactive executable traces
+
+Build the executable with `native/trace_adapter.cmake`, then add
+`--input-script controls.json --drawable-samples` to `song-lua-trace`.
+These features require the native observer adapter and fail if observation is
+missing, truncated, or a scripted press/release never reaches a screen callback.
+The input script is an ordered JSON array; seconds are the native scene's music
+seconds, independent of rendering frame rate:
+
+```json
+[
+  {"scene":1,"seconds":2.0,"player":1,"button":"Right","key":"right","down":true},
+  {"scene":1,"seconds":3.0,"player":1,"button":"Right","key":"right","down":false}
+]
+```
+
+The injector feeds the real InputMapper/InputFilter. ITGmania generates the
+presses, held-button repeats, and releases; the trace observes the native table
+passed to Screen's Lua callbacks. Each observation retains its scene and the
+completed and following gameplay update sequences. Native GameLoop delivers input
+after update and before draw; immediate text changes therefore affect that draw,
+while held controls affect the next update. Schedule inputs after the authored callback
+has been installed. Use distinct physical keys for simultaneous players.
+
+Drawable samples observe native RageDisplay submissions: local XYZ, homogeneous
+logical clip XYZW, transformed UV, packed vertex color, resource identity, and
+render state. Clip coordinates are taken from the native projection before
+display centering, explicitly labeled in each sample. This avoids treating the
+null renderer's zero-size viewport centering as a valid camera. It does not
+provide pixel parity. Draw-frame boundaries prove that the final update was
+actually drawn. With this option, SetVertices call arguments are summarized by
+count; the independent submitted vertices remain complete in drawable_samples.
+
+Drawable captures pace the native loop to at most 60 frames per second and retain
+the actual resulting update deltas and clocks. The period is recorded under
+input.observer_frame_period_seconds; it prevents thousands of empty null-display
+startup frames. Texture image and allocation dimensions are observed separately
+so consumers can compare sampling coordinates across padded and unpadded uploads.

@@ -14,6 +14,16 @@ const SYSTEM_LUA: &str = include_str!("../probe_theme/ScreenSystemLayer overlay.
 const TRACE_LUA: &str = include_str!("../probe_theme/SongLuaTrace.lua");
 pub const DEFAULT_MAX_EVENTS: u32 = 250_000;
 
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct ScheduledInput {
+    pub scene: u32,
+    pub seconds: f64,
+    pub player: u8,
+    pub button: String,
+    pub key: String,
+    pub down: bool,
+}
+
 #[derive(Debug)]
 pub struct Options {
     pub simfile: PathBuf,
@@ -29,6 +39,8 @@ pub struct Options {
     pub autoplay: bool,
     pub max_events: u32,
     pub random_seed: u32,
+    pub inputs: Vec<ScheduledInput>,
+    pub drawable_samples: bool,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -58,6 +70,14 @@ pub fn capture(options: &Options) -> Result<Value, Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
+    let mut previous = (0, 0.0);
+    for event in &options.inputs {
+        if event.scene == 0 || !event.seconds.is_finite() || event.seconds < 0.0
+            || !(1..=2).contains(&event.player) || event.button.is_empty() || event.key.is_empty()
+            || (event.scene, event.seconds) < previous
+        { return Err(Error::new("input script requires ordered scene/music-seconds values, player 1 or 2, and native button/key names")); }
+        previous = (event.scene, event.seconds);
+    }
     if options.random_seed == 0 || options.random_seed > i32::MAX as u32 {
         return Err(Error::new("random seed must be in 1..=2147483647"));
     }
@@ -397,6 +417,7 @@ fn metrics(fallback_theme: &str) -> String {
 }
 
 pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
+    validate_interactive_inputs(document)?;
     if document.pointer("/capabilities/native_random_seed").and_then(Value::as_bool) == Some(true)
         && (!document["random_seed"].as_u64().is_some_and(|seed| seed > 0 && seed <= i32::MAX as u64)
             || !document["random_reseeds"].is_array()
@@ -510,6 +531,88 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
                 return Err(Error::new("native query classes contain an invalid or duplicate class"));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
+    if !document["interactive_observer_error"].is_null() {
+        return Err(Error::new("native interactive observer failed"));
+    }
+    let inputs = document["input"]["injected_inputs"] == true;
+    if inputs {
+        let commands = document["injected_commands"].as_array()
+            .ok_or_else(|| Error::new("native injected input delivery was not recorded"))?;
+        let script = document["input"]["script"].as_array()
+            .ok_or_else(|| Error::new("native injected input script is missing"))?;
+        if commands.len() != script.len() || script.is_empty()
+            || !commands.iter().zip(script).all(|(actual, expected)| actual["command"] == *expected)
+        { return Err(Error::new("native input script was not fully delivered")); }
+    }
+    if document["capabilities"]["native_input_events"] == true || inputs {
+        if document["capabilities"]["native_input_events"] != true || document["dropped_input_events"] != 0 {
+            return Err(Error::new("native input-event capture is incomplete"));
+        }
+        let events = document["input_events"].as_array().ok_or_else(|| Error::new("native input events are missing"))?;
+        let frames = document["update_frames"].as_array().ok_or_else(|| Error::new("input events have no frame anchors"))?;
+        let mut previous = 0;
+        for (index,event) in events.iter().enumerate() {
+            let before = event["before_update_sequence"].as_u64().unwrap_or(0);
+            if event["sequence"].as_u64() != Some(index as u64+1) || before == 0 || before < previous
+                || before > frames.len() as u64
+                || !matches!(event["event"]["type"].as_str(), Some("InputEventType_FirstPress"|"InputEventType_Repeat"|"InputEventType_Release"))
+            { return Err(Error::new("invalid native input-event anchor or type")); }
+            previous = before;
+        }
+        if inputs {
+            for command in document["injected_commands"].as_array().expect("validated commands") {
+                let expected = &command["command"];
+                let player = format!("PlayerNumber_P{}", expected["player"].as_u64().unwrap_or(0));
+                let kind = if expected["down"] == true { "InputEventType_FirstPress" } else { "InputEventType_Release" };
+                if !events.iter().any(|event| event["scene"] == expected["scene"]
+                    && event["before_update_sequence"].as_u64() >= command["before_update_sequence"].as_u64()
+                    && event["event"]["button"] == expected["button"]
+                    && event["event"]["PlayerNumber"] == player && event["event"]["type"] == kind)
+                { return Err(Error::new("scripted input did not reach a native screen callback")); }
+            }
+        }
+    }
+    if document["capabilities"]["native_drawable_vertices"] == true {
+        if document["dropped_drawable_samples"] != 0 || !document["drawable_samples"].is_array()
+            || document["drawable_frames"].as_array().is_none_or(Vec::is_empty)
+        { return Err(Error::new("native drawable capture is incomplete")); }
+        let samples = document["drawable_samples"].as_array().expect("validated drawable array");
+        let frames = document["update_frames"].as_array().ok_or_else(|| Error::new("drawable frame anchors missing"))?;
+        let mut previous = 0;
+        for sample in samples {
+            let at = sample["update_sequence"].as_u64().unwrap_or(0);
+            let rows = sample["vertices"].as_array().ok_or_else(|| Error::new("native draw vertices missing"))?;
+            let numeric = |v: &Value| v.as_f64().is_some_and(f64::is_finite)
+                || v["type"] == "number" && matches!(v["value"].as_str(), Some("nan"|"inf"|"-inf"));
+            if sample["state"]["texture"].as_str().is_some_and(|s| !s.is_empty())
+                && ["image_width", "image_height", "texture_width", "texture_height"].iter().any(|key|
+                    !sample["state"][key].as_f64().is_some_and(|x| x.is_finite() && x > 0.0))
+            { return Err(Error::new("native texture allocation dimensions are missing")); }
+            if at == 0 || at < previous || at > frames.len() as u64 || rows.is_empty()
+                || sample["coordinate_space"] != "native-projection-before-display-centering"
+                || sample["scene"] != frames[at as usize-1]["scene"]
+                || !rows.iter().all(|row| row.as_array().is_some_and(|row| row.len() == 13
+                    && row.iter().all(numeric) && row[7..].iter().all(|v| v.as_f64().is_some_and(f64::is_finite))
+                    && (!row[..3].iter().all(Value::is_number) || row[3..7].iter().all(Value::is_number))))
+            { return Err(Error::new("invalid native drawable geometry or frame anchor")); }
+            previous = at;
+        }
+        let mut previous = 0;
+        let mut consumed = 0;
+        for frame in document["drawable_frames"].as_array().expect("validated draw frames") {
+            let at = frame["update_sequence"].as_u64().unwrap_or(0);
+            let count = frame["samples"].as_u64().unwrap_or(u64::MAX);
+            if at == 0 || at < previous || at > frames.len() as u64 || count < consumed || count > samples.len() as u64
+                || samples[consumed as usize..count as usize].iter().any(|sample| sample["update_sequence"] != at)
+            { return Err(Error::new("native drawable frame boundaries are incomplete")); }
+            previous = at; consumed = count;
+        }
+        if consumed != samples.len() as u64 { return Err(Error::new("native drawable tail was not drawn")); }
     }
     Ok(())
 }
@@ -724,6 +827,9 @@ fn validate_theme_inputs(document: &Value) -> Result<(), Error> {
 }
 
 fn config_lua(options: &Options) -> String {
+    let inputs = options.inputs.iter().map(|event| format!(
+        "{{scene={},seconds={},player={},button={},key={},down={}}}", event.scene,event.seconds,event.player,
+        lua_quote(&event.button),lua_quote(&event.key),event.down)).collect::<Vec<_>>().join(",");
     let difficulty = options
         .difficulty
         .as_deref()
@@ -749,6 +855,8 @@ fn config_lua(options: &Options) -> String {
          \tautoplay = {},\n\
          \tmax_events = {},\n\
          \trandom_seed = {},\n\
+         \tinput_script = {{{}}},\n\
+         \tdrawable_samples = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
         lua_quote(&options.style),
@@ -760,7 +868,9 @@ fn config_lua(options: &Options) -> String {
         options.until_gameplay_end,
         u8::from(options.autoplay),
         options.max_events,
-        options.random_seed
+        options.random_seed,
+        inputs,
+        options.drawable_samples
     )
 }
 
@@ -921,6 +1031,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn interactive_capture_requires_delivered_input_and_complete_draws() {
+        let command=serde_json::json!({"scene":1,"seconds":1.0,"player":1,"button":"Right","key":"right","down":true});
+        let native=serde_json::json!({"input":{"injected_inputs":true,"script":[command.clone()]},
+            "capabilities":{"native_input_events":true,"native_drawable_vertices":true},
+            "update_frames":[{"sequence":1,"scene":1},{"sequence":2,"scene":1}],
+            "injected_commands":[{"command":command,"before_update_sequence":1}],
+            "input_events":[{"sequence":1,"scene":1,"before_update_sequence":2,
+                "event":{"PlayerNumber":"PlayerNumber_P1","button":"Right","type":"InputEventType_FirstPress"}}],
+            "dropped_input_events":0,"dropped_drawable_samples":0,
+            "drawable_frames":[{"scene":1,"update_sequence":2,"samples":1}],
+            "drawable_samples":[{"scene":1,"update_sequence":2,
+                "coordinate_space":"native-projection-before-display-centering",
+                "vertices":[[0,0,0,-1,1,0,1,0,0,1,1,1,1]]}]});
+        validate_interactive_inputs(&native).unwrap();
+        for (pointer,value) in [("/input_events",serde_json::json!([])),
+            ("/drawable_frames/0/samples",serde_json::json!(0)),
+            ("/drawable_samples/0/vertices/0/3",serde_json::json!({"type":"number","value":"nan"})),
+            ("/input_events/0/before_update_sequence",serde_json::json!(3)),
+            ("/dropped_input_events",serde_json::json!(1))] {
+            let mut bad=native.clone(); *bad.pointer_mut(pointer).unwrap()=value;
+            assert!(validate_interactive_inputs(&bad).is_err(),"accepted {pointer}");
+        }
+    }
+
+    #[test]
     fn lua_strings_escape_paths_and_control_characters() {
         assert_eq!(
             lua_quote("C:\\Songs\\a\"b\n"),
@@ -956,6 +1091,8 @@ mod tests {
             autoplay: true,
             max_events: DEFAULT_MAX_EVENTS,
             random_seed: 73,
+            inputs: Vec::new(),
+            drawable_samples: false,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -1353,6 +1490,8 @@ mod tests {
             autoplay: true,
             max_events: DEFAULT_MAX_EVENTS,
             random_seed: 1,
+            inputs: Vec::new(),
+            drawable_samples: false,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();

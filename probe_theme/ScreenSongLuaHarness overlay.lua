@@ -25,7 +25,7 @@ local function configure_song()
 		GAMESTATE:UnjoinPlayer(player)
 	end
 	GAMESTATE:JoinPlayer(PLAYER_1)
-	if cfg.style == "couple" or cfg.style == "routine" then
+	if cfg.style == "versus" or cfg.style == "couple" or cfg.style == "routine" then
 		GAMESTATE:JoinPlayer(PLAYER_2)
 	end
 	GAMESTATE:SetCurrentPlayMode("PlayMode_Regular")
@@ -35,7 +35,7 @@ local function configure_song()
 		return nil, "ITGmania rejected style " .. cfg.style
 	end
 
-	local wanted_type = "StepsType_Dance_" .. cfg.style:gsub("^%l", string.upper)
+	local wanted_type = "StepsType_Dance_" .. (cfg.style == "versus" and "Single" or cfg.style:gsub("^%l", string.upper))
 	local selected = nil
 	for _, steps in ipairs(song:GetAllSteps()) do
 		local type_matches = tostring(steps:GetStepsType()) == wanted_type
@@ -51,7 +51,7 @@ local function configure_song()
 	end
 
 	GAMESTATE:SetCurrentSteps(PLAYER_1, selected)
-	if cfg.style == "couple" or cfg.style == "routine" then
+	if cfg.style == "versus" or cfg.style == "couple" or cfg.style == "routine" then
 		GAMESTATE:SetCurrentSteps(PLAYER_2, selected)
 	end
 	-- Direct gameplay entry bypasses the theme's play-mode selection screen.

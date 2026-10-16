@@ -12,6 +12,13 @@ local actor_records = setmetatable({}, {__mode = "k"})
 local actors = {}
 local events = {}
 local update_frames = {}
+local input_events = {}
+local injected_commands = {}
+local drawable_samples = {}
+local drawable_frames = {}
+local dropped_input_events, dropped_drawable_samples = 0, 0
+local scene_frame, next_input = 0, 1
+local pending_finish, finishing_after_draw = nil, false
 local random_reseeds = {}
 local dropped_random_reseeds = 0
 local actor_identity_inputs = {}
@@ -745,7 +752,12 @@ local function install_class_hook(class)
 			end
 			local is_query = query_method(class, name, args.n)
 			local should_emit = active_context ~= nil or song_source(caller.source)
-			local event_args = should_emit and safe_args(args, 2) or nil
+			local event_args
+			if should_emit then
+				if cfg.drawable_samples and class == "ActorMultiVertex" and name == "SetVertices" then
+					event_args = {{type="native-draw-vertices", count=type(args[2])=="table" and #args[2] or 0}}
+				else event_args = safe_args(args, 2) end
+			end
 			local actor_id = nil
 			if should_emit and looks_like_actor(args[1]) then actor_id = external_actor(args[1]) end
 			if (name == "SetUpdateFunction" or name == "SetDrawFunction") and type(args[2]) == "function" then
@@ -986,6 +998,7 @@ function trace.sample_stage(phase, stage)
 end
 
 function trace.scene_init()
+	scene_frame = 0
 	scene_count = scene_count + 1
 	if stages_before == nil then stages_before = STATSMAN:GetStagesPlayed() end
 	trace.sample_stage("overlay-init")
@@ -1010,6 +1023,10 @@ function trace.screen_changed()
 end
 
 function trace.finish(completion)
+	if cfg.drawable_samples and not finishing_after_draw then
+		pending_finish = completion
+		return
+	end
 	if finished then return end
 	finished = true
 	local roots, live_definitions = reachable_definitions()
@@ -1051,11 +1068,21 @@ function trace.finish(completion)
 		actor_creation_inputs = actor_creation_inputs,
 		actor_creation_error = ITGMANIA_HARNESS_ACTOR_CREATION_ERROR,
 		completion = completion,
-		input = {autoplay = cfg.autoplay, injected_inputs = false,
+		input_events = input_events,
+		injected_commands = injected_commands,
+		dropped_input_events = dropped_input_events,
+		drawable_samples = drawable_samples,
+		drawable_frames = drawable_frames,
+		dropped_drawable_samples = dropped_drawable_samples,
+		interactive_observer_error = ITGMANIA_HARNESS_INTERACTIVE_ERROR,
+		input = {autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
+			script = cfg.input_script, observer_frame_period_seconds = cfg.drawable_samples and 1/60 or nil,
 			requested_difficulty = cfg.difficulty, style = cfg.style,
 			preferences = input_preferences, gameplay_preferences = gameplay_preferences},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
+			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
+			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_random_seed = true,
 			native_actor_identities = true,
 			native_actor_creation = ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE == true,
@@ -1139,3 +1166,51 @@ if shared_player_child then
 end
 
 ITGMANIA_HARNESS_TRACE = trace
+
+if #(cfg.input_script or {}) > 0 or cfg.drawable_samples then
+	assert(ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE, "native interactive trace adapter is required")
+	ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE = function(delta)
+		if finished or scene_count == 0 then return end
+		if cfg.drawable_samples then ITGMANIA_HARNESS_PACE_CAPTURE(1/60) end
+		scene_frame = scene_frame + 1
+		while true do
+			local command = cfg.input_script[next_input]
+			if not command or command.scene ~= scene_count or command.seconds > GAMESTATE:GetSongPosition():GetMusicSeconds() then break end
+			ITGMANIA_HARNESS_INJECT_INPUT(command.player, command.button, command.down, command.key)
+			injected_commands[#injected_commands+1] = {scene=scene_count, frame=scene_frame,
+				before_update_sequence=#update_frames+1, command=command}
+			next_input = next_input + 1
+		end
+	end
+	ITGMANIA_HARNESS_INPUT_EVENT = function(event)
+		if finished or scene_count == 0 then return end
+		if #input_events >= cfg.max_events then dropped_input_events=dropped_input_events+1; return end
+		input_events[#input_events+1] = {sequence=#input_events+1,scene=scene_count,
+			after_update_sequence=#update_frames,before_update_sequence=#update_frames+1,event=safe_value(event,0,{})}
+	end
+	ITGMANIA_HARNESS_AFTER_SCREEN_DRAW = function()
+		if finished or scene_count == 0 or #update_frames == 0 then return end
+		if cfg.drawable_samples then
+			drawable_frames[#drawable_frames+1] = {scene=scene_count,update_sequence=#update_frames,
+				samples=#drawable_samples}
+		end
+		if pending_finish then
+			finishing_after_draw = true
+			trace.finish(pending_finish)
+		end
+	end
+	if cfg.drawable_samples then
+		ITGMANIA_HARNESS_DRAW_VERTICES = function(actor, primitive, vertices, state)
+			if finished or scene_count == 0 or #update_frames == 0 then return end
+			local record = actor_records[actor]
+			if not record or not record.definition_id then return end
+			if #drawable_samples >= cfg.max_events then dropped_drawable_samples=dropped_drawable_samples+1; return end
+			local rows = {}
+			for index=1,#vertices do rows[index]=safe_value(vertices[index],0,{}) end
+			state.texture = state.texture and normalize_path(state.texture) or nil
+			drawable_samples[#drawable_samples+1] = {scene=scene_count,update_sequence=#update_frames,
+				actor=record.id,definition_id=record.definition_id,primitive=primitive,
+				coordinate_space="native-projection-before-display-centering",vertices=rows,state=state}
+		end
+	end
+end

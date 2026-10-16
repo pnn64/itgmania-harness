@@ -169,6 +169,8 @@ fn parse_song_lua_trace_args(
     let mut autoplay = None;
     let mut max_events = None;
     let mut random_seed = None;
+    let mut input_script = None;
+    let mut drawable_samples = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -263,6 +265,9 @@ fn parse_song_lua_trace_args(
                 }
                 set_once(&mut random_seed, seed, "--random-seed")?;
             }
+            Some("--input-script") => set_once(&mut input_script,
+                PathBuf::from(next_utf8(&mut args, "--input-script")?), "--input-script")?,
+            Some("--drawable-samples") if !drawable_samples => drawable_samples = true,
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -294,6 +299,13 @@ fn parse_song_lua_trace_args(
             autoplay: autoplay.unwrap_or(true),
             max_events: max_events.unwrap_or(song_lua_runtime::DEFAULT_MAX_EVENTS),
             random_seed: random_seed.unwrap_or(1),
+            inputs: match input_script {
+                Some(path) => serde_json::from_slice(&std::fs::read(&path).map_err(|error|
+                    CliError::Usage(format!("cannot read input script {}: {error}",path.display())))?)
+                    .map_err(|error| CliError::Usage(format!("invalid input script: {error}")))?,
+                None => Vec::new(),
+            },
+            drawable_samples,
         },
         out,
     })
@@ -1306,6 +1318,7 @@ fn print_help() {
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
+             [--input-script FILE.json] [--drawable-samples]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
