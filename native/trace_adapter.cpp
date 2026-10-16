@@ -2,6 +2,14 @@
 #include "LuaManager.h"
 #include "Actor.h"
 #include "XmlFile.h"
+#ifdef _WIN32
+#include <cstdlib>
+#include "archutils/Win32/GraphicsWindow.h"
+static int trace_headless_window_visible(lua_State* L) {
+  lua_pushboolean(L, GraphicsWindow::GetHwnd() && IsWindowVisible(GraphicsWindow::GetHwnd()));
+  return 1;
+}
+#endif
 
 // ActorUtil has set the real parent, but has not loaded children or commands.
 // XNode's existing text value retains the original definition table; this
@@ -46,6 +54,14 @@ static int trace_wrap(lua_State* L) {
 }
 
 static void register_trace_adapter(Lua* L) {
+#ifdef _WIN32
+  lua_pushboolean(L, true);
+  lua_setglobal(L, "ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE");
+  lua_pushboolean(L, std::getenv("ITGMANIA_HARNESS_HEADLESS_GRAPHICS") != nullptr);
+  lua_setglobal(L, "ITGMANIA_HARNESS_HEADLESS_GRAPHICS");
+  lua_pushcfunction(L, trace_headless_window_visible);
+  lua_setglobal(L, "ITGMANIA_HARNESS_WINDOW_VISIBLE");
+#endif
   lua_pushcfunction(L, trace_wrap);
   lua_setglobal(L, "ITGMANIA_HARNESS_WRAP");
   lua_pushboolean(L, true);

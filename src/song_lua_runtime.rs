@@ -115,8 +115,14 @@ fn capture_in(
         ))
     })?);
     let result_path = run_dir.join(RESULT_PATH);
-    let mut child = Command::new(&staged_binary)
-        .args(["--game=dance", &format!("--theme={THEME_NAME}")])
+    let headless_graphics = options.headless && options.drawable_samples;
+    if headless_graphics {
+        let binary = fs::read(&staged_binary).map_err(|error| Error::new(error.to_string()))?;
+        require_headless_graphics_adapter(&binary)?;
+    }
+    let mut command = Command::new(&staged_binary);
+    if headless_graphics { command.env("ITGMANIA_HARNESS_HEADLESS_GRAPHICS", "1"); }
+    let mut child = command.args(["--game=dance", &format!("--theme={THEME_NAME}")])
         .current_dir(staged_binary.parent().unwrap_or(run_dir))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -154,10 +160,15 @@ fn capture_in(
                     "ITGmania probe script reported: {message}"
                 )));
             }
-            if options.headless
+            if options.headless && !headless_graphics
                 && document.pointer("/display/video_renderers").and_then(Value::as_str) != Some("null")
             {
                 return Err(Error::new("ITGmania did not retain the requested null renderer"));
+            }
+            if headless_graphics && (document.pointer("/input/headless_graphics").and_then(Value::as_bool) != Some(true)
+                || document.pointer("/input/window_visible").and_then(Value::as_bool) != Some(false))
+            {
+                return Err(Error::new("native graphics capture did not remain offscreen"));
             }
             if options.until_gameplay_end {
                 if document.pointer("/completion/reason").and_then(Value::as_str) != Some("gameplay-exit") {
@@ -278,7 +289,7 @@ fn prepare_install(
     write(&portable, b"[Options]\n")?;
     write(
         &run_dir.join("Save/Preferences.ini"),
-        preferences(install_root, options.headless)?.as_bytes(),
+        preferences(install_root, options.headless, options.drawable_samples)?.as_bytes(),
     )?;
     write(
         &run_dir.join("Themes/itgmania-harness/ThemeInfo.ini"),
@@ -330,10 +341,20 @@ fn install_root(binary: &Path) -> Result<PathBuf, Error> {
     Ok(parent.to_owned())
 }
 
-fn preferences(install_root: &Path, headless: bool) -> Result<String, Error> {
+fn require_headless_graphics_adapter(binary: &[u8]) -> Result<(), Error> {
+    let marker = b"ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE";
+    if binary.windows(marker.len()).any(|bytes| bytes == marker) {
+        Ok(())
+    } else {
+        Err(Error::new("headless graphics requires the offscreen trace adapter; refusing to open a visible window"))
+    }
+}
+
+fn preferences(install_root: &Path, headless: bool, drawable_samples: bool) -> Result<String, Error> {
     // CheckVideoDefaultSettings replaces VideoRenderers when this differs.
     let renderer = if headless {
-        format!("VideoRenderers=null\nLastSeenVideoDriver={}\nShowLoadingWindow=0\n", video_driver()?)
+        let renderer = if drawable_samples { "opengl" } else { "null" };
+        format!("VideoRenderers={renderer}\nLastSeenVideoDriver={}\nShowLoadingWindow=0\n", video_driver()?)
     } else {
         String::new()
     };
@@ -1451,6 +1472,16 @@ mod tests {
         let ini = metrics("Simply-Love-SM5");
         assert!(ini.contains("FallbackTheme=Simply-Love-SM5"));
         assert!(!ini.contains("FallbackTheme=\"Simply-Love-SM5\""));
+    }
+
+    #[test]
+    fn headless_drawables_require_real_graphics_and_offscreen_adapter() {
+        let preferences = preferences(Path::new("fixture"), true, true).unwrap();
+        assert!(preferences.contains("VideoRenderers=opengl\n"));
+        assert!(preferences.contains("ShowLoadingWindow=0\n"));
+        assert!(!preferences.contains("VideoRenderers=null"));
+        assert!(require_headless_graphics_adapter(b"old executable").is_err());
+        assert!(require_headless_graphics_adapter(b"ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE").is_ok());
     }
 
     #[test]
