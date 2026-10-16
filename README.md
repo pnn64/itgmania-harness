@@ -158,11 +158,19 @@ cargo run -- verify path/to/baselines.toml --against path/to/baselines
 cargo run -- diff path/to/expected.json path/to/actual.json
 ```
 
-`song-lua-trace --headless` uses ITGmania's native null display driver. It
+`song-lua-trace --headless` without drawable samples uses ITGmania's native null display driver. It
 still launches the complete engine, including `ScreenGameplay`, `Player`,
 scoring and screen replacement. It records Lua semantics without opening a
 render window; it does not produce framebuffer reference images. Omit this
 option to use the install's normal renderer.
+
+On Windows, `--headless --drawable-samples` instead uses native OpenGL and AFTs
+with an invisible context window. Build the executable with the current
+`native/trace_adapter.cmake`; the CLI rejects an older adapter before launching
+it. Captures must report `input.headless_graphics=true` and
+`input.window_visible=false`. This mode preserves renderer-dependent song
+branches that the null driver disables, without showing or activating a game
+window. It records native drawables, not framebuffer reference images.
 
 Every executable capture records the actual gameplay-overlay update deltas,
 music positions, beats and monotonic wall times in `update_frames`. These
