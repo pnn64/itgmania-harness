@@ -269,6 +269,15 @@ fn prepare_install(
         true,
         None,
     )?;
+    // SL-Helpers scans GetCurrentThemeDirectory(), rather than searching the
+    // fallback chain. Its combo/judgment catalogs need the same asset namespace
+    // as the scripts staged above; otherwise valid fonts disappear in probes.
+    for directory in ["Fonts", "Graphics", "Other", "Sounds"] {
+        let source = fallback.join(directory);
+        if source.is_dir() {
+            copy_dir(&source, &run_dir.join("Themes/itgmania-harness").join(directory), true, None)?;
+        }
+    }
 
     for directory in [
         "Cache",
@@ -1500,6 +1509,11 @@ mod tests {
         write(&data.join("Defaults.ini"), b"[Options]\n").unwrap();
         create_dir(&fallback.join("Scripts")).unwrap();
         write(&fallback.join("Scripts/SL_Init.lua"), b"SL = {}\n").unwrap();
+        create_dir(&fallback.join("Fonts/_Combo Fonts/Wendy")).unwrap();
+        write(&fallback.join("Fonts/_Combo Fonts/Wendy/Wendy.ini"), b"[main]\n").unwrap();
+        write(&fallback.join("Fonts/_Combo Fonts/Wendy/Wendy 8x2.png"), b"combo atlas").unwrap();
+        create_dir(&fallback.join("Graphics/_Judgments")).unwrap();
+        write(&fallback.join("Graphics/_Judgments/Love 2x6.png"), b"judgment atlas").unwrap();
         write(&song.join("song.ssc"), b"#TITLE:Probe;\n").unwrap();
         write(&song.join("song.sm"), b"#TITLE:Requested SM;\n").unwrap();
         write(&song.join("other.SSC"), b"#TITLE:Competing SSC;\n").unwrap();
@@ -1545,6 +1559,10 @@ mod tests {
         assert!(run_dir
             .join("Themes/itgmania-harness/Scripts/SL_Init.lua")
             .is_file());
+        let theme = run_dir.join("Themes/itgmania-harness");
+        assert_eq!(fs::read(theme.join("Fonts/_Combo Fonts/Wendy/Wendy.ini")).unwrap(), b"[main]\n");
+        assert_eq!(fs::read(theme.join("Fonts/_Combo Fonts/Wendy/Wendy 8x2.png")).unwrap(), b"combo atlas");
+        assert_eq!(fs::read(theme.join("Graphics/_Judgments/Love 2x6.png")).unwrap(), b"judgment atlas");
         assert!(run_dir
             .join("Themes/itgmania-harness/BGAnimations/ScreenGameplay overlay.lua")
             .is_file());
