@@ -1532,6 +1532,7 @@ Json::Value spline_samples(const Json::Value& fixtures) {
   Json::Value out(Json::arrayValue);
   for (const auto& fixture : fixtures) {
     const auto& points = fixture["points"];
+    const bool looping = fixture.get("looping", false).asBool();
     if (!points.isArray() || points.empty() || points.size() > 65536)
       throw std::runtime_error("spline points must contain 1..65536 vectors");
     CubicSpline axes[3];
@@ -1539,7 +1540,8 @@ Json::Value spline_samples(const Json::Value& fixtures) {
       axes[axis].resize(points.size());
       for (Json::ArrayIndex i = 0; i < points.size(); ++i)
         axes[axis].set_point(i, number(points[i][axis], "spline point"));
-      axes[axis].solve_straight();
+      if (looping) axes[axis].solve_looped();
+      else axes[axis].solve_straight();
     }
     const float beats = field_number(fixture, "beats_per_t", 1, "spline");
     const float receptor = field_number(fixture, "receptor_t", 0, "spline");
@@ -1557,9 +1559,9 @@ Json::Value spline_samples(const Json::Value& fixtures) {
       row["song_beat"] = song;
       row["note_beat"] = note;
       for (int axis = 0; axis < 3; ++axis) {
-        row["position"].append(axes[axis].evaluate(t, false));
-        row["derivative"].append(axes[axis].evaluate_derivative(t, false));
-        row["receptor"].append(axes[axis].evaluate(receptor_t, false));
+        row["position"].append(axes[axis].evaluate(t, looping));
+        row["derivative"].append(axes[axis].evaluate_derivative(t, looping));
+        row["receptor"].append(axes[axis].evaluate(receptor_t, looping));
       }
       result["samples"].append(std::move(row));
     }
