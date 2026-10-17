@@ -21,6 +21,8 @@ Use `Program/ITGmania-harness-trace.exe` with `--itgmania-bin` on Windows.
 For headless captures the collector sets `ITGMANIA_HARNESS_HEADLESS`. The
 observed Windows crash handler saves the native `crashinfo.txt` and exits
 without opening its dialog. The collector reports that file immediately.
+After a Windows Release build, build the `itgmania-harness-crash-symbols`
+target to retain the matching `.vdi` sidecar beside the renamed executable.
 The stock executable remains intact for independent checks. Captures advertise
 `native_c_method_hooks` when the utility is present. Older executables keep
 the Lua hook; any lost tail-call provenance remains explicit and cannot

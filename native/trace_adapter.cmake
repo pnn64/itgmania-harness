@@ -137,6 +137,15 @@ function(itgmania_harness_trace_adapter)
   # Retain the stock executable for historical captures and independent checks.
   set(ITGMANIA_HARNESS_TRACE_NAME "ITGmania-harness-trace" CACHE STRING "Separate native trace executable name")
   set_target_properties(ITGmania PROPERTIES OUTPUT_NAME_RELEASE "${ITGMANIA_HARNESS_TRACE_NAME}")
+  if(MSVC)
+    # Upstream's mapconv command still writes the original product filename.
+    # CrashHandler looks for a sidecar matching this adapter's executable.
+    add_custom_target(itgmania-harness-crash-symbols
+      DEPENDS ITGmania
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE_DIR:ITGmania>/ITGmania.vdi"
+        "$<TARGET_FILE_DIR:ITGmania>/${ITGMANIA_HARNESS_TRACE_NAME}.vdi")
+  endif()
 endfunction()
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
   cmake_language(DEFER CALL itgmania_harness_trace_adapter)
