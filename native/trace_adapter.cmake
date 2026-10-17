@@ -57,6 +57,14 @@ function(itgmania_harness_interactive_source name)
     endforeach()
     itgmania_harness_observe_source("${name}" "${original}")
     return()
+  elseif(name STREQUAL "CrashHandlerChild.cpp")
+    # Retain the native crash report while suppressing the desktop dialog.
+    get_filename_component(local_dir "${path}" DIRECTORY)
+    foreach(header Crash.h CrashHandlerInternal.h)
+      string(REPLACE "#include \"${header}\"" "#include \"${local_dir}/${header}\"" original "${original}")
+    endforeach()
+    set(anchor "  CrashDialog cd(sCrashReport, Data);")
+    set(replacement "  if (GetEnvironmentVariableA(\"ITGMANIA_HARNESS_HEADLESS\", nullptr, 0)) return;\n${anchor}")
   elseif(name STREQUAL "GraphicsWindow.cpp")
     # Keep the real WGL renderer and native AFT implementation, but never show
     # or activate its context window during headless graphics observations.
@@ -124,6 +132,7 @@ function(itgmania_harness_trace_adapter)
   endforeach()
   if(WIN32)
     itgmania_harness_interactive_source("GraphicsWindow.cpp")
+    itgmania_harness_interactive_source("CrashHandlerChild.cpp")
   endif()
   # Retain the stock executable for historical captures and independent checks.
   set(ITGMANIA_HARNESS_TRACE_NAME "ITGmania-harness-trace" CACHE STRING "Separate native trace executable name")

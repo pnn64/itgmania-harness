@@ -121,6 +121,7 @@ fn capture_in(
         require_headless_graphics_adapter(&binary)?;
     }
     let mut command = Command::new(&staged_binary);
+    if options.headless { command.env("ITGMANIA_HARNESS_HEADLESS", "1"); }
     if headless_graphics { command.env("ITGMANIA_HARNESS_HEADLESS_GRAPHICS", "1"); }
     let mut child = command.args(["--game=dance", &format!("--theme={THEME_NAME}")])
         .current_dir(staged_binary.parent().unwrap_or(run_dir))
@@ -189,6 +190,13 @@ fn capture_in(
                 Error::new(format!("could not derive song Lua semantics: {source}"))
             })?;
             return Ok(document);
+        }
+        let crash_report = run_dir.join("crashinfo.txt");
+        if crash_report.is_file() {
+            return Err(Error::new(format!(
+                "ITGmania crashed before writing a semantic trace; crash report {}{}",
+                crash_report.display(), log_hint(run_dir)
+            )));
         }
         if let Some(status) = child
             .try_wait()
