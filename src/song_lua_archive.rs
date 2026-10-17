@@ -160,8 +160,9 @@ struct ArchiveIndexEntry {
     compressed_bytes: u64,
 }
 
-pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompressed: bool) -> Result<Report, Error> {
+pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompressed: bool, theme_assets: Option<&Path>) -> Result<Report, Error> {
     let songs_root = canonical_dir("open song corpus", songs_root)?;
+    let theme_assets = theme_assets.map(|path| canonical_dir("open theme assets", path)).transpose()?;
     let trace_root = canonical_dir("open semantic traces", trace_root)?;
     fs::create_dir_all(output_dir)
         .map_err(|source| Error::io("create archive directory", output_dir, source))?;
@@ -189,6 +190,7 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompr
             &trace,
             &semantic,
             entry,
+            theme_assets.as_deref(),
         )?;
         source_bytes += members
             .values()
@@ -252,6 +254,7 @@ fn archive_members(
     trace: &Value,
     semantic: &SemanticManifest,
     entry: &SemanticEntry,
+    theme_assets: Option<&Path>,
 ) -> Result<(BTreeMap<String, Vec<u8>>, ArchiveManifest), Error> {
     let native_gameplay = trace
         .pointer("/capabilities/native_screen_lifecycle")
@@ -312,6 +315,9 @@ fn archive_members(
     let mut members = BTreeMap::new();
     if native_gameplay {
         append_song_media(song_dir, song_dir, &mut members)?;
+    }
+    if let Some(theme_assets) = theme_assets {
+        append_theme_assets(theme_assets, theme_assets, &mut members)?;
     }
     let mut asset_members: BTreeSet<String> = members.keys().cloned().collect();
     members.insert(simfile_member.clone(), simfile_bytes);
@@ -481,6 +487,33 @@ fn archive_members(
         files,
     };
     Ok((members, manifest))
+}
+
+// Directory discovery (for example Simply Love's GetComboFonts) consumes the
+// current theme's catalog even without an authored song asset request. Store the
+// supplied capture theme in the portable theme namespace used by song fixtures.
+fn append_theme_assets(
+    root: &Path,
+    directory: &Path,
+    members: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), Error> {
+    for entry in fs::read_dir(directory)
+        .map_err(|error| Error::io("read theme asset directory", directory, error))?
+    {
+        let entry = entry.map_err(|error| Error::io("read theme asset entry", directory, error))?;
+        let path = entry.path();
+        let kind = entry.file_type().map_err(|error| Error::io("read theme asset type", &path, error))?;
+        if kind.is_symlink() {
+            return Err(Error(format!("theme asset collection does not support symlinks: {}", path.display())));
+        } else if kind.is_dir() {
+            append_theme_assets(root, &path, members)?;
+        } else if kind.is_file() && is_asset_path(&path) {
+            let relative = portable_relative(root, &path)?;
+            let bytes = fs::read(&path).map_err(|error| Error::io("read theme asset", &path, error))?;
+            members.insert(format!("song/__songlua_theme_path/{relative}"), bytes);
+        }
+    }
+    Ok(())
 }
 
 // Gameplay and native theme actors load song media outside authored Lua requests.
@@ -1442,9 +1475,26 @@ mod tests {
             itgmania: Some(provenance()),
             command_observer: None,
         };
+        let theme = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/tests/archive-current-theme");
+        let font = theme.join("Fonts/_Combo Fonts/Wendy");
+        fs::create_dir_all(&font).unwrap();
+        fs::write(font.join("Wendy.ini"), b"[main]\n").unwrap();
+        fs::write(font.join("Wendy 4x4.png"), b"font atlas").unwrap();
+        fs::write(font.join("ignored.lua"), b"return {}").unwrap();
+        let theme = theme.canonicalize().unwrap();
         let (members, manifest) =
-            archive_members(&root, &simfile, &source, &trace, &semantic, &entry)
+            archive_members(&root, &simfile, &source, &trace, &semantic, &entry, Some(&theme))
                 .expect("complete runtime dependency archive");
+        let prefix = "song/__songlua_theme_path/Fonts/_Combo Fonts/Wendy/";
+        assert_eq!(members[&format!("{prefix}Wendy.ini")], b"[main]\n");
+        assert_eq!(members[&format!("{prefix}Wendy 4x4.png")], b"font atlas");
+        assert!(!members.contains_key(&format!("{prefix}ignored.lua")));
+        for name in ["Wendy.ini", "Wendy 4x4.png"] {
+            let path = format!("{prefix}{name}");
+            let file = manifest.files.iter().find(|file| file.path == path).unwrap();
+            assert_eq!(file.role, "required-asset");
+            assert_eq!(file.sha256, hash_bytes(&members[&path]));
+        }
         assert!(serde_json::to_value(&manifest).unwrap()["runtime"].get("command_observer").is_none());
         let image = fs::read(root.join("fit-rect.png")).expect("native loaded image");
         assert_eq!(members.get("song/fit-rect.png"), Some(&image));
@@ -1505,7 +1555,7 @@ mod tests {
             serde_json::json!({"reason": "gameplay-exit", "stage_committed": true});
         let source = serde_json::to_vec(&native).expect("native metadata bytes");
         let (members, manifest) =
-            archive_members(&root, &simfile, &source, &native, &semantic, &entry)
+            archive_members(&root, &simfile, &source, &native, &semantic, &entry, None)
                 .expect("native gameplay archive");
         assert_eq!(manifest.itgmania.execution, "native_gameplay");
         assert!(manifest.itgmania.launches_executable);
@@ -1534,7 +1584,7 @@ mod tests {
             let mut incomplete = native.clone();
             *incomplete.pointer_mut(pointer).expect("capture field") = value;
             assert!(
-                archive_members(&root, &simfile, &source, &incomplete, &semantic, &entry).is_err(),
+                archive_members(&root, &simfile, &source, &incomplete, &semantic, &entry, None).is_err(),
                 "accepted incomplete capture at {pointer}"
             );
         }
@@ -1614,6 +1664,7 @@ mod tests {
             &trace,
             &semantic,
             &entry,
+            None,
         )
         .expect("model archive");
         let metadata = serde_json::to_value(&manifest).unwrap();

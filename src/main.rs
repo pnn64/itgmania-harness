@@ -590,6 +590,7 @@ struct SongLuaArchiveArgs {
     trace_root: PathBuf,
     output_dir: PathBuf,
     uncompressed: bool,
+    theme_assets: Option<PathBuf>,
 }
 
 fn parse_song_lua_archive_args(
@@ -602,9 +603,15 @@ fn parse_song_lua_archive_args(
     let mut trace_root = None;
     let mut output_dir = None;
     let mut uncompressed = false;
+    let mut theme_assets = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--uncompressed") if !uncompressed => uncompressed = true,
+            Some("--theme-assets") => set_once(
+                &mut theme_assets,
+                PathBuf::from(next_utf8(&mut args, "--theme-assets")?),
+                "--theme-assets",
+            )?,
             Some("--traces") => set_once(
                 &mut trace_root,
                 PathBuf::from(next_utf8(&mut args, "--traces")?),
@@ -634,11 +641,12 @@ fn parse_song_lua_archive_args(
         output_dir: output_dir
             .ok_or_else(|| CliError::Usage("song-lua-archive requires --out".into()))?,
         uncompressed,
+        theme_assets,
     })
 }
 
 fn run_song_lua_archive(args: SongLuaArchiveArgs) -> Result<(), CliError> {
-    let report = song_lua_archive::generate(&args.songs_root, &args.trace_root, &args.output_dir, args.uncompressed)
+    let report = song_lua_archive::generate(&args.songs_root, &args.trace_root, &args.output_dir, args.uncompressed, args.theme_assets.as_deref())
         .map_err(CliError::SongLuaArchive)?;
     println!(
         "wrote {} content-addressed song fixtures ({} source bytes to {} stored bytes); index: {}",
@@ -1311,7 +1319,7 @@ fn print_help() {
              [--difficulty Challenge] [--steps-type SOURCE]\n\
              [--beat-step BEATS] [--max-events COUNT] [--random-seed 1]\n\
              [--until-beat MINIMUM] [--simfile RELATIVE_PATH ...]\n\
-           itgmania-harness-rs song-lua-archive SONGS_DIR --traces DIR --out DIR [--uncompressed]\n\
+           itgmania-harness-rs song-lua-archive SONGS_DIR --traces DIR --out DIR [--uncompressed] [--theme-assets DIR]\n\
            itgmania-harness-rs song-lua-pack CANDIDATE.tar --report REPORT.json --out DIR\n\
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
              [--until-beat 16] [--style single] [--difficulty Challenge]\n\
@@ -1436,8 +1444,10 @@ mod tests {
 
     #[test]
     fn uncompressed_candidates_and_verified_pack_have_explicit_arguments() {
-        let args = ["songs", "--traces", "traces", "--out", "candidates", "--uncompressed"].map(OsString::from);
-        assert!(parse_song_lua_archive_args(args.into_iter()).unwrap().uncompressed);
+        let args = ["songs", "--traces", "traces", "--out", "candidates", "--uncompressed", "--theme-assets", "capture-theme"].map(OsString::from);
+        let archive = parse_song_lua_archive_args(args.into_iter()).unwrap();
+        assert!(archive.uncompressed);
+        assert_eq!(archive.theme_assets, Some(PathBuf::from("capture-theme")));
         let args = ["candidate.tar", "--report", "report.json", "--out", "accepted"].map(OsString::from);
         let parsed = parse_song_lua_pack_args(args.into_iter()).unwrap();
         assert_eq!(parsed.report, PathBuf::from("report.json"));

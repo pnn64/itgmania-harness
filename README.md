@@ -714,6 +714,11 @@ verify this corpus.
 content-addressed `.tar.zst`. It reads the semantic corpus generated above and
 does not launch ITGmania:
 
+Pass `--theme-assets DIR` with the captured install's current theme directory
+to retain its asset catalog under `song/__songlua_theme_path/`. This includes
+font atlases and INI files used by Simply Love's `GetComboFonts` directory
+discovery, so the independent replay constructs the same Combo child tree.
+
 Use `cargo build --release` and `target/release/itgmania-harness-rs` for large
 captures and archives. Native gameplay updates remain ordered because Lua and
 engine state carry across frames. Archive compression uses up to four CPU
