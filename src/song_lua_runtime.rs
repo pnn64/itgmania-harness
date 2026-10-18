@@ -1,4 +1,5 @@
 use serde_json::Value;
+use sha2::Digest;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -190,6 +191,16 @@ fn capture_in(
             }
             validate_runtime_inputs(&document)?;
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
+            // The installed probe wraps Actor::addcommand unconditionally.
+            // Keep that observation profile with its trace so a legacy archive
+            // template cannot silently disable matching command observations.
+            let capture_binary = std::env::current_exe().and_then(fs::read)
+                .map_err(|source| Error::new(format!("could not hash capture executable: {source}")))?;
+            document["command_observer"] = serde_json::json!({
+                "dynamic_commands": true,
+                "capture_binary_sha256": sha2::Sha256::digest(&capture_binary).iter()
+                    .map(|byte| format!("{byte:02x}")).collect::<String>(),
+            });
             crate::song_lua_semantics::enrich(&mut document).map_err(|source| {
                 Error::new(format!("could not derive song Lua semantics: {source}"))
             })?;

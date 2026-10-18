@@ -420,6 +420,10 @@ fn archive_members(
         })
         .collect();
     let itgmania = entry.itgmania.as_ref().unwrap_or(&semantic.itgmania);
+    let command_observer = trace.get("command_observer")
+        .map(|value| serde_json::from_value::<CommandObserverMetadata>(value.clone())
+            .map_err(|error| Error(format!("invalid native command observer profile: {error}"))))
+        .transpose()?.or_else(|| entry.command_observer.clone());
     let manifest = ArchiveManifest {
         archive_schema_version: ARCHIVE_SCHEMA_VERSION,
         fixture_schema_version: semantic.fixture_schema_version,
@@ -455,7 +459,7 @@ fn archive_members(
             } else {
                 "fixed-update-rate"
             },
-            command_observer: entry.command_observer.clone(),
+            command_observer,
             random_state: RandomState {
                 source: "ITGmania MersenneTwister",
                 seed: trace.get("random_seed").and_then(Value::as_u64),
@@ -1646,7 +1650,7 @@ mod tests {
             itgmania: provenance(),
             simfiles: vec![],
         };
-        let entry = SemanticEntry {
+        let mut entry = SemanticEntry {
             simfile: "model.sm".into(),
             fixture: "semantic.json".into(),
             title: "Model".into(),
@@ -1685,6 +1689,18 @@ mod tests {
         }
         assert!(!members.contains_key("song/lua/body/textures/unrelated.png"));
         assert!(manifest.required_assets.iter().all(|asset| asset.exists));
+
+        // A trace produced by a current probe retains its actual observation
+        // profile even when archived with a legacy semantic entry.
+        let mut trace_with_profile = trace.clone();
+        trace_with_profile["command_observer"] = serde_json::to_value(entry.command_observer.take()).unwrap();
+        let (_, from_trace) = archive_members(&root, &root.join("model.sm"),
+            &serde_json::to_vec(&trace_with_profile).unwrap(), &trace_with_profile,
+            &semantic, &entry, None).unwrap();
+        let metadata = serde_json::to_value(from_trace).unwrap();
+        assert_eq!(metadata["runtime"]["command_observer"]["dynamic_commands"], true);
+        assert_eq!(metadata["runtime"]["command_observer"]["capture_binary_sha256"],
+            "0123456789abcdef".repeat(4));
     }
 
     #[test]
