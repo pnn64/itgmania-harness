@@ -172,6 +172,7 @@ fn parse_song_lua_trace_args(
     let mut input_script = None;
     let mut drawable_samples = false;
     let mut capture_fps = None;
+    let mut fixed_update_fps = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -277,6 +278,14 @@ fn parse_song_lua_trace_args(
                 }
                 set_once(&mut capture_fps, fps, "--capture-fps")?;
             }
+            Some("--fixed-update-fps") => {
+                let raw = next_utf8(&mut args, "--fixed-update-fps")?;
+                let fps = raw.parse::<u32>().map_err(|_| CliError::Usage("fixed update FPS must be an integer in 1..=1000".into()))?;
+                if !(1..=1000).contains(&fps) {
+                    return Err(CliError::Usage("fixed update FPS must be an integer in 1..=1000".into()));
+                }
+                set_once(&mut fixed_update_fps, fps, "--fixed-update-fps")?;
+            }
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -316,6 +325,7 @@ fn parse_song_lua_trace_args(
             },
             drawable_samples,
             capture_fps,
+            fixed_update_fps,
         },
         out,
     })
@@ -1336,7 +1346,7 @@ fn print_help() {
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
-             [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000]\n\
+             [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\

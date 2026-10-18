@@ -1052,6 +1052,7 @@ function trace.capture_inputs(game_mode_initialized)
 		default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
 		visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
 		display_aspect_ratio = PREFSMAN:GetPreference("DisplayAspectRatio"),
+        constant_update_delta_seconds = PREFSMAN:GetPreference("ConstantUpdateDeltaSeconds"),
 	}
 	local windows, players = {}, {}
 	for _, window in ipairs({"W1", "W2", "W3", "W4", "W5", "Hold", "Mine", "Roll", "Attack", "Checkpoint"}) do

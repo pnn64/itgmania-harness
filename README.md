@@ -1282,3 +1282,11 @@ the actual resulting update deltas and clocks. The period is recorded under
 input.observer_frame_period_seconds; it prevents thousands of empty null-display
 startup frames. Texture image and allocation dimensions are observed separately
 so consumers can compare sampling coordinates across padded and unpadded uploads.
+
+`--fixed-update-fps N` opts a capture into ITGmania's stock
+`ConstantUpdateDeltaSeconds=1/N` preference. It leaves the default variable
+update clock unchanged. This is useful when expensive recording makes a
+self-queued Lua timer spend longer recording its callbacks than the timer's
+interval. The trace records the actual preference and every native frame delta;
+replay still compares all captured frames and events. A fixed-clock capture does
+not establish coverage for the default variable-clock profile.

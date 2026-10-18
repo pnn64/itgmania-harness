@@ -43,6 +43,7 @@ pub struct Options {
     pub inputs: Vec<ScheduledInput>,
     pub drawable_samples: bool,
     pub capture_fps: Option<u32>,
+    pub fixed_update_fps: Option<u32>,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -85,6 +86,9 @@ fn validate_options(options: &Options) -> Result<(), Error> {
     }
     if options.capture_fps.is_some_and(|fps| !(1..=1000).contains(&fps)) {
         return Err(Error::new("capture FPS must be in 1..=1000"));
+    }
+    if options.fixed_update_fps.is_some_and(|fps| !(1..=1000).contains(&fps)) {
+        return Err(Error::new("fixed update FPS must be in 1..=1000"));
     }
     if options.max_events == 0 {
         return Err(Error::new("runtime event limit must be greater than zero"));
@@ -319,10 +323,13 @@ fn prepare_install(
             .map_err(|error| io_error("replace staged Portable.ini", &portable, error))?;
     }
     write(&portable, b"[Options]\n")?;
-    write(
-        &run_dir.join("Save/Preferences.ini"),
-        preferences(install_root, options.headless, options.drawable_samples)?.as_bytes(),
-    )?;
+    let mut native_preferences = preferences(install_root, options.headless, options.drawable_samples)?;
+    if let Some(fps) = options.fixed_update_fps {
+        // Stock GameLoop preference: keep observer overhead from amplifying
+        // self-queued callbacks into an unbounded catch-up update.
+        native_preferences.push_str(&format!("ConstantUpdateDeltaSeconds={:.17}\n", 1.0 / f64::from(fps)));
+    }
+    write(&run_dir.join("Save/Preferences.ini"), native_preferences.as_bytes())?;
     write(
         &run_dir.join("Themes/itgmania-harness/ThemeInfo.ini"),
         b"[ThemeInfo]\nDisplayName=ITGmania Harness\nAuthor=deadsync\n",
@@ -1149,6 +1156,7 @@ mod tests {
             inputs: Vec::new(),
             drawable_samples: false,
             capture_fps: None,
+            fixed_update_fps: None,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -1564,6 +1572,7 @@ mod tests {
             inputs: Vec::new(),
             drawable_samples: false,
             capture_fps: None,
+            fixed_update_fps: Some(60),
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();
@@ -1597,6 +1606,9 @@ mod tests {
         assert!(preferences.contains("AdditionalFoldersReadOnly="));
         assert!(preferences.contains("TestInitialScreen=ScreenSongLuaHarness"));
         assert!(preferences.contains("VideoRenderers=null"));
+        let delta = preferences.lines().find_map(|line| line.strip_prefix("ConstantUpdateDeltaSeconds="))
+            .unwrap().parse::<f64>().unwrap();
+        assert_eq!(delta as f32, 1.0_f32 / 60.0);
         let sm_run = fixture.join("sm-run");
         create_dir(&sm_run).unwrap();
         let sm = song.join("song.sm");
