@@ -520,7 +520,9 @@ local function install_definition_hook()
 		-- Def constructor. Observe that result before XNode conversion and actor
 		-- creation. Unwrap prior observers so merged commands still run once.
 		local result = original_concat(unwrapped_definition(left), unwrapped_definition(right))
-		if is_song_definition(result) then register_tree(result) end
+		-- MergeTables can replace a leaf song actor's _Source and combine its
+		-- callbacks into a theme closure. Retain the observed operands' origin.
+		if definition_by_table[left] or definition_by_table[right] or is_song_definition(result) then register_tree(result) end
 		return result
 	end
 	local metatable = getmetatable(Def)
