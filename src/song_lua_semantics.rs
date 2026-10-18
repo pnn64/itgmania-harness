@@ -249,15 +249,38 @@ struct DrawOrder {
 }
 
 pub fn enrich(document: &mut Value) -> Result<(), Error> {
-    let events = read_array::<Event>(document, "events")?;
     let definitions = read_array::<Definition>(document, "actor_definitions")?;
     let actors = if document.get("runtime_actors").is_some() {
         read_array::<RuntimeActor>(document, "runtime_actors")?
     } else {
         Vec::new()
     };
-    let (segments, controls, validates_time) = build_tweens(&events);
-    let draw_orders = build_draw_orders(&definitions, &actors, &events);
+    let values = document.get("events")
+        .ok_or_else(|| Error("semantic trace has no `events` array".into()))?
+        .as_array().ok_or_else(|| Error("invalid semantic trace `events`: expected array".into()))?;
+    // Keep the original JSON events intact. Deserialize one typed view at a time
+    // rather than duplicating the entire multi-million-event tape in memory.
+    let mut draw_events = Vec::new();
+    let mut seen_actors = HashSet::new();
+    let mut retained_last = false;
+    let events = values.iter().map(|value| {
+        let event = Event::deserialize(value)
+            .map_err(|source| Error(format!("invalid semantic trace `events`: {source}")))?;
+        let first_actor_event = event.actor.as_ref()
+            .is_some_and(|actor| seen_actors.insert(actor.clone()));
+        retained_last = first_actor_event || matches!(event.operation.as_str(),
+            "Actor.draworder" | "ActorFrame.SortByDrawOrder" | "ActorFrame.SetDrawByZPosition");
+        if retained_last { draw_events.push(event.clone()); }
+        Ok(event)
+    });
+    let (segments, controls, validates_time) = build_tweens(events)?;
+    // Draw-order derivation also uses the final sequence as its fallback load
+    // boundary, even when the last event has no draw-order effect.
+    if !retained_last && let Some(last) = values.last() {
+        draw_events.push(Event::deserialize(last)
+            .map_err(|source| Error(format!("invalid semantic trace `events`: {source}")))?);
+    }
+    let draw_orders = build_draw_orders(&definitions, &actors, &draw_events);
     let projected_layout = document
         .get("projected_vertex_tracks")
         .and_then(Value::as_array)
@@ -678,12 +701,15 @@ fn is_actor_state_call(event: &Event, method: &str) -> bool {
         )
 }
 
-fn build_tweens(events: &[Event]) -> (Vec<TweenSegment>, Vec<TweenControl>, bool) {
+fn build_tweens(events: impl IntoIterator<Item = Result<Event, Error>>)
+    -> Result<(Vec<TweenSegment>, Vec<TweenControl>, bool), Error> {
     let mut segments = Vec::<TweenSegment>::new();
     let mut controls = Vec::new();
     let mut active = HashMap::<String, usize>::new();
     let mut validates_time = false;
     for event in events {
+        let event = event?;
+        let event = &event;
         if matches!(event.operation.as_str(), "command.begin" | "callback.begin") {
             active.retain(|_, index| segments[*index].kind != "immediate");
             if let Some(actor) = event.actor.as_deref() {
@@ -756,7 +782,7 @@ fn build_tweens(events: &[Event]) -> (Vec<TweenSegment>, Vec<TweenControl>, bool
             push_state_operation(event, actor, &mut segments, &mut active);
         }
     }
-    (segments, controls, validates_time)
+    Ok((segments, controls, validates_time))
 }
 
 fn push_active(
@@ -981,6 +1007,35 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_analysis_still_rejects_invalid_query_events() {
+        let mut trace = json!({"actor_definitions": [], "events": [
+            {"kind":"query", "operation":"GameState.GetSongBeat", "seq":"invalid"}
+        ]});
+        assert!(enrich(&mut trace).unwrap_err().to_string().contains("invalid semantic trace `events`"));
+        assert!(trace.get("tween_segments").is_none());
+    }
+
+    #[test]
+    fn streaming_draw_analysis_preserves_non_draw_load_and_end_boundaries() {
+        let mut trace = json!({"actor_definitions":[
+            {"id":"parent","runtime_actors":["parent"],"children":[{"layer_index":1,"definition_id":"child"}]},
+            {"id":"child","runtime_actors":["child"],"children":[]}
+        ],"events":[
+            {"seq":1,"kind":"query","actor":"parent","operation":"Actor.GetName"},
+            {"seq":2,"kind":"call","actor":"child","operation":"Actor.draworder","args":[2]},
+            {"seq":3,"kind":"call","actor":"parent","operation":"ActorFrame.SortByDrawOrder"},
+            {"seq":4,"kind":"query","operation":"GameState.GetSongBeat"}
+        ]});
+        let definitions=read_array::<Definition>(&trace,"actor_definitions").unwrap();
+        let events=read_array::<Event>(&trace,"events").unwrap();
+        let expected=to_value(build_draw_orders(&definitions,&[],&events)).unwrap();
+        let original=trace["events"].clone();
+        enrich(&mut trace).unwrap();
+        assert_eq!(trace["draw_orders"],expected);
+        assert_eq!(trace["events"],original);
+    }
 
     #[test]
     fn derives_tween_segments_and_native_duration_samples() {

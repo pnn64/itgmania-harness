@@ -186,12 +186,13 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompr
         let (members, manifest) = archive_members(
             &songs_root,
             &simfile,
-            &trace_bytes,
+            trace_bytes,
             &trace,
             &semantic,
             entry,
             theme_assets.as_deref(),
         )?;
+        drop(trace);
         source_bytes += members
             .values()
             .map(|bytes| bytes.len() as u64)
@@ -250,7 +251,7 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompr
 fn archive_members(
     songs_root: &Path,
     simfile: &Path,
-    trace_bytes: &[u8],
+    trace_bytes: Vec<u8>,
     trace: &Value,
     semantic: &SemanticManifest,
     entry: &SemanticEntry,
@@ -321,7 +322,7 @@ fn archive_members(
     }
     let mut asset_members: BTreeSet<String> = members.keys().cloned().collect();
     members.insert(simfile_member.clone(), simfile_bytes);
-    members.insert(trace_member.clone(), trace_bytes.to_vec());
+    members.insert(trace_member.clone(), trace_bytes);
     let mut lua_members = Vec::with_capacity(lua_paths.len());
     for path in &lua_paths {
         let relative = portable_relative(song_dir, path)?;
@@ -1487,7 +1488,7 @@ mod tests {
         fs::write(font.join("ignored.lua"), b"return {}").unwrap();
         let theme = theme.canonicalize().unwrap();
         let (members, manifest) =
-            archive_members(&root, &simfile, &source, &trace, &semantic, &entry, Some(&theme))
+            archive_members(&root, &simfile, source.clone(), &trace, &semantic, &entry, Some(&theme))
                 .expect("complete runtime dependency archive");
         let prefix = "song/__songlua_theme_path/Fonts/_Combo Fonts/Wendy/";
         assert_eq!(members[&format!("{prefix}Wendy.ini")], b"[main]\n");
@@ -1559,7 +1560,7 @@ mod tests {
             serde_json::json!({"reason": "gameplay-exit", "stage_committed": true});
         let source = serde_json::to_vec(&native).expect("native metadata bytes");
         let (members, manifest) =
-            archive_members(&root, &simfile, &source, &native, &semantic, &entry, None)
+            archive_members(&root, &simfile, source.clone(), &native, &semantic, &entry, None)
                 .expect("native gameplay archive");
         assert_eq!(manifest.itgmania.execution, "native_gameplay");
         assert!(manifest.itgmania.launches_executable);
@@ -1588,7 +1589,7 @@ mod tests {
             let mut incomplete = native.clone();
             *incomplete.pointer_mut(pointer).expect("capture field") = value;
             assert!(
-                archive_members(&root, &simfile, &source, &incomplete, &semantic, &entry, None).is_err(),
+                archive_members(&root, &simfile, source.clone(), &incomplete, &semantic, &entry, None).is_err(),
                 "accepted incomplete capture at {pointer}"
             );
         }
@@ -1664,7 +1665,7 @@ mod tests {
         let (members, manifest) = archive_members(
             &root,
             &root.join("model.sm"),
-            &serde_json::to_vec(&trace).expect("trace bytes"),
+            serde_json::to_vec(&trace).expect("trace bytes"),
             &trace,
             &semantic,
             &entry,
@@ -1695,7 +1696,7 @@ mod tests {
         let mut trace_with_profile = trace.clone();
         trace_with_profile["command_observer"] = serde_json::to_value(entry.command_observer.take()).unwrap();
         let (_, from_trace) = archive_members(&root, &root.join("model.sm"),
-            &serde_json::to_vec(&trace_with_profile).unwrap(), &trace_with_profile,
+            serde_json::to_vec(&trace_with_profile).unwrap(), &trace_with_profile,
             &semantic, &entry, None).unwrap();
         let metadata = serde_json::to_value(from_trace).unwrap();
         assert_eq!(metadata["runtime"]["command_observer"]["dynamic_commands"], true);

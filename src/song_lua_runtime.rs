@@ -166,6 +166,7 @@ fn capture_in(
                     result_path.display()
                 ))
             })?;
+            drop(bytes);
             if let Some(message) = document.get("error").and_then(Value::as_str) {
                 return Err(Error::new(format!(
                     "ITGmania probe script reported: {message}"

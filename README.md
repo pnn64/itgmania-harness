@@ -1302,3 +1302,10 @@ once the outermost native binding has returned. This bounds event-table growth
 during timer catch-up in a single screen update. Nested bindings retain their
 original event order and complete return/tween details before flushing. Native
 binding errors keep the existing callback error behavior.
+
+Semantic analysis validates and derives events one at a time, retaining the
+original complete event tape. It keeps only draw-relevant events and load/end
+boundaries for draw-order derivation. Archive creation moves the existing trace
+byte buffer into the archive and releases its parsed JSON before writing, avoiding
+duplicate multi-GB buffers. `song-lua-analyze` can process a retained native result
+without rerunning the song.

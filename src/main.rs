@@ -383,6 +383,7 @@ fn emit_song_lua_analysis(args: SongLuaAnalysisArgs) -> Result<(), CliError> {
         path: args.trace,
         source,
     })?;
+    drop(bytes);
     song_lua_semantics::enrich(&mut document).map_err(CliError::SongLuaSemantics)?;
     emit_json_document(&document, args.out)
 }
