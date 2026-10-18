@@ -11,6 +11,23 @@ local actor_paths = setmetatable({}, {__mode = "k"})
 local actor_records = setmetatable({}, {__mode = "k"})
 local actors = {}
 local events = {}
+-- Completed events are spooled between screen updates. Keeping every event as
+-- a Lua table makes long captures spend most of their time in the collector.
+local event_spool, spooled_events = nil, 0
+local function flush_events()
+    if #events == 0 then return end
+    if not event_spool then
+        event_spool = RageFileUtil:CreateRageFile()
+        assert(event_spool:Open(cfg.result_path .. ".events", 2), "cannot open event spool")
+    end
+    local encoded = JsonEncode(events, true):gsub("%s+$", "")
+    assert(encoded:sub(1, 1) == "[" and encoded:sub(-1) == "]", "invalid event array")
+    if spooled_events > 0 then assert(event_spool:Write(",") == 1) end
+    local contents = encoded:sub(2, -2)
+    assert(event_spool:Write(contents) == #contents, "cannot write complete event spool")
+    spooled_events = spooled_events + #events
+    events = {}
+end
 local update_frames = {}
 local input_events = {}
 local injected_commands = {}
@@ -392,7 +409,7 @@ local function safe_args(args, first)
 end
 
 local function emit(kind, actor, operation, args, detail)
-	if #events >= cfg.max_events then
+	if next_sequence >= cfg.max_events then
 		dropped_events = dropped_events + 1
 		return nil
 	end
@@ -970,12 +987,27 @@ local function reachable_definitions()
 end
 
 local function write_result(document)
-	local file = RageFileUtil:CreateRageFile()
-	if file:Open(cfg.result_path, 2) then
-		file:Write(JsonEncode(document, true))
-		file:Close()
-	end
-	file:destroy()
+    flush_events()
+    if event_spool then event_spool:Close(); event_spool:destroy() end
+    -- RageFile publishes its temporary output atomically on Close.
+    local file = RageFileUtil:CreateRageFile()
+    assert(file:Open(cfg.result_path, 2), "cannot open trace result")
+    document.events = nil
+    local metadata = JsonEncode(document, true):gsub("%s+$", "")
+    local prefix = metadata:sub(1, -2) .. ',"events":['
+    assert(file:Write(prefix) == #prefix, "cannot write trace metadata")
+    if spooled_events > 0 then
+        local spool = RageFileUtil:CreateRageFile()
+        assert(spool:Open(cfg.result_path .. ".events", 1), "cannot read event spool")
+        while true do
+            local chunk = spool:ReadBytes(1048576)
+            if #chunk == 0 then break end
+            assert(file:Write(chunk) == #chunk, "cannot write trace events")
+        end
+        spool:Close(); spool:destroy()
+    end
+    assert(file:Write("]}") == 2, "cannot finish trace result")
+    file:Close(); file:destroy()
 end
 
 local trace = {}
@@ -1308,6 +1340,9 @@ end
 if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 	ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE = function(delta)
 		if finished or scene_count == 0 then return end
+        -- No authored command or native method is in flight at this boundary;
+        -- nested calls have finished filling their parent event details.
+        if #events >= 4096 then flush_events() end
 		local period = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60)
 		if period then ITGMANIA_HARNESS_PACE_CAPTURE(period) end
 		scene_frame = scene_frame + 1
