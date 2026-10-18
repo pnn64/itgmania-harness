@@ -1241,6 +1241,11 @@ Player judgment progress and full scene reconstruction remain unsupported.
 
 ### Interactive executable traces
 
+Harness 0.1.81 records each SongOptions and PlayerOptions `Approach` timer delta
+in `update_frames[].option_deltas` (`song` and `players`). `ModsGroup::Update`
+replaces the screen delta with a separate `RageTimer` delta for each group.
+These are clock inputs; the observer does not change options or authored results.
+
 Build the executable with `native/trace_adapter.cmake`, then add
 `--input-script controls.json --drawable-samples` to `song-lua-trace`.
 These features require the native observer adapter and fail if observation is

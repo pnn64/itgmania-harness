@@ -4,6 +4,8 @@
 #include "ActorMultiVertex.h"
 #include "BitmapText.h"
 #include "GameInput.h"
+#include "GameState.h"
+#include "PlayerState.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
 #include "LuaManager.h"
@@ -17,6 +19,19 @@
 
 namespace {
 Actor* drawing = nullptr;
+float option_song_delta = 0;
+float option_player_delta[NUM_PLAYERS] = {};
+
+int option_deltas(lua_State* L) {
+  lua_createtable(L, 0, 2);
+  lua_pushnumber(L, option_song_delta); lua_setfield(L, -2, "song");
+  lua_createtable(L, NUM_PLAYERS, 0);
+  for (int player = 0; player < NUM_PLAYERS; ++player) {
+    lua_pushnumber(L, option_player_delta[player]); lua_rawseti(L, -2, player + 1);
+  }
+  lua_setfield(L, -2, "players");
+  return 1;
+}
 struct RenderState { bool write = false, wrap = false, filter = true; int test = 0, blend = 0, cull = 0; float bias = 0; } state;
 
 // Observational failures are distinct from errors in authored Lua.
@@ -58,6 +73,8 @@ int pace_capture(lua_State* L) {
   return 0;
 }
 void register_interactive(Lua* L) {
+  lua_pushcfunction(L, option_deltas);
+  lua_setglobal(L, "ITGMANIA_HARNESS_OPTION_DELTAS");
   lua_pushcfunction(L, pace_capture);
   lua_setglobal(L, "ITGMANIA_HARNESS_PACE_CAPTURE");
   lua_pushcfunction(L, inject_input);
@@ -66,6 +83,20 @@ void register_interactive(Lua* L) {
   lua_setglobal(L, "ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE");
 }
 REGISTER_WITH_LUA_FUNCTION(register_interactive)
+}
+
+void itgmania_harness_option_delta(const void* options, float delta, bool song) {
+  // Approach receives the independent ModsGroup RageTimer delta. Observe this
+  // input without changing the timer, options, or authored Lua results.
+  if (!GAMESTATE) return;
+  if (song) {
+    if (options == &GAMESTATE->m_SongOptions.GetCurrent()) option_song_delta = delta;
+  } else {
+    for (int player = 0; player < NUM_PLAYERS; ++player) {
+      const auto* state = GAMESTATE->m_pPlayerState[player];
+      if (state && options == &state->m_PlayerOptions.GetCurrent()) option_player_delta[player] = delta;
+    }
+  }
 }
 
 void itgmania_harness_before_screen_update(float delta) {

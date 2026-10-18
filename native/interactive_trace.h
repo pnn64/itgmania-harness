@@ -6,6 +6,7 @@ struct RageSpriteVertex;
 struct lua_State;
 
 void itgmania_harness_before_screen_update(float delta);
+void itgmania_harness_option_delta(const void* options, float delta, bool song);
 void itgmania_harness_after_screen_draw();
 struct ItgmaniaHarnessDrawFrame {
   ~ItgmaniaHarnessDrawFrame() { itgmania_harness_after_screen_draw(); }

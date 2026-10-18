@@ -954,6 +954,7 @@ function trace.sample_update(delta)
 		sequence = #update_frames + 1, scene = scene_count,
 		delta = delta, seconds = seconds, beat = beat,
 		wall_seconds = GetTimeSinceStart(),
+		option_deltas = ITGMANIA_HARNESS_OPTION_DELTAS and ITGMANIA_HARNESS_OPTION_DELTAS() or nil,
 	}
 end
 
@@ -1107,6 +1108,7 @@ function trace.finish(completion)
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
 			native_update_frames = true,
+			native_option_clock_deltas = type(ITGMANIA_HARNESS_OPTION_DELTAS) == "function",
 			native_event_scenes = true,
 			native_call_sources = true,
 			native_constructor_queries = true,
