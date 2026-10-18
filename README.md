@@ -1296,3 +1296,9 @@ isolates Lua 5.1 table iteration from differences in recorder/host allocation
 pressure. Explicit authored `collectgarbage` calls still work. The trace records
 `input.lua_gc_mode`; replay must use the same initial VM input. Coverage of the
 default automatic collector is separate from this profile.
+
+The recorder also flushes completed events inside long authored callbacks,
+once the outermost native binding has returned. This bounds event-table growth
+during timer catch-up in a single screen update. Nested bindings retain their
+original event order and complete return/tween details before flushing. Native
+binding errors keep the existing callback error behavior.

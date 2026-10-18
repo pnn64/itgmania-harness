@@ -14,11 +14,15 @@ local actor_paths = setmetatable({}, {__mode = "k"})
 local actor_records = setmetatable({}, {__mode = "k"})
 local actors = {}
 local events = {}
--- Completed events are spooled between screen updates. Keeping every event as
--- a Lua table makes long captures spend most of their time in the collector.
+local active_context = nil
+local native_method_depth = 0
+-- Flush completed events during long authored callbacks too. A single native
+-- update can execute thousands of queued timers before the screen hook runs.
 local event_spool, spooled_events = nil, 0
 local function flush_events()
-    if #events == 0 then return end
+    if #events == 0 or native_method_depth > 0 then return end
+    local previous_context = active_context
+    active_context = nil
     if not event_spool then
         event_spool = RageFileUtil:CreateRageFile()
         assert(event_spool:Open(cfg.result_path .. ".events", 2), "cannot open event spool")
@@ -30,6 +34,7 @@ local function flush_events()
     assert(event_spool:Write(contents) == #contents, "cannot write complete event spool")
     spooled_events = spooled_events + #events
     events = {}
+    active_context = previous_context
 end
 local update_frames = {}
 local input_events = {}
@@ -53,7 +58,6 @@ local actor_identity_inputs = {}
 local actor_creation_inputs = {}
 local creation_observed = setmetatable({}, {__mode = "k"})
 local identity_observed = setmetatable({}, {__mode = "k"})
-local active_context = nil
 local next_sequence = 0
 local dropped_events = 0
 local finished = false
@@ -448,8 +452,11 @@ end
 
 local function call_in_context(context, fn, ...)
 	local previous = active_context
+	local previous_depth = native_method_depth
 	active_context = context
 	local result = pack(pcall(fn, ...))
+	-- A native binding error can unwind its observer before normal completion.
+	native_method_depth = previous_depth
 	if not result[1] then
 		emit("error", nil, "callback.error", {}, {message = tostring(result[2])})
 	end
@@ -470,9 +477,11 @@ local function command_wrapper(definition, name, original)
 		local actor_id = definition and bind_actor(actor, definition) or external_actor(actor)
 		if definition then capture_actor_identity(actor, definition, actor_id, name) end
 		local previous = active_context
+		local previous_depth = native_method_depth
 		active_context = context
 		emit("command", actor_id, "command.begin", {}, {name = name})
 		local result = pack(pcall(original, actor, ...))
+		native_method_depth = previous_depth
 		if result[1] then
 			emit("command", actor_id, "command.end", {}, {name = name})
 			active_context = previous
@@ -928,7 +937,10 @@ local function install_class_hook(class)
 					end
 				end
 			end
+			local previous_depth = native_method_depth
+			native_method_depth = previous_depth + 1
 			local result = pack(original(unpack(args, 1, args.n)))
+			native_method_depth = previous_depth
 			assign_result_path(class, name, args, result[1])
 			if event and (is_query or event.kind == "modifier") then
 				event.detail = {results = safe_args(result, 1)}
@@ -947,6 +959,9 @@ local function install_class_hook(class)
 					end
 				end
 			end
+			-- Nested calls can still mutate their parent's event after returning.
+			-- Only flush once all native bindings on this stack have completed.
+			if native_method_depth == 0 and #events >= 4096 then flush_events() end
 			return unpack(result, 1, result.n)
 		end
 		if type(native_wrap) == "function" then methods[name] = native_wrap(methods[name]) end
