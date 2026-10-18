@@ -18,6 +18,8 @@ local drawable_samples = {}
 local drawable_frames = {}
 local dropped_input_events, dropped_drawable_samples = 0, 0
 local scene_frame, next_input = 0, 1
+local native_frame_delta, sampled_scene, sampled_scene_frame = nil, nil, nil
+local capture_callback_input = nil
 local pending_finish, finishing_after_draw = nil, false
 local random_reseeds = {}
 local dropped_random_reseeds = 0
@@ -590,6 +592,12 @@ local function wrap_callback(method, callback)
 	local context = callback_context(method)
 	if not context or type(callback) ~= "function" then return callback end
 	return function(...)
+		-- The gameplay overlay can stop updating one native tick before the
+		-- song foreground. Retain that tick's real ScreenManager delta and
+		-- song clock before invoking the authored callback.
+		if method == "SetUpdateFunction" and capture_callback_input and scene_frame > 0 then
+			capture_callback_input(native_frame_delta, "song-update-callback")
+		end
 		return call_in_context(context, callback, ...)
 	end
 end
@@ -943,20 +951,26 @@ end
 
 -- Clock inputs are recorded separately from stage-statistic observations.
 -- Replayers use delta/music/wall time and derive their own beats and scores.
-function trace.sample_update(delta)
+function trace.sample_update(delta, origin)
 	if finished then return end
+	if scene_frame > 0 and sampled_scene == scene_count and sampled_scene_frame == scene_frame then return end
+	if scene_frame > 0 then delta = native_frame_delta end
 	if #update_frames >= 1000000 then
 		dropped_update_frames = dropped_update_frames + 1
 		return
 	end
 	local beat, seconds = position()
+	sampled_scene, sampled_scene_frame = scene_count, scene_frame
 	update_frames[#update_frames + 1] = {
 		sequence = #update_frames + 1, scene = scene_count,
 		delta = delta, seconds = seconds, beat = beat,
 		wall_seconds = GetTimeSinceStart(),
 		option_deltas = ITGMANIA_HARNESS_OPTION_DELTAS and ITGMANIA_HARNESS_OPTION_DELTAS() or nil,
+		native_update_frame = scene_frame,
+		sample_origin = origin or "overlay-probe",
 	}
 end
+capture_callback_input = trace.sample_update
 
 function trace.sample_stage(phase, stage)
 	if finished then return end
@@ -1108,6 +1122,7 @@ function trace.finish(completion)
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
 			native_update_frames = true,
+			native_callback_frame_inputs = ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_option_clock_deltas = type(ITGMANIA_HARNESS_OPTION_DELTAS) == "function",
 			native_event_scenes = true,
 			native_call_sources = true,
@@ -1176,11 +1191,14 @@ ITGMANIA_HARNESS_TRACE = trace
 
 if #(cfg.input_script or {}) > 0 or cfg.drawable_samples or cfg.capture_frame_period_seconds then
 	assert(ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE, "native interactive trace adapter is required")
+end
+if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 	ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE = function(delta)
 		if finished or scene_count == 0 then return end
 		local period = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60)
 		if period then ITGMANIA_HARNESS_PACE_CAPTURE(period) end
 		scene_frame = scene_frame + 1
+		native_frame_delta = delta
 		while true do
 			local command = cfg.input_script[next_input]
 			if not command or command.scene ~= scene_count or command.seconds > GAMESTATE:GetSongPosition():GetMusicSeconds() then break end
