@@ -1081,7 +1081,7 @@ function trace.finish(completion)
 		input = {autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS == true,
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,
-			script = cfg.input_script, observer_frame_period_seconds = cfg.drawable_samples and 1/60 or nil,
+			script = cfg.input_script, observer_frame_period_seconds = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60 or nil),
 			requested_difficulty = cfg.difficulty, style = cfg.style,
 			preferences = input_preferences, gameplay_preferences = gameplay_preferences},
 		end_position = {beat = beat, seconds = seconds},
@@ -1174,11 +1174,12 @@ end
 
 ITGMANIA_HARNESS_TRACE = trace
 
-if #(cfg.input_script or {}) > 0 or cfg.drawable_samples then
+if #(cfg.input_script or {}) > 0 or cfg.drawable_samples or cfg.capture_frame_period_seconds then
 	assert(ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE, "native interactive trace adapter is required")
 	ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE = function(delta)
 		if finished or scene_count == 0 then return end
-		if cfg.drawable_samples then ITGMANIA_HARNESS_PACE_CAPTURE(1/60) end
+		local period = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60)
+		if period then ITGMANIA_HARNESS_PACE_CAPTURE(period) end
 		scene_frame = scene_frame + 1
 		while true do
 			local command = cfg.input_script[next_input]

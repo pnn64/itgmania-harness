@@ -171,6 +171,7 @@ fn parse_song_lua_trace_args(
     let mut random_seed = None;
     let mut input_script = None;
     let mut drawable_samples = false;
+    let mut capture_fps = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -268,6 +269,14 @@ fn parse_song_lua_trace_args(
             Some("--input-script") => set_once(&mut input_script,
                 PathBuf::from(next_utf8(&mut args, "--input-script")?), "--input-script")?,
             Some("--drawable-samples") if !drawable_samples => drawable_samples = true,
+            Some("--capture-fps") => {
+                let raw = next_utf8(&mut args, "--capture-fps")?;
+                let fps = raw.parse::<u32>().map_err(|_| CliError::Usage("capture FPS must be an integer in 1..=1000".into()))?;
+                if !(1..=1000).contains(&fps) {
+                    return Err(CliError::Usage("capture FPS must be an integer in 1..=1000".into()));
+                }
+                set_once(&mut capture_fps, fps, "--capture-fps")?;
+            }
             Some(option) => {
                 return Err(CliError::Usage(format!(
                     "unknown song-lua-trace option `{option}`"
@@ -306,6 +315,7 @@ fn parse_song_lua_trace_args(
                 None => Vec::new(),
             },
             drawable_samples,
+            capture_fps,
         },
         out,
     })
@@ -1326,7 +1336,7 @@ fn print_help() {
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
-             [--input-script FILE.json] [--drawable-samples]\n\
+             [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
@@ -1519,6 +1529,18 @@ mod tests {
             .map(OsString::from);
         let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
         assert_eq!(trace.options.max_events, 2_000_000);
+    }
+
+    #[test]
+    fn trace_can_pace_native_frames_without_drawable_capture() {
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--headless", "--capture-fps", "60"].map(OsString::from);
+        let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
+        assert_eq!(trace.options.capture_fps, Some(60));
+        assert!(!trace.options.drawable_samples);
+        for value in ["0", "-1", "60.5", "1001", "nan"] {
+            let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--capture-fps", value].map(OsString::from);
+            assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
+        }
     }
 
     #[test]

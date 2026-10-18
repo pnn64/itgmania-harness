@@ -41,6 +41,7 @@ pub struct Options {
     pub random_seed: u32,
     pub inputs: Vec<ScheduledInput>,
     pub drawable_samples: bool,
+    pub capture_fps: Option<u32>,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -80,6 +81,9 @@ fn validate_options(options: &Options) -> Result<(), Error> {
     }
     if options.random_seed == 0 || options.random_seed > i32::MAX as u32 {
         return Err(Error::new("random seed must be in 1..=2147483647"));
+    }
+    if options.capture_fps.is_some_and(|fps| !(1..=1000).contains(&fps)) {
+        return Err(Error::new("capture FPS must be in 1..=1000"));
     }
     if options.max_events == 0 {
         return Err(Error::new("runtime event limit must be greater than zero"));
@@ -895,6 +899,7 @@ fn config_lua(options: &Options) -> String {
          \trandom_seed = {},\n\
          \tinput_script = {{{}}},\n\
          \tdrawable_samples = {},\n\
+         \tcapture_frame_period_seconds = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
         lua_quote(&options.style),
@@ -908,7 +913,8 @@ fn config_lua(options: &Options) -> String {
         options.max_events,
         options.random_seed,
         inputs,
-        options.drawable_samples
+        options.drawable_samples,
+        options.capture_fps.map(|fps| format!("{:.17}", 1.0 / f64::from(fps))).unwrap_or_else(|| "nil".into())
     )
 }
 
@@ -1131,6 +1137,7 @@ mod tests {
             random_seed: 73,
             inputs: Vec::new(),
             drawable_samples: false,
+            capture_fps: None,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -1545,6 +1552,7 @@ mod tests {
             random_seed: 1,
             inputs: Vec::new(),
             drawable_samples: false,
+            capture_fps: None,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();
