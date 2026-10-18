@@ -16,11 +16,24 @@
 #include "Sprite.h"
 #include <chrono>
 #include <thread>
+#include <map>
 
 namespace {
 Actor* drawing = nullptr;
 float option_song_delta = 0;
 float option_player_delta[NUM_PLAYERS] = {};
+struct CatalogInputs { float offset, rate; };
+std::map<const void*, CatalogInputs> catalog_inputs;
+
+int current_catalog_inputs(lua_State* L) {
+  const auto found = catalog_inputs.find(GAMESTATE->m_pCurSong.Get());
+  if (found == catalog_inputs.end()) { lua_pushnil(L); return 1; }
+  lua_createtable(L, 0, 3);
+  lua_pushnumber(L, found->second.offset); lua_setfield(L, -2, "global_offset_seconds");
+  lua_pushnumber(L, found->second.rate); lua_setfield(L, -2, "music_rate");
+  lua_pushstring(L, "native-catalog-note-time-calculation"); lua_setfield(L, -2, "initialization");
+  return 1;
+}
 
 int option_deltas(lua_State* L) {
   lua_createtable(L, 0, 2);
@@ -73,6 +86,8 @@ int pace_capture(lua_State* L) {
   return 0;
 }
 void register_interactive(Lua* L) {
+  lua_pushcfunction(L, current_catalog_inputs);
+  lua_setglobal(L, "ITGMANIA_HARNESS_CATALOG_INPUTS");
   lua_pushcfunction(L, option_deltas);
   lua_setglobal(L, "ITGMANIA_HARNESS_OPTION_DELTAS");
   lua_pushcfunction(L, pace_capture);
@@ -83,6 +98,12 @@ void register_interactive(Lua* L) {
   lua_setglobal(L, "ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE");
 }
 REGISTER_WITH_LUA_FUNCTION(register_interactive)
+}
+
+void itgmania_harness_catalog_inputs(const void* song, float offset, float rate) {
+  // Raw configuration at note-time calculation, before theme preference changes.
+  // Never expose the stored Song getter values through the input bridge.
+  catalog_inputs[song] = {offset, rate};
 }
 
 void itgmania_harness_option_delta(const void* options, float delta, bool song) {

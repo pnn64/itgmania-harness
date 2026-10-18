@@ -21,6 +21,12 @@ local scene_frame, next_input = 0, 1
 local native_frame_delta, sampled_scene, sampled_scene_frame = nil, nil, nil
 local capture_callback_input = nil
 local pending_finish, finishing_after_draw = nil, false
+-- Keep the recorder's frame sampling outside the authored external-clock tape.
+local raw_process_clock = GetTimeSinceStart
+local clock_observer_source = debug.getinfo(1, "S").source
+local host_clock_inputs, dropped_host_clock_inputs = {}, 0
+local catalog_preferences = nil
+
 local random_reseeds = {}
 local dropped_random_reseeds = 0
 local actor_identity_inputs = {}
@@ -54,6 +60,53 @@ local function song_source(source)
 	return type(source) == "string"
 		and (source:sub(1, 6) == "song:/"
 			or source:gsub("\\", "/"):find("Songs/Harness/Probe/", 1, true) ~= nil)
+end
+
+local function clock_source(source)
+    source = normalize_path(source or ""):gsub("^@", "")
+    local relative = source:match("Themes/[^/]+/(.*)")
+    if relative then return "theme:/" .. relative end
+    return source:gsub("/%./", "/")
+end
+
+local function install_host_clock_hooks()
+    local shared = {}
+    for _, name in ipairs({"GetTimeSinceStart", "Year", "MonthOfYear", "DayOfMonth", "DayOfYear", "Hour", "Minute", "Second"}) do
+        local original = rawget(_G, name)
+        if type(original) == "function" then
+            local wrapper = shared[original]
+            if not wrapper then
+                local domain = name
+                wrapper = function(...)
+                    local source, line = "", 0
+                    for level = 2, 32 do
+                        local info = debug.getinfo(level, "Sl")
+                        if not info then break end
+                        if info.source ~= clock_observer_source and (info.what == "Lua" or info.what == "main") then
+                            source, line = clock_source(info.source), info.currentline or 0
+                            break
+                        end
+                    end
+                    local result = pack(original(...))
+                    if not finished and type(result[1]) == "number" then
+                        if #host_clock_inputs >= cfg.max_events then
+                            dropped_host_clock_inputs = dropped_host_clock_inputs + 1
+                        else
+                            host_clock_inputs[#host_clock_inputs+1] = {
+                                clock=domain, source=source, line=line, value=result[1],
+                                scene=scene_count, before_update_sequence=#update_frames+1,
+                                provenance="native-external-clock-read",
+                            }
+                        end
+                    end
+                    return unpack(result, 1, result.n)
+                end
+                if type(native_wrap) == "function" then wrapper = native_wrap(wrapper) end
+                shared[original] = wrapper
+            end
+            rawset(_G, name, wrapper)
+        end
+    end
 end
 
 local function position()
@@ -909,6 +962,15 @@ end
 
 -- Capture after theme initialization, before gameplay loads any song Lua.
 -- Keep these input settings separate from observed scores and life.
+function trace.capture_catalog_inputs()
+    if catalog_preferences then return end
+    -- The C++ observer records configuration where note times are calculated.
+    -- Theme script loading can change preferences before this screen exists.
+    if type(ITGMANIA_HARNESS_CATALOG_INPUTS) == "function" then
+        catalog_preferences = ITGMANIA_HARNESS_CATALOG_INPUTS()
+    end
+end
+
 function trace.capture_inputs(game_mode_initialized)
 	input_preferences = {
 		global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
@@ -964,7 +1026,7 @@ function trace.sample_update(delta, origin)
 	update_frames[#update_frames + 1] = {
 		sequence = #update_frames + 1, scene = scene_count,
 		delta = delta, seconds = seconds, beat = beat,
-		wall_seconds = GetTimeSinceStart(),
+		wall_seconds = raw_process_clock(),
 		option_deltas = ITGMANIA_HARNESS_OPTION_DELTAS and ITGMANIA_HARNESS_OPTION_DELTAS() or nil,
 		native_update_frame = scene_frame,
 		sample_origin = origin or "overlay-probe",
@@ -1080,6 +1142,8 @@ function trace.finish(completion)
 		capture_limits = {max_events = cfg.max_events},
 		random_seed = cfg.random_seed,
 		random_reseeds = random_reseeds,
+        host_clock_inputs = host_clock_inputs,
+        dropped_host_clock_inputs = dropped_host_clock_inputs,
 		dropped_random_reseeds = dropped_random_reseeds,
 		actor_identity_inputs = actor_identity_inputs,
 		actor_creation_inputs = actor_creation_inputs,
@@ -1097,13 +1161,16 @@ function trace.finish(completion)
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,
 			script = cfg.input_script, observer_frame_period_seconds = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60 or nil),
 			requested_difficulty = cfg.difficulty, style = cfg.style,
-			preferences = input_preferences, gameplay_preferences = gameplay_preferences},
+			preferences = input_preferences, gameplay_preferences = gameplay_preferences,
+            catalog_preferences = catalog_preferences},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE == true,
 			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_random_seed = true,
+            native_host_clock_inputs = type(native_wrap) == "function",
+            native_pre_theme_preferences = catalog_preferences ~= nil,
 			native_actor_identities = true,
 			native_actor_creation = ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE == true,
 			native_actor_query_ancestry = true,
@@ -1151,6 +1218,7 @@ function trace.finish(completion)
 	})
 end
 
+install_host_clock_hooks()
 install_definition_hook()
 if type(native_wrap) == "function" then
 	local marker = {}

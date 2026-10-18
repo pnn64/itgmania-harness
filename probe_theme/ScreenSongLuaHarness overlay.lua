@@ -57,6 +57,7 @@ local function configure_song()
 	-- Direct gameplay entry bypasses the theme's play-mode selection screen.
 	-- Use its real initializer so timing windows and player fail options match
 	-- normal gameplay instead of retaining the engine's stock preferences.
+	ITGMANIA_HARNESS_TRACE.capture_catalog_inputs()
 	local game_mode_initialized = type(SetGameModePreferences) == "function"
 	if game_mode_initialized then
 		SetGameModePreferences()
