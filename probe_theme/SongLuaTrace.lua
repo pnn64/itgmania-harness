@@ -109,6 +109,49 @@ local function install_host_clock_hooks()
     end
 end
 
+local function install_arrow_clock_hooks()
+    local scope = rawget(_G, "ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE")
+    if type(scope) ~= "function" or type(ArrowEffects) ~= "table" then return end
+    for name, original in pairs(ArrowEffects) do
+        if type(original) == "function" then
+            local domain = "ArrowEffects." .. name
+            local wrapper = function(...)
+                local source, line = "", 0
+                for level = 2, 32 do
+                    local info = debug.getinfo(level, "Sl")
+                    if not info then break end
+                    if info.source ~= clock_observer_source and (info.what == "Lua" or info.what == "main") then
+                        source, line = clock_source(info.source), info.currentline or 0
+                        break
+                    end
+                end
+                scope(true)
+                local result = pack(pcall(original, ...))
+                local clocks = scope(false)
+                if not finished then
+                    for _, value in ipairs(clocks) do
+                        if #host_clock_inputs < cfg.max_events then
+                            host_clock_inputs[#host_clock_inputs+1] = {clock=domain, source=source,
+                                line=line, value=value, scene=scene_count,
+                                before_update_sequence=#update_frames+1, provenance="native-ArrowEffects-raw-RageTimer-read"}
+                        else dropped_host_clock_inputs = dropped_host_clock_inputs + 1 end
+                    end
+                end
+                if not result[1] then error(result[2], 0) end
+                return unpack(result, 2, result.n)
+            end
+            ArrowEffects[name] = type(native_wrap) == "function" and native_wrap(wrapper) or wrapper
+        end
+    end
+end
+
+ITGMANIA_HARNESS_AFTER_ARROW_UPDATE = function(inputs)
+    local frame = update_frames[#update_frames]
+    if not finished and frame and frame.scene == scene_count and frame.native_update_frame == scene_frame then
+        frame.arrow_clock_inputs = inputs
+    end
+end
+
 local function position()
 	local previous = active_context
 	active_context = nil
@@ -1170,6 +1213,7 @@ function trace.finish(completion)
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_random_seed = true,
             native_host_clock_inputs = type(native_wrap) == "function",
+            native_arrow_clock_inputs = type(ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE) == "function",
             native_pre_theme_preferences = catalog_preferences ~= nil,
 			native_actor_identities = true,
 			native_actor_creation = ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE == true,
@@ -1219,6 +1263,7 @@ function trace.finish(completion)
 end
 
 install_host_clock_hooks()
+install_arrow_clock_hooks()
 install_definition_hook()
 if type(native_wrap) == "function" then
 	local marker = {}

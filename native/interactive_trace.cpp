@@ -17,6 +17,7 @@
 #include <chrono>
 #include <thread>
 #include <map>
+#include <vector>
 
 namespace {
 Actor* drawing = nullptr;
@@ -24,6 +25,40 @@ float option_song_delta = 0;
 float option_player_delta[NUM_PLAYERS] = {};
 struct CatalogInputs { float offset, rate; };
 std::map<const void*, CatalogInputs> catalog_inputs;
+bool arrow_query_scope = false;
+std::vector<double> arrow_query_clocks;
+int arrow_cache_scope = -1;
+double arrow_update_seconds = 0;
+double arrow_cache_seconds[NUM_PLAYERS][2] = {};
+bool arrow_cache_seen[NUM_PLAYERS][2] = {};
+
+int arrow_clock_scope(lua_State* L) {
+  if (lua_toboolean(L, 1)) {
+    arrow_query_clocks.clear(); arrow_query_scope = true; return 0;
+  }
+  arrow_query_scope = false;
+  lua_createtable(L, static_cast<int>(arrow_query_clocks.size()), 0);
+  for (size_t index = 0; index < arrow_query_clocks.size(); ++index) {
+    lua_pushnumber(L, arrow_query_clocks[index]); lua_rawseti(L, -2, static_cast<int>(index + 1));
+  }
+  return 1;
+}
+
+void arrow_frame_inputs(lua_State* L) {
+  lua_createtable(L, 0, 2);
+  lua_pushnumber(L, arrow_update_seconds); lua_setfield(L, -2, "update_seconds");
+  lua_createtable(L, NUM_PLAYERS, 0);
+  for (int player = 0; player < NUM_PLAYERS; ++player) {
+    lua_createtable(L, 0, 2);
+    for (int tangent = 0; tangent < 2; ++tangent) {
+      if (!arrow_cache_seen[player][tangent]) continue;
+      lua_pushnumber(L, arrow_cache_seconds[player][tangent]);
+      lua_setfield(L, -2, tangent ? "tan_tipsy_seconds" : "tipsy_seconds");
+    }
+    lua_rawseti(L, -2, player + 1);
+  }
+  lua_setfield(L, -2, "players");
+}
 
 int current_catalog_inputs(lua_State* L) {
   const auto found = catalog_inputs.find(GAMESTATE->m_pCurSong.Get());
@@ -86,6 +121,8 @@ int pace_capture(lua_State* L) {
   return 0;
 }
 void register_interactive(Lua* L) {
+  lua_pushcfunction(L, arrow_clock_scope);
+  lua_setglobal(L, "ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE");
   lua_pushcfunction(L, current_catalog_inputs);
   lua_setglobal(L, "ITGMANIA_HARNESS_CATALOG_INPUTS");
   lua_pushcfunction(L, option_deltas);
@@ -104,6 +141,28 @@ void itgmania_harness_catalog_inputs(const void* song, float offset, float rate)
   // Raw configuration at note-time calculation, before theme preference changes.
   // Never expose the stored Song getter values through the input bridge.
   catalog_inputs[song] = {offset, rate};
+}
+
+double itgmania_harness_arrow_clock(double value) {
+  if (arrow_query_scope) arrow_query_clocks.push_back(value);
+  if (arrow_cache_scope >= 0) {
+    arrow_cache_seconds[arrow_cache_scope / 2][arrow_cache_scope % 2] = value;
+    arrow_cache_seen[arrow_cache_scope / 2][arrow_cache_scope % 2] = true;
+  }
+  return value;
+}
+
+ItgmaniaHarnessArrowCacheScope::ItgmaniaHarnessArrowCacheScope(int player, bool tangent)
+    : previous(arrow_cache_scope) { arrow_cache_scope = player * 2 + (tangent ? 1 : 0); }
+ItgmaniaHarnessArrowCacheScope::~ItgmaniaHarnessArrowCacheScope() { arrow_cache_scope = previous; }
+
+void itgmania_harness_arrow_update_clock(double value) { arrow_update_seconds = value; }
+
+void itgmania_harness_after_arrow_update() {
+  Lua* L = LUA->Get(); const int top = lua_gettop(L);
+  lua_getglobal(L, "ITGMANIA_HARNESS_AFTER_ARROW_UPDATE");
+  if (lua_isfunction(L, -1)) { arrow_frame_inputs(L); observe(L, 1); }
+  lua_settop(L, top); LUA->Release(L);
 }
 
 void itgmania_harness_option_delta(const void* options, float delta, bool song) {
