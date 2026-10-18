@@ -1,4 +1,7 @@
 local cfg = ITGMANIA_HARNESS_CONFIG
+-- An explicit initial VM input, like the PRNG seed. Authored explicit garbage
+-- collection/restart calls still keep their stock Lua behavior.
+if cfg.stop_lua_gc then collectgarbage("stop") end
 
 local input_preferences = nil
 local gameplay_preferences = nil
@@ -1238,7 +1241,7 @@ function trace.finish(completion)
 		drawable_frames = drawable_frames,
 		dropped_drawable_samples = dropped_drawable_samples,
 		interactive_observer_error = ITGMANIA_HARNESS_INTERACTIVE_ERROR,
-		input = {autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
+        input = {lua_gc_mode = cfg.stop_lua_gc and "stopped" or "automatic", autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS == true,
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,
 			script = cfg.input_script, observer_frame_period_seconds = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60 or nil),

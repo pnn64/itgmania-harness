@@ -173,6 +173,7 @@ fn parse_song_lua_trace_args(
     let mut drawable_samples = false;
     let mut capture_fps = None;
     let mut fixed_update_fps = None;
+    let mut stop_lua_gc = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -270,6 +271,7 @@ fn parse_song_lua_trace_args(
             Some("--input-script") => set_once(&mut input_script,
                 PathBuf::from(next_utf8(&mut args, "--input-script")?), "--input-script")?,
             Some("--drawable-samples") if !drawable_samples => drawable_samples = true,
+            Some("--stop-lua-gc") if !stop_lua_gc => stop_lua_gc = true,
             Some("--capture-fps") => {
                 let raw = next_utf8(&mut args, "--capture-fps")?;
                 let fps = raw.parse::<u32>().map_err(|_| CliError::Usage("capture FPS must be an integer in 1..=1000".into()))?;
@@ -326,6 +328,7 @@ fn parse_song_lua_trace_args(
             drawable_samples,
             capture_fps,
             fixed_update_fps,
+            stop_lua_gc,
         },
         out,
     })
@@ -1346,7 +1349,7 @@ fn print_help() {
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
-             [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000]\n\
+             [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000] [--stop-lua-gc]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\

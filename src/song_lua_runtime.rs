@@ -44,6 +44,7 @@ pub struct Options {
     pub drawable_samples: bool,
     pub capture_fps: Option<u32>,
     pub fixed_update_fps: Option<u32>,
+    pub stop_lua_gc: bool,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -914,6 +915,7 @@ fn config_lua(options: &Options) -> String {
          \tuntil_gameplay_end = {},\n\
          \tautoplay = {},\n\
          \tmax_events = {},\n\
+         \tstop_lua_gc = {},\n\
          \trandom_seed = {},\n\
          \tinput_script = {{{}}},\n\
          \tdrawable_samples = {},\n\
@@ -929,6 +931,7 @@ fn config_lua(options: &Options) -> String {
         options.until_gameplay_end,
         u8::from(options.autoplay),
         options.max_events,
+        options.stop_lua_gc,
         options.random_seed,
         inputs,
         options.drawable_samples,
@@ -1157,6 +1160,7 @@ mod tests {
             drawable_samples: false,
             capture_fps: None,
             fixed_update_fps: None,
+            stop_lua_gc: false,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -1573,6 +1577,7 @@ mod tests {
             drawable_samples: false,
             capture_fps: None,
             fixed_update_fps: Some(60),
+            stop_lua_gc: false,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();

@@ -1290,3 +1290,9 @@ self-queued Lua timer spend longer recording its callbacks than the timer's
 interval. The trace records the actual preference and every native frame delta;
 replay still compares all captured frames and events. A fixed-clock capture does
 not establish coverage for the default variable-clock profile.
+
+`--stop-lua-gc` declares an initially stopped automatic Lua collector. This
+isolates Lua 5.1 table iteration from differences in recorder/host allocation
+pressure. Explicit authored `collectgarbage` calls still work. The trace records
+`input.lua_gc_mode`; replay must use the same initial VM input. Coverage of the
+default automatic collector is separate from this profile.
