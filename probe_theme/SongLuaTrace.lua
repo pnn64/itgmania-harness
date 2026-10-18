@@ -173,10 +173,16 @@ local function position()
 	local previous = active_context
 	active_context = nil
 	local beat, seconds = nil, nil
-	pcall(function()
-		beat = GAMESTATE:GetSongBeat()
-		seconds = GAMESTATE:GetCurMusicSeconds()
-	end)
+    -- Recorder clock reads are observational. Call the saved bindings directly
+    -- instead of re-entering two hooked methods (and their debug-stack scans)
+    -- for every emitted event.
+    local game = original_methods.GameState
+    local get_beat = game and game.GetSongBeat or GAMESTATE.GetSongBeat
+    local get_seconds = game and game.GetCurMusicSeconds or GAMESTATE.GetCurMusicSeconds
+    local ok_beat, native_beat = pcall(get_beat, GAMESTATE)
+    local ok_seconds, native_seconds = pcall(get_seconds, GAMESTATE)
+    if ok_beat then beat = native_beat end
+    if ok_seconds then seconds = native_seconds end
 	active_context = previous
 	return beat, seconds
 end
