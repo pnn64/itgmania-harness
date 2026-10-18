@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const ARCHIVE_SCHEMA_VERSION: u32 = 1;
@@ -179,14 +179,14 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompr
     {
         let simfile = checked_join(&songs_root, &entry.simfile)?;
         let trace_path = checked_join(&trace_root, &entry.fixture)?;
-        let trace_bytes = fs::read(&trace_path)
+        let trace_file = File::open(&trace_path)
             .map_err(|source| Error::io("read semantic trace", &trace_path, source))?;
-        let trace: Value = serde_json::from_slice(&trace_bytes)
+        let trace: Value = serde_json::from_reader(BufReader::new(trace_file))
             .map_err(|source| Error::json(&trace_path, source))?;
         let (members, manifest) = archive_members(
             &songs_root,
             &simfile,
-            trace_bytes,
+            TraceInput::File(&trace_path),
             &trace,
             &semantic,
             entry,
@@ -197,8 +197,10 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompr
             .values()
             .map(|bytes| bytes.len() as u64)
             .sum::<u64>();
+        source_bytes += fs::metadata(&trace_path)
+            .map_err(|source| Error::io("stat semantic trace", &trace_path, source))?.len();
         let temp_path = output_dir.join(format!(".song-lua-archive-{}.tmp", std::process::id()));
-        write_archive(&temp_path, members, &manifest, uncompressed)?;
+        write_archive(&temp_path, members, &manifest, uncompressed, Some(&trace_path))?;
         let digest = hash_file(&temp_path)?;
         let filename = format!("{digest}.{}", if uncompressed { "tar" } else { "tar.zst" });
         let archive_path = output_dir.join(&filename);
@@ -248,10 +250,19 @@ pub fn generate(songs_root: &Path, trace_root: &Path, output_dir: &Path, uncompr
     })
 }
 
+enum TraceInput<'a> {
+    Bytes(Vec<u8>),
+    File(&'a Path),
+}
+
+impl From<Vec<u8>> for TraceInput<'_> {
+    fn from(bytes: Vec<u8>) -> Self { Self::Bytes(bytes) }
+}
+
 fn archive_members(
     songs_root: &Path,
     simfile: &Path,
-    trace_bytes: Vec<u8>,
+    trace_input: TraceInput<'_>,
     trace: &Value,
     semantic: &SemanticManifest,
     entry: &SemanticEntry,
@@ -322,7 +333,10 @@ fn archive_members(
     }
     let mut asset_members: BTreeSet<String> = members.keys().cloned().collect();
     members.insert(simfile_member.clone(), simfile_bytes);
-    members.insert(trace_member.clone(), trace_bytes);
+    let trace_file = match trace_input {
+        TraceInput::Bytes(bytes) => { members.insert(trace_member.clone(), bytes); None },
+        TraceInput::File(path) => Some(path),
+    };
     let mut lua_members = Vec::with_capacity(lua_paths.len());
     for path in &lua_paths {
         let relative = portable_relative(song_dir, path)?;
@@ -403,7 +417,7 @@ fn archive_members(
         );
         asset_members.insert(member);
     }
-    let files = members
+    let mut files: Vec<_> = members
         .iter()
         .map(|(path, bytes)| FileMetadata {
             path: path.clone(),
@@ -420,6 +434,16 @@ fn archive_members(
             sha256: hash_bytes(bytes),
         })
         .collect();
+    if let Some(path) = trace_file {
+        files.push(FileMetadata {
+            path: trace_member.clone(), role: "semantic-render-trace",
+            bytes: usize::try_from(fs::metadata(path)
+                .map_err(|source| Error::io("stat semantic trace", path, source))?.len())
+                .map_err(|_| Error("semantic trace size exceeds address space".into()))?,
+            sha256: hash_file(path)?,
+        });
+        files.sort_by(|left,right| left.path.cmp(&right.path));
+    }
     let itgmania = entry.itgmania.as_ref().unwrap_or(&semantic.itgmania);
     let command_observer = trace.get("command_observer")
         .map(|value| serde_json::from_value::<CommandObserverMetadata>(value.clone())
@@ -1088,14 +1112,15 @@ fn write_archive(
     members: BTreeMap<String, Vec<u8>>,
     manifest: &ArchiveManifest,
     uncompressed: bool,
+    trace_file: Option<&Path>,
 ) -> Result<(), Error> {
     let output = File::create(path)
         .map_err(|source| Error::io("create archive", path, source))?;
     if uncompressed {
-        return write_tar(output, members, manifest);
+        return write_tar(output, members, manifest, trace_file);
     }
     let mut encoder = archive_encoder(output, path)?;
-    write_tar(&mut encoder, members, manifest)?;
+    write_tar(&mut encoder, members, manifest, trace_file)?;
     encoder.finish().map_err(|source| Error::io("finish zstd archive", path, source))?;
     Ok(())
 }
@@ -1115,16 +1140,29 @@ fn archive_encoder(output: File, path: &Path) -> Result<zstd::stream::write::Enc
     Ok(encoder)
 }
 
-fn write_tar(output: impl Write, members: BTreeMap<String, Vec<u8>>, manifest: &ArchiveManifest) -> Result<(), Error> {
+fn write_tar(output: impl Write, members: BTreeMap<String, Vec<u8>>, manifest: &ArchiveManifest, mut trace_file: Option<&Path>) -> Result<(), Error> {
     let mut archive = tar::Builder::new(output);
     let manifest_bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|source| Error(format!("could not serialize archive manifest: {source}")))?;
     append_member(&mut archive, "manifest.json", &manifest_bytes)?;
     for (member, bytes) in members {
+        if trace_file.is_some() && manifest.chart.trace.as_str() < member.as_str() {
+            append_file_member(&mut archive, &manifest.chart.trace, trace_file.take().unwrap())?;
+        }
         append_member(&mut archive, &member, &bytes)?;
     }
+    if let Some(path) = trace_file { append_file_member(&mut archive, &manifest.chart.trace, path)?; }
     archive.finish().map_err(|source| Error(format!("could not finish tar archive: {source}")))?;
     Ok(())
+}
+
+fn append_file_member<W: Write>(archive: &mut tar::Builder<W>, member: &str, path: &Path) -> Result<(), Error> {
+    let file = File::open(path).map_err(|source| Error::io("read semantic trace", path, source))?;
+    let mut header = tar::Header::new_gnu();
+    header.set_size(file.metadata().map_err(|source| Error::io("stat semantic trace", path, source))?.len());
+    header.set_mode(0o644); header.set_uid(0); header.set_gid(0); header.set_mtime(0); header.set_cksum();
+    archive.append_data(&mut header, member, file)
+        .map_err(|source| Error(format!("could not append archive member {member}: {source}")))
 }
 
 fn append_member<W: Write>(
@@ -1488,7 +1526,7 @@ mod tests {
         fs::write(font.join("ignored.lua"), b"return {}").unwrap();
         let theme = theme.canonicalize().unwrap();
         let (members, manifest) =
-            archive_members(&root, &simfile, source.clone(), &trace, &semantic, &entry, Some(&theme))
+            archive_members(&root, &simfile, source.clone().into(), &trace, &semantic, &entry, Some(&theme))
                 .expect("complete runtime dependency archive");
         let prefix = "song/__songlua_theme_path/Fonts/_Combo Fonts/Wendy/";
         assert_eq!(members[&format!("{prefix}Wendy.ini")], b"[main]\n");
@@ -1524,8 +1562,8 @@ mod tests {
         fs::create_dir_all(&output).expect("archive output directory");
         let plain = output.join("candidate.tar");
         let compressed = output.join("candidate.tar.zst");
-        write_archive(&plain, members.clone(), &manifest, true).expect("plain candidate");
-        write_archive(&compressed, members, &manifest, false).expect("compressed candidate");
+        write_archive(&plain, members.clone(), &manifest, true, None).expect("plain candidate");
+        write_archive(&compressed, members, &manifest, false, None).expect("compressed candidate");
         assert_eq!(fs::read(&plain).unwrap(), zstd::decode_all(File::open(&compressed).unwrap()).unwrap());
 
         // Synthetic capture metadata tests archive handling, not gameplay simulation.
@@ -1560,7 +1598,7 @@ mod tests {
             serde_json::json!({"reason": "gameplay-exit", "stage_committed": true});
         let source = serde_json::to_vec(&native).expect("native metadata bytes");
         let (members, manifest) =
-            archive_members(&root, &simfile, source.clone(), &native, &semantic, &entry, None)
+            archive_members(&root, &simfile, source.clone().into(), &native, &semantic, &entry, None)
                 .expect("native gameplay archive");
         assert_eq!(manifest.itgmania.execution, "native_gameplay");
         assert!(manifest.itgmania.launches_executable);
@@ -1589,7 +1627,7 @@ mod tests {
             let mut incomplete = native.clone();
             *incomplete.pointer_mut(pointer).expect("capture field") = value;
             assert!(
-                archive_members(&root, &simfile, source.clone(), &incomplete, &semantic, &entry, None).is_err(),
+                archive_members(&root, &simfile, source.clone().into(), &incomplete, &semantic, &entry, None).is_err(),
                 "accepted incomplete capture at {pointer}"
             );
         }
@@ -1665,7 +1703,7 @@ mod tests {
         let (members, manifest) = archive_members(
             &root,
             &root.join("model.sm"),
-            serde_json::to_vec(&trace).expect("trace bytes"),
+            serde_json::to_vec(&trace).expect("trace bytes").into(),
             &trace,
             &semantic,
             &entry,
@@ -1677,6 +1715,19 @@ mod tests {
         assert_eq!(metadata["runtime"]["command_observer"]["capture_binary_sha256"],
             "0123456789abcdef".repeat(4));
         assert_eq!(members["trace/semantic.json"], serde_json::to_vec(&trace).unwrap());
+        let retained_trace = root.join("retained-trace.json");
+        fs::write(&retained_trace, serde_json::to_vec(&trace).unwrap()).unwrap();
+        let (streamed_members, streamed_manifest) = archive_members(
+            &root, &root.join("model.sm"), TraceInput::File(&retained_trace),
+            &trace, &semantic, &entry, None,
+        ).unwrap();
+        assert_eq!(serde_json::to_value(&streamed_manifest).unwrap(), metadata);
+        assert!(!streamed_members.contains_key("trace/semantic.json"));
+        let buffered_tar = root.join("buffered.tar");
+        let streamed_tar = root.join("streamed.tar");
+        write_archive(&buffered_tar, members.clone(), &manifest, true, None).unwrap();
+        write_archive(&streamed_tar, streamed_members, &streamed_manifest, true, Some(&retained_trace)).unwrap();
+        assert_eq!(fs::read(buffered_tar).unwrap(), fs::read(streamed_tar).unwrap());
         assert_eq!(members["song/lua/body/wall.txt"], model);
         for name in ["first.png", "second.png", "mask.png"] {
             let path = format!("song/lua/body/textures/{name}");
@@ -1696,7 +1747,7 @@ mod tests {
         let mut trace_with_profile = trace.clone();
         trace_with_profile["command_observer"] = serde_json::to_value(entry.command_observer.take()).unwrap();
         let (_, from_trace) = archive_members(&root, &root.join("model.sm"),
-            serde_json::to_vec(&trace_with_profile).unwrap(), &trace_with_profile,
+            serde_json::to_vec(&trace_with_profile).unwrap().into(), &trace_with_profile,
             &semantic, &entry, None).unwrap();
         let metadata = serde_json::to_value(from_trace).unwrap();
         assert_eq!(metadata["runtime"]["command_observer"]["dynamic_commands"], true);

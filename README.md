@@ -1309,3 +1309,8 @@ boundaries for draw-order derivation. Archive creation moves the existing trace
 byte buffer into the archive and releases its parsed JSON before writing, avoiding
 duplicate multi-GB buffers. `song-lua-analyze` can process a retained native result
 without rerunning the song.
+
+Archive creation reads its metadata through a buffered JSON reader, then releases
+the parsed document and streams the unchanged trace file into the tar member.
+The file-backed path produces the same manifest, deterministic headers, and tar
+bytes as the in-memory path.
