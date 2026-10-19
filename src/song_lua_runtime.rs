@@ -148,6 +148,9 @@ fn capture_in(
         if !bytes.windows(b"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2".len())
             .any(|window| window == b"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2")
         { return Err(Error::new("notefield capture requires the native model geometry adapter; rebuild the trace executable")); }
+        if !bytes.windows(b"ITGMANIA_HARNESS_NATIVE_SOURCE".len())
+            .any(|window| window == b"ITGMANIA_HARNESS_NATIVE_SOURCE")
+        { return Err(Error::new("notefield capture requires native source provenance; rebuild the trace executable")); }
     }
     let mut command = Command::new(&staged_binary);
     if options.headless { command.env("ITGMANIA_HARNESS_HEADLESS", "1"); }
@@ -689,6 +692,17 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
 }
 
 fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
+    let source = &document["input"]["native_source"];
+    for (key, length) in [("revision", 40), ("note_display_sha256", 64), ("cubic_spline_sha256", 64)] {
+        if source[key].as_str().is_none_or(|value| {
+            value.len() != length || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(Error::new("native source provenance is missing or invalid; rebuild the trace executable"));
+        }
+    }
+    if source["modified_src"].as_bool().is_none() {
+        return Err(Error::new("native source modification state is missing"));
+    }
     if document["capabilities"]["native_notefield_geometry"] != true
         || document["capabilities"]["native_model_geometry_protocol"] != 2
         || document["dropped_model_geometry_samples"] != 0
@@ -1510,7 +1524,9 @@ mod tests {
     fn native_model_geometry_requires_complete_draws_and_anchors() {
         let vertex = serde_json::json!([0, 0, 0]);
         let native = serde_json::json!({
-            "input":{"notefield_samples":true},
+            "input":{"notefield_samples":true,"native_source":{
+                "revision":"a".repeat(40),"modified_src":false,
+                "note_display_sha256":"b".repeat(64),"cubic_spline_sha256":"c".repeat(64)}},
             "capabilities":{"native_notefield_geometry":true,"native_model_geometry_protocol":2},
             "update_frames":[{"scene":1}],
             "dropped_model_geometry_samples":0,
@@ -1523,6 +1539,10 @@ mod tests {
         });
         validate_interactive_inputs(&native).unwrap();
         for (pointer, value) in [
+            ("/input/native_source/revision", serde_json::json!("unknown")),
+            ("/input/native_source/note_display_sha256", serde_json::Value::Null),
+            ("/input/native_source/cubic_spline_sha256", serde_json::json!("x".repeat(64))),
+            ("/input/native_source/modified_src", serde_json::Value::Null),
             (
                 "/capabilities/native_notefield_geometry",
                 serde_json::json!(false),

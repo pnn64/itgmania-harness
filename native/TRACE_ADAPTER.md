@@ -17,6 +17,12 @@ cmake -S <private-source> -B <build> -DCMAKE_PROJECT_INCLUDE=<harness>/native/tr
 cmake --build <build> --config Release --target ITGmania
 ```
 
+Reconfigure after changing the private source revision. The adapter stamps its
+own Git revision, tracked source modification state, and SHA-256 hashes of
+`NoteDisplay.cpp` and `CubicSpline.cpp` into the executable. Notefield traces
+retain these in `input.native_source`; the collector rejects missing provenance.
+The CLI's pinned oracle revision does not identify an external trace executable.
+
 Use `Program/ITGmania-harness-trace.exe` with `--itgmania-bin` on Windows.
 For headless captures the collector sets `ITGMANIA_HARNESS_HEADLESS`. The
 observed Windows crash handler saves the native `crashinfo.txt` and exits

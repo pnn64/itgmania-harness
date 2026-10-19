@@ -1,5 +1,6 @@
 #include "global.h"
 #include "interactive_trace.h"
+#include "source_provenance.h"
 #include "Actor.h"
 #include "ActorMultiVertex.h"
 #include "BitmapText.h"
@@ -153,6 +154,12 @@ int pace_capture(lua_State* L) {
   return 0;
 }
 void register_interactive(Lua* L) {
+  lua_newtable(L);
+  lua_pushstring(L, HARNESS_NATIVE_REVISION); lua_setfield(L, -2, "revision");
+  lua_pushboolean(L, HARNESS_NATIVE_DIRTY); lua_setfield(L, -2, "modified_src");
+  lua_pushstring(L, HARNESS_NOTE_DISPLAY_SHA256); lua_setfield(L, -2, "note_display_sha256");
+  lua_pushstring(L, HARNESS_CUBIC_SPLINE_SHA256); lua_setfield(L, -2, "cubic_spline_sha256");
+  lua_setglobal(L, "ITGMANIA_HARNESS_NATIVE_SOURCE");
   lua_pushcfunction(L, arrow_clock_scope);
   lua_setglobal(L, "ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE");
   lua_pushcfunction(L, current_catalog_inputs);

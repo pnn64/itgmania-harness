@@ -71,6 +71,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
   title=GAMESTATE:GetCurrentSong():GetDisplayFullTitle(),style=cfg.style,difficulty=cfg.difficulty,
   display={logical_width=SCREEN_WIDTH,logical_height=SCREEN_HEIGHT,width=DISPLAY:GetDisplayWidth(),height=DISPLAY:GetDisplayHeight(),video_renderers=PREFSMAN:GetPreference('VideoRenderers')},
   input={notefield_samples=true,player_options=cfg.player_options,players=inputs,autoplay=cfg.autoplay,
+   native_source=ITGMANIA_HARNESS_NATIVE_SOURCE,
    lua_gc_mode=cfg.stop_lua_gc and 'stopped' or 'automatic',
    drawable_from_beat=cfg.drawable_from_beat,observer_frame_period_seconds=cfg.capture_frame_period_seconds,
    headless_graphics=ITGMANIA_HARNESS_HEADLESS_GRAPHICS==true,

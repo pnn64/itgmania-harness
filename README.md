@@ -1241,6 +1241,12 @@ Player judgment progress and full scene reconstruction remain unsupported.
 
 ### Interactive executable traces
 
+Harness 0.1.95 stamps the external trace executable's own source revision,
+tracked source modification state, and NoteDisplay/CubicSpline hashes into
+notefield captures. These are independent of the Rust CLI's pinned oracle.
+Reconfigure the private adapter after changing its source revision. Missing
+source provenance is rejected rather than treating an older capture as current.
+
 Harness 0.1.94 adds `--notefield-samples` for actual native note rendering.
 The ordinary semantic recorder and its authored-actor drawable channel do not
 establish notefield parity: native hold actors lack song declarations, and

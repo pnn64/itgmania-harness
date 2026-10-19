@@ -136,6 +136,19 @@ function(itgmania_harness_interactive_source name)
 endfunction()
 
 function(itgmania_harness_trace_adapter)
+  # Stamp the executable's own source, not the Rust CLI's pinned oracle.
+  execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE native_revision OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+  execute_process(COMMAND git diff --quiet HEAD -- src
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" RESULT_VARIABLE native_dirty)
+  if(NOT native_dirty MATCHES "^[01]$")
+    message(FATAL_ERROR "Cannot determine native source modifications")
+  endif()
+  file(SHA256 "${CMAKE_SOURCE_DIR}/src/NoteDisplay.cpp" note_display_sha256)
+  file(SHA256 "${CMAKE_SOURCE_DIR}/src/CubicSpline.cpp" cubic_spline_sha256)
+  file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/itgmania-harness/source_provenance.h" CONTENT
+    "#define HARNESS_NATIVE_REVISION \"@native_revision@\"\n#define HARNESS_NATIVE_DIRTY @native_dirty@\n#define HARNESS_NOTE_DISPLAY_SHA256 \"@note_display_sha256@\"\n#define HARNESS_CUBIC_SPLINE_SHA256 \"@cubic_spline_sha256@\"\n" @ONLY)
+  target_include_directories(ITGmania PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/itgmania-harness")
   # Compile an observed copy; never patch the checked-out reference tree.
   get_target_property(sources ITGmania SOURCES)
   get_target_property(source_dir ITGmania SOURCE_DIR)
