@@ -1,4 +1,5 @@
 local cfg = ITGMANIA_HARNESS_CONFIG
+if cfg.drawable_samples and (cfg.drawable_from_beat or 0)>0 then ITGMANIA_HARNESS_CAPTURE_FROM_BEAT=cfg.drawable_from_beat end
 -- An explicit initial VM input, like the PRNG seed. Authored explicit garbage
 -- collection/restart calls still keep their stock Lua behavior.
 if cfg.stop_lua_gc then collectgarbage("stop") end
@@ -1268,6 +1269,7 @@ function trace.finish(completion)
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE == true,
 			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
+            native_notefield_geometry = false,
 			native_random_seed = true,
             native_host_clock_inputs = type(native_wrap) == "function",
             native_arrow_clock_inputs = type(ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE) == "function",
@@ -1401,6 +1403,7 @@ if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 	if cfg.drawable_samples then
 		ITGMANIA_HARNESS_DRAW_VERTICES = function(actor, primitive, vertices, state)
 			if finished or scene_count == 0 or #update_frames == 0 then return end
+			if (cfg.drawable_from_beat or 0)>0 and GAMESTATE:GetSongPosition():GetSongBeatVisible() < cfg.drawable_from_beat then return end
 			local record = actor_records[actor]
 			if not record or not record.definition_id then return end
 			if #drawable_samples >= cfg.max_events then dropped_drawable_samples=dropped_drawable_samples+1; return end

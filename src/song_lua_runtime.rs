@@ -13,6 +13,7 @@ const INIT_LUA: &str = include_str!("../probe_theme/ScreenSongLuaHarness overlay
 const GAMEPLAY_LUA: &str = include_str!("../probe_theme/ScreenGameplay overlay.lua");
 const SYSTEM_LUA: &str = include_str!("../probe_theme/ScreenSystemLayer overlay.lua");
 const TRACE_LUA: &str = include_str!("../probe_theme/SongLuaTrace.lua");
+const NOTEFIELD_LUA: &str = include_str!("../probe_theme/NotefieldTrace.lua");
 pub const DEFAULT_MAX_EVENTS: u32 = 250_000;
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -45,6 +46,9 @@ pub struct Options {
     pub capture_fps: Option<u32>,
     pub fixed_update_fps: Option<u32>,
     pub stop_lua_gc: bool,
+    pub notefield_samples: bool,
+    pub drawable_from_beat: f64,
+    pub player_options: Option<String>,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -74,6 +78,15 @@ pub fn capture(options: &Options) -> Result<Value, Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
+    if !options.drawable_from_beat.is_finite() || options.drawable_from_beat < 0.0
+        || !options.until_gameplay_end && options.drawable_from_beat > options.until_beat
+    { return Err(Error::new("drawable start beat must be within the capture")); }
+    if options.notefield_samples && !options.drawable_samples {
+        return Err(Error::new("notefield samples require drawable capture"));
+    }
+    if options.notefield_samples && (!options.headless || !options.inputs.is_empty()) {
+        return Err(Error::new("notefield geometry requires headless capture without scripted inputs"));
+    }
     let mut previous = (0, 0.0);
     for event in &options.inputs {
         if event.scene == 0 || !event.seconds.is_finite() || event.seconds < 0.0
@@ -130,6 +143,12 @@ fn capture_in(
         let binary = fs::read(&staged_binary).map_err(|error| Error::new(error.to_string()))?;
         require_headless_graphics_adapter(&binary)?;
     }
+    if options.notefield_samples {
+        let bytes = fs::read(&staged_binary).map_err(|error| Error::new(error.to_string()))?;
+        if !bytes.windows(b"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2".len())
+            .any(|window| window == b"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2")
+        { return Err(Error::new("notefield capture requires the native model geometry adapter; rebuild the trace executable")); }
+    }
     let mut command = Command::new(&staged_binary);
     if options.headless { command.env("ITGMANIA_HARNESS_HEADLESS", "1"); }
     if headless_graphics { command.env("ITGMANIA_HARNESS_HEADLESS_GRAPHICS", "1"); }
@@ -160,6 +179,7 @@ fn capture_in(
                     result_path.display()
                 ))
             })?;
+            let raw_sha256 = sha256_hex(&bytes);
             let mut document: Value = serde_json::from_slice(&bytes).map_err(|source| {
                 Error::new(format!(
                     "ITGmania wrote invalid runtime JSON to {}: {source}",
@@ -195,7 +215,11 @@ fn capture_in(
                     return Err(Error::new("native gameplay capture contains errors or dropped observations"));
                 }
             }
-            validate_runtime_inputs(&document)?;
+            if options.notefield_samples {
+                validate_interactive_inputs(&document)?;
+            } else {
+                validate_runtime_inputs(&document)?;
+            }
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
             // The installed probe wraps Actor::addcommand unconditionally.
             // Keep that observation profile with its trace so a legacy archive
@@ -207,6 +231,19 @@ fn capture_in(
                 "capture_binary_sha256": sha2::Sha256::digest(&capture_binary).iter()
                     .map(|byte| format!("{byte:02x}")).collect::<String>(),
             });
+            if options.notefield_samples {
+                // Keep this an actual native render observation. Derived actor
+                // transforms cannot stand in for submitted note meshes.
+                let staged_song = run_dir.join("Songs/Harness/Probe").join(simfile.file_name().unwrap());
+                let provenance=serde_json::json!({
+                    "raw_trace_sha256":raw_sha256,
+                    "simfile_sha256":sha256_hex(fs::read(staged_song).map_err(|e|Error::new(e.to_string()))?),
+                    "native_executable_sha256":sha256_hex(fs::read(&staged_binary).map_err(|e|Error::new(e.to_string()))?),
+                    "observer_sha256":sha256_hex(NOTEFIELD_LUA.as_bytes()),
+                    "capture_binary_sha256":document["command_observer"]["capture_binary_sha256"],
+                });
+                return Ok(notefield_render_document(document,provenance));
+            }
             crate::song_lua_semantics::enrich(&mut document).map_err(|source| {
                 Error::new(format!("could not derive song Lua semantics: {source}"))
             })?;
@@ -241,6 +278,60 @@ fn capture_in(
     let _ = child.kill();
     let _ = child.wait();
     result
+}
+
+fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    sha2::Sha256::digest(bytes.as_ref())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
+    let mut render = serde_json::Map::new();
+    // Retain every submitted mesh/strip and every clock sample. Semantic method
+    // tapes are a separate capture product, not a substitute for this geometry.
+    for key in [
+        "schema_version",
+        "oracle",
+        "harness_version",
+        "itgmania_version",
+        "source_simfile",
+        "simfile",
+        "title",
+        "description",
+        "difficulty",
+        "style",
+        "steps_type",
+        "display",
+        "theme",
+        "input",
+        "capture_limits",
+        "completion",
+        "end_position",
+        "random_seed",
+        "runtime_actors",
+        "actor_definitions",
+        "update_frames",
+        "model_geometry_meshes",
+        "model_geometry_samples",
+        "model_geometry_frames",
+        "drawable_samples",
+        "drawable_frames",
+        "dropped_drawable_samples",
+        "dropped_model_geometry_samples",
+    ] {
+        if let Some(value) = native.as_object_mut().unwrap().remove(key) {
+            render.insert(key.into(), value);
+        }
+    }
+    render.insert("capabilities".into(),serde_json::json!({
+        "native_notefield_geometry":true,"native_drawable_vertices":true,
+        "native_model_geometry_protocol":2,
+        "semantic_event_replay":false,"source_derived_transform_model":false,"raster_output":false,
+    }));
+    render.insert("provenance".into(), provenance);
+    Value::Object(render)
 }
 
 fn prepare_install(
@@ -346,7 +437,7 @@ fn prepare_install(
     )?;
     write(
         &run_dir.join("Themes/itgmania-harness/Scripts/03 SongLuaTrace.lua"),
-        TRACE_LUA.as_bytes(),
+        if options.notefield_samples { NOTEFIELD_LUA.as_bytes() } else { TRACE_LUA.as_bytes() },
     )?;
     write(
         &run_dir
@@ -597,7 +688,112 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
+    if document["capabilities"]["native_notefield_geometry"] != true
+        || document["capabilities"]["native_model_geometry_protocol"] != 2
+        || document["dropped_model_geometry_samples"] != 0
+    {
+        return Err(Error::new(
+            "native notefield geometry capture is incomplete",
+        ));
+    }
+    let samples = document["model_geometry_samples"]
+        .as_array()
+        .ok_or_else(|| Error::new("native model geometry samples missing"))?;
+    let meshes = document["model_geometry_meshes"]
+        .as_array()
+        .ok_or_else(|| Error::new("native model mesh catalog missing"))?;
+    let mut ids = std::collections::BTreeSet::new();
+    for mesh in meshes {
+        let rows = mesh["vertices"]
+            .as_array()
+            .ok_or_else(|| Error::new("native model mesh vertices missing"))?;
+        let id = mesh["id"]
+            .as_u64()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| Error::new("native model mesh ID missing"))?;
+        if !ids.insert(id)
+            || rows.is_empty()
+            || rows.len() % 3 != 0
+            || !rows.iter().all(|row| {
+                row.as_array().is_some_and(|row| {
+                    row.len() == 3
+                        && row
+                            .iter()
+                            .all(|value| value.as_f64().is_some_and(f64::is_finite))
+                })
+            })
+        {
+            return Err(Error::new("native model mesh is incomplete"));
+        }
+    }
+    let frames = document["model_geometry_frames"]
+        .as_array()
+        .filter(|frames| !frames.is_empty())
+        .ok_or_else(|| Error::new("native model geometry frame boundaries missing"))?;
+    let updates = document["update_frames"]
+        .as_array()
+        .ok_or_else(|| Error::new("native model update anchors missing"))?;
+    let mut consumed = 0;
+    let mut previous = 0;
+    for frame in frames {
+        let at = frame["update_sequence"].as_u64().unwrap_or(0);
+        let count = frame["samples"].as_u64().unwrap_or(u64::MAX);
+        if at == 0
+            || at < previous
+            || at > updates.len() as u64
+            || count < consumed
+            || count > samples.len() as u64
+        {
+            return Err(Error::new("native model frame boundary is invalid"));
+        }
+        for sample in &samples[consumed as usize..count as usize] {
+            if sample["update_sequence"] != at
+                || sample["scene"] != updates[at as usize - 1]["scene"]
+                || sample["coordinate_space"] != "native-projection-before-display-centering"
+                || sample["primitive"] != "ModelTriangles"
+                || sample["actor"].as_str().is_none_or(str::is_empty)
+                || !matches!(
+                    sample["draw_phase"].as_str(),
+                    Some("during_update" | "screen_draw")
+                )
+                || sample["state"]["render_target"].as_u64().is_none()
+                || sample["state"]["anchors_clip"]
+                    .as_array()
+                    .is_none_or(|anchors| {
+                        anchors.len() != 4
+                            || !anchors.iter().all(|anchor| {
+                                anchor.as_array().is_some_and(|row| {
+                                    row.len() == 4
+                                        && row
+                                            .iter()
+                                            .all(|value| value.as_f64().is_some_and(f64::is_finite))
+                                })
+                            })
+                    })
+                || sample["geometry"]
+                    .as_u64()
+                    .is_none_or(|id| !ids.contains(&id))
+            {
+                return Err(Error::new(
+                    "native model geometry or frame anchor is invalid",
+                ));
+            }
+        }
+        consumed = count;
+        previous = at;
+    }
+    if consumed != samples.len() as u64 {
+        return Err(Error::new("native model geometry tail was not drawn"));
+    }
+
+    Ok(())
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
+    if document["input"]["notefield_samples"] == true {
+        validate_notefield_geometry(document)?;
+    }
     if !document["interactive_observer_error"].is_null() {
         return Err(Error::new("native interactive observer failed"));
     }
@@ -920,6 +1116,9 @@ fn config_lua(options: &Options) -> String {
          \trandom_seed = {},\n\
          \tinput_script = {{{}}},\n\
          \tdrawable_samples = {},\n\
+         \tnotefield_samples = {},\n\
+         \tdrawable_from_beat = {},\n\
+         \tplayer_options = {},\n\
          \tcapture_frame_period_seconds = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
@@ -936,6 +1135,9 @@ fn config_lua(options: &Options) -> String {
         options.random_seed,
         inputs,
         options.drawable_samples,
+        options.notefield_samples,
+        options.drawable_from_beat,
+        options.player_options.as_deref().map(lua_quote).unwrap_or_else(|| "nil".into()),
         options.capture_fps.map(|fps| format!("{:.17}", 1.0 / f64::from(fps))).unwrap_or_else(|| "nil".into())
     )
 }
@@ -1122,6 +1324,236 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the headless native model geometry adapter"]
+    fn native_notefield_capture_includes_models_and_position_caps() {
+        let directory =
+            std::env::temp_dir().join(format!("itgmania-notefield-control-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut wav = Vec::new();
+        let length = 8_000u32 * 7;
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + length).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&length.to_le_bytes());
+        wav.resize(44 + length as usize, 128);
+        fs::write(directory.join("silence.wav"), wav).unwrap();
+        fs::write(
+            directory.join("control.ssc"),
+            r#"
+    #VERSION:0.83;
+    #TITLE:Native notefield capture control;
+    #MUSIC:silence.wav;
+    #OFFSET:0;
+    #BPMS:0=120;
+    #FGCHANGES:0=default.lua=1=0=0=1;
+    #NOTEDATA:;
+    #STEPSTYPE:dance-single;
+    #DESCRIPTION:Native geometry control;
+    #DIFFICULTY:Challenge;
+    #METER:1;
+    #NOTES:
+    0000
+    2000
+    0100
+    0010
+    0001
+    3000
+    0000
+    0000
+    ,
+    0000
+    0000
+    2000
+    0001
+    3000
+    0100
+    0010
+    0000
+    ;
+    "#,
+        )
+        .unwrap();
+        fs::write(
+            directory.join("default.lua"),
+            r#"
+    return Def.ActorFrame{OnCommand=function(self)
+     self:SetUpdateFunction(function()
+      local player=SCREENMAN:GetTopScreen():GetChild('PlayerP1')
+      if not player then return end
+      for col,actor in ipairs(player:GetChild('NoteField'):GetColumnActors()) do
+       local handler=actor:GetPosHandler()
+       handler:SetSplineMode('NoteColumnSplineMode_Position')
+       handler:SetBeatsPerT(1)
+       local spline=handler:GetSpline()
+       spline:SetSize(2)
+       local direction=GAMESTATE:GetSongBeat()<4 and 1 or -1
+       spline:SetPoint(1,{64*(col-2.5),-135*direction,0})
+       spline:SetPoint(2,{64*(col-2.5),165*direction,0})
+       spline:Solve()
+      end
+     end)
+    end}
+    "#,
+        )
+        .unwrap();
+        let options = Options {
+            simfile: directory.join("control.ssc"),
+            itgmania_bin: std::env::var_os("ITGMANIA_HARNESS_TRACE_BIN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("target/native-engine-source/Program/ITGmania-harness-trace.exe")
+                }),
+            until_beat: 6.75,
+            style: "single".into(),
+            difficulty: Some("Challenge".into()),
+            fallback_theme: "Harness Simply Love".into(),
+            timeout: Duration::from_secs(45),
+            keep_run_dir: false,
+            headless: true,
+            until_gameplay_end: false,
+            autoplay: true,
+            max_events: DEFAULT_MAX_EVENTS,
+            random_seed: 1,
+            inputs: Vec::new(),
+            drawable_samples: true,
+            capture_fps: Some(60),
+            fixed_update_fps: Some(60),
+            stop_lua_gc: false,
+            notefield_samples: true,
+            drawable_from_beat: 1.0,
+            player_options: Some("m730, 60% mini, cel".into()),
+        };
+        let document = capture(&options).unwrap();
+        fs::write(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/notefield-control-native.json"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(document["input"]["window_visible"], false);
+        assert_eq!(document["capabilities"]["native_notefield_geometry"], true);
+        let models = document["model_geometry_samples"].as_array().unwrap();
+        assert!(
+            !models.is_empty(),
+            "native Cel note models must reach the recorder"
+        );
+        assert!(
+            models
+                .iter()
+                .any(|sample| sample["state"]["note_context"]["kind"] == "actor"
+                    && sample["state"]["note_context"]["column"].is_u64()),
+            "native note identity must accompany model draws"
+        );
+        let strips: Vec<_> = document["drawable_samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|sample| {
+                sample["primitive"] == "SymmetricQuadStrip" && sample.get("definition_id").is_none()
+            })
+            .collect();
+        assert!(
+            !strips.is_empty(),
+            "native hold bodies and caps must survive the declaration filter"
+        );
+        assert!(
+            strips
+                .iter()
+                .any(|sample| sample["state"]["note_context"]["kind"] == "hold_strip"),
+            "native hold part identity"
+        );
+        let extent = |sample: &&Value| {
+            let rows = sample["vertices"].as_array().unwrap();
+            let mut low = f64::INFINITY;
+            let mut high = f64::NEG_INFINITY;
+            for row in rows.iter().skip(1).step_by(3) {
+                let y = row[1].as_f64().unwrap();
+                low = low.min(y);
+                high = high.max(y);
+            }
+            high - low
+        };
+        assert!(
+            strips
+                .iter()
+                .any(|sample| extent(sample) > 0.99 && extent(sample) < 1.01),
+            "native Position-spline cap rows"
+        );
+        assert!(
+            strips.iter().any(|sample| extent(sample) > 10.0),
+            "native hold body rows"
+        );
+        let mut cap_directions = [false; 2];
+        for sample in &strips {
+            let rows = sample["vertices"].as_array().unwrap();
+            let delta = rows[rows.len() - 2][1].as_f64().unwrap() - rows[1][1].as_f64().unwrap();
+            if (delta.abs() - 1.0).abs() < 0.01 {
+                cap_directions[usize::from(delta < 0.0)] = true;
+            }
+        }
+        assert_eq!(
+            cap_directions,
+            [true, true],
+            "normal and reversed native caps"
+        );
+    }
+
+    #[test]
+    fn native_model_geometry_requires_complete_draws_and_anchors() {
+        let vertex = serde_json::json!([0, 0, 0]);
+        let native = serde_json::json!({
+            "input":{"notefield_samples":true},
+            "capabilities":{"native_notefield_geometry":true,"native_model_geometry_protocol":2},
+            "update_frames":[{"scene":1}],
+            "dropped_model_geometry_samples":0,
+            "model_geometry_frames":[{"update_sequence":1,"samples":1}],
+            "model_geometry_meshes":[{"id":1,"vertices":[vertex,vertex,vertex]}],
+            "model_geometry_samples":[{"scene":1,"update_sequence":1,"actor":"external-0001",
+                "draw_phase":"screen_draw","state":{"render_target":0,"anchors_clip":[[0,0,0,1],[1,0,0,1],[0,1,0,1],[0,0,1,1]]},
+                "primitive":"ModelTriangles","geometry":1,
+                "coordinate_space":"native-projection-before-display-centering"}]
+        });
+        validate_interactive_inputs(&native).unwrap();
+        for (pointer, value) in [
+            (
+                "/capabilities/native_notefield_geometry",
+                serde_json::json!(false),
+            ),
+            ("/dropped_model_geometry_samples", serde_json::json!(1)),
+            ("/model_geometry_frames/0/samples", serde_json::json!(0)),
+            (
+                "/model_geometry_meshes/0/vertices",
+                serde_json::json!([[0, 0, 0]]),
+            ),
+            (
+                "/model_geometry_samples/0/update_sequence",
+                serde_json::json!(2),
+            ),
+            ("/model_geometry_samples/0/geometry", serde_json::json!(99)),
+            ("/model_geometry_samples/0/state/render_target", serde_json::Value::Null),
+            (
+                "/model_geometry_samples/0/state/anchors_clip",
+                serde_json::Value::Null,
+            ),
+        ] {
+            let mut bad = native.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                validate_interactive_inputs(&bad).is_err(),
+                "accepted {pointer}"
+            );
+        }
+    }
+
+    #[test]
     fn lua_strings_escape_paths_and_control_characters() {
         assert_eq!(
             lua_quote("C:\\Songs\\a\"b\n"),
@@ -1162,6 +1594,9 @@ mod tests {
             capture_fps: None,
             fixed_update_fps: None,
             stop_lua_gc: false,
+            notefield_samples: false,
+            drawable_from_beat: 0.0,
+            player_options: None,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -1169,6 +1604,13 @@ mod tests {
         assert!(lua.contains("difficulty = \"Challenge\""));
         assert!(lua.contains("max_events = 250000"));
         assert!(lua.contains("random_seed = 73"));
+        options.notefield_samples=true; options.drawable_samples=true; options.headless=true;
+        options.drawable_from_beat=2.0;
+        options.player_options=Some("m730, 60% mini, cel".into());
+        let profiled = config_lua(&options);
+        assert!(profiled.contains("notefield_samples = true"));
+        assert!(profiled.contains("drawable_from_beat = 2"));
+        assert!(profiled.contains("player_options = \"m730, 60% mini, cel\""));
         for seed in [0, u32::MAX] {
             options.random_seed = seed;
             assert!(validate_options(&options).is_err());
@@ -1579,6 +2021,9 @@ mod tests {
             capture_fps: None,
             fixed_update_fps: Some(60),
             stop_lua_gc: false,
+            notefield_samples: false,
+            drawable_from_beat: 0.0,
+            player_options: None,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();

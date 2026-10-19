@@ -64,6 +64,12 @@ local function configure_song()
 		THEME:ReloadMetrics()
 	end
 	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+		-- Profile inputs must reach the song before it constructs its splines.
+		if cfg.player_options then
+			for _,level in ipairs({"ModsLevel_Preferred","ModsLevel_Stage","ModsLevel_Song","ModsLevel_Current"}) do
+				GAMESTATE:GetPlayerState(player):GetPlayerOptions(level):FromString(cfg.player_options)
+			end
+		end
 		GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred"):PlayerAutoPlay(cfg.autoplay)
 	end
 	ITGMANIA_HARNESS_TRACE.capture_inputs(game_mode_initialized)

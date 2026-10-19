@@ -174,6 +174,9 @@ fn parse_song_lua_trace_args(
     let mut capture_fps = None;
     let mut fixed_update_fps = None;
     let mut stop_lua_gc = false;
+    let mut notefield_samples = false;
+    let mut drawable_from_beat = None;
+    let mut player_options = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -271,6 +274,15 @@ fn parse_song_lua_trace_args(
             Some("--input-script") => set_once(&mut input_script,
                 PathBuf::from(next_utf8(&mut args, "--input-script")?), "--input-script")?,
             Some("--drawable-samples") if !drawable_samples => drawable_samples = true,
+            Some("--notefield-samples") if !notefield_samples => notefield_samples = true,
+            Some("--player-options") => set_once(&mut player_options,
+                next_utf8(&mut args, "--player-options")?, "--player-options")?,
+            Some("--drawable-from-beat") => {
+                let raw = next_utf8(&mut args, "--drawable-from-beat")?;
+                let beat = raw.parse::<f64>().map_err(|_| CliError::Usage("drawable start beat must be a non-negative number".into()))?;
+                if !beat.is_finite() || beat < 0.0 { return Err(CliError::Usage("drawable start beat must be a non-negative number".into())); }
+                set_once(&mut drawable_from_beat, beat, "--drawable-from-beat")?;
+            }
             Some("--stop-lua-gc") if !stop_lua_gc => stop_lua_gc = true,
             Some("--capture-fps") => {
                 let raw = next_utf8(&mut args, "--capture-fps")?;
@@ -314,7 +326,7 @@ fn parse_song_lua_trace_args(
             fallback_theme: fallback_theme.unwrap_or_else(|| "Simply-Love-SM5".into()),
             timeout: timeout.unwrap_or_else(|| std::time::Duration::from_secs(120)),
             keep_run_dir,
-            headless,
+            headless: headless || notefield_samples,
             until_gameplay_end,
             autoplay: autoplay.unwrap_or(true),
             max_events: max_events.unwrap_or(song_lua_runtime::DEFAULT_MAX_EVENTS),
@@ -325,10 +337,13 @@ fn parse_song_lua_trace_args(
                     .map_err(|error| CliError::Usage(format!("invalid input script: {error}")))?,
                 None => Vec::new(),
             },
-            drawable_samples,
+            drawable_samples: drawable_samples || notefield_samples,
             capture_fps,
             fixed_update_fps,
             stop_lua_gc,
+            notefield_samples,
+            drawable_from_beat: drawable_from_beat.unwrap_or(0.0),
+            player_options,
         },
         out,
     })
@@ -1351,6 +1366,7 @@ fn print_help() {
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
              [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000] [--stop-lua-gc]\n\
+             [--notefield-samples] [--drawable-from-beat BEAT] [--player-options STRING]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
@@ -1521,6 +1537,47 @@ mod tests {
             "--until-gameplay-end", "--until-beat", "16",
         ].map(OsString::from);
         assert!(matches!(parse_song_lua_trace_args(args.into_iter()), Err(CliError::Usage(_))));
+    }
+
+    #[test]
+    fn trace_notefield_profile_forces_headless_native_draws() {
+        let args = [
+            "song.ssc",
+            "--itgmania-bin",
+            "ITGmania-harness-trace.exe",
+            "--until-beat",
+            "131",
+            "--notefield-samples",
+            "--drawable-from-beat",
+            "130.2",
+            "--player-options",
+            "m730, 60% mini, cel",
+        ]
+        .map(OsString::from);
+        let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
+        assert!(trace.options.headless);
+        assert!(trace.options.drawable_samples);
+        assert!(trace.options.notefield_samples);
+        assert_eq!(trace.options.drawable_from_beat, 130.2);
+        assert_eq!(
+            trace.options.player_options.as_deref(),
+            Some("m730, 60% mini, cel")
+        );
+        assert_eq!(trace.options.fixed_update_fps, None);
+        for beat in ["-1", "NaN", "inf"] {
+            let args = [
+                "song.ssc",
+                "--itgmania-bin",
+                "native.exe",
+                "--until-beat",
+                "131",
+                "--notefield-samples",
+                "--drawable-from-beat",
+                beat,
+            ]
+            .map(OsString::from);
+            assert!(parse_song_lua_trace_args(args.into_iter()).is_err());
+        }
     }
 
     #[test]

@@ -9,7 +9,9 @@
 #include "InputFilter.h"
 #include "InputMapper.h"
 #include "LuaManager.h"
+#include "ModelTypes.h"
 #include "RageMath.h"
+#include "RageDisplay.h"
 #include "RageTexture.h"
 #include "Screen.h"
 #include "ScreenManager.h"
@@ -21,6 +23,36 @@
 
 namespace {
 Actor* drawing = nullptr;
+const msMesh* drawing_model_mesh = nullptr;
+bool updating_screen = false;
+const ItgmaniaHarnessNoteScope* drawing_note = nullptr;
+struct ModelGeometry { int id = 0; std::vector<float> vertices; };
+std::map<const msMesh*,ModelGeometry> model_geometries;
+int next_model_geometry = 1;
+bool notefield_only(lua_State* L) {
+  lua_getglobal(L,"ITGMANIA_HARNESS_NOTEFIELD_ONLY");
+  const bool only=lua_toboolean(L,-1); lua_pop(L,1); return only;
+}
+bool draw_capture_disabled(lua_State* L) {
+  lua_getglobal(L, "ITGMANIA_HARNESS_CAPTURE_FROM_BEAT");
+  const bool disabled = lua_isnumber(L, -1) && GAMESTATE
+      && GAMESTATE->m_Position.m_fSongBeatVisible < lua_tonumber(L, -1);
+  lua_pop(L, 1);
+  return disabled;
+}
+void note_context(lua_State* L) {
+  if (!drawing_note) return;
+  lua_createtable(L, 0, 7);
+  const auto& note = *drawing_note;
+  lua_pushinteger(L,note.player); lua_setfield(L,-2,"player");
+  lua_pushinteger(L,note.column); lua_setfield(L,-2,"column");
+  lua_pushinteger(L,note.part); lua_setfield(L,-2,"part");
+  lua_pushnumber(L,note.note_beat); lua_setfield(L,-2,"note_beat");
+  lua_pushnumber(L,note.draw_beat); lua_setfield(L,-2,"draw_beat");
+  lua_pushboolean(L,note.held); lua_setfield(L,-2,"held");
+  lua_pushstring(L,note.kind); lua_setfield(L,-2,"kind");
+  lua_setfield(L,-2,"note_context");
+}
 float option_song_delta = 0;
 float option_player_delta[NUM_PLAYERS] = {};
 struct CatalogInputs { float offset, rate; };
@@ -133,6 +165,9 @@ void register_interactive(Lua* L) {
   lua_setglobal(L, "ITGMANIA_HARNESS_INJECT_INPUT");
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE");
+  lua_pushboolean(L, true);
+  lua_setglobal(L, "ITGMANIA_HARNESS_MODEL_GEOMETRY_AVAILABLE");
+  lua_pushinteger(L,2); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2");
 }
 REGISTER_WITH_LUA_FUNCTION(register_interactive)
 }
@@ -185,6 +220,10 @@ void itgmania_harness_before_screen_update(float delta) {
   if (lua_isfunction(L, -1)) { lua_pushnumber(L, delta); observe(L, 1); }
   lua_settop(L, top); LUA->Release(L);
 }
+ItgmaniaHarnessUpdateFrame::ItgmaniaHarnessUpdateFrame(float delta) {
+  itgmania_harness_before_screen_update(delta); updating_screen = true;
+}
+ItgmaniaHarnessUpdateFrame::~ItgmaniaHarnessUpdateFrame() { updating_screen = false; }
 
 void itgmania_harness_after_screen_draw() {
   Lua* L = LUA->Get(); const int top = lua_gettop(L);
@@ -215,6 +254,7 @@ void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVerte
     const RageMatrix& centering, const RageMatrix& texture) {
   if (!drawing || count <= 0) return;
   Lua* L = LUA->Get(); const int top = lua_gettop(L);
+  if (draw_capture_disabled(L) || (notefield_only(L) && !drawing_note)) { LUA->Release(L); return; }
   lua_getglobal(L, "ITGMANIA_HARNESS_DRAW_VERTICES");
   if (!lua_isfunction(L, -1)) { lua_settop(L, top); LUA->Release(L); return; }
   drawing->PushSelf(L);
@@ -237,6 +277,8 @@ void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVerte
     lua_rawseti(L, -2, i + 1);
   }
   lua_createtable(L, 0, 9);
+  note_context(L);
+  field(L, "render_target", static_cast<double>(DISPLAY->GetRenderTarget()));
   boolean(L, "z_write", state.write); boolean(L, "texture_wrapping", state.wrap);
   boolean(L, "texture_filtering", state.filter); field(L, "z_test", state.test);
   field(L, "blend", state.blend); field(L, "z_bias", state.bias); field(L, "cull", state.cull);
@@ -254,3 +296,71 @@ void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVerte
   observe(L, 4);
   lua_settop(L, top); LUA->Release(L);
 }
+
+// Observe actual submitted positions, including CPU-skinned vertices and the
+// mesh's bone matrix. This channel deliberately does not invent material colors
+// or claim pixel parity; it retains local and projected triangle positions.
+void itgmania_harness_draw_model(const msMesh& mesh, int index,
+    const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection) {
+  if (!drawing || mesh.Triangles.empty()) return;
+  Lua* L = LUA->Get(); const int top = lua_gettop(L);
+  if (notefield_only(L) && !drawing_note) { LUA->Release(L); return; }
+  lua_getglobal(L,"ITGMANIA_HARNESS_MODEL_MESH");
+  if (!lua_isfunction(L,-1)) { lua_settop(L,top); LUA->Release(L); return; }
+  // Cache by submitted positions, not the source asset: CPU skinning can change
+  // the same mesh between draws. Static Cel meshes cross the Lua boundary once.
+  std::vector<float> vertices;
+  vertices.reserve(mesh.Triangles.size()*9);
+  for (const auto& triangle:mesh.Triangles) for (const auto vertex_index:triangle.nVertexIndices) {
+    const auto& p=mesh.Vertices.at(vertex_index).p;
+    vertices.insert(vertices.end(),{p.x,p.y,p.z});
+  }
+  auto& geometry=model_geometries[&mesh];
+  if (geometry.id==0 || geometry.vertices!=vertices) {
+    geometry.id=next_model_geometry++; geometry.vertices=std::move(vertices);
+    lua_pushinteger(L,geometry.id);
+    lua_createtable(L,static_cast<int>(geometry.vertices.size()/3),0);
+    for (size_t i=0;i<geometry.vertices.size();i+=3) {
+      lua_createtable(L,3,0);
+      for (int k=0;k<3;++k) { lua_pushnumber(L,geometry.vertices[i+k]); lua_rawseti(L,-2,k+1); }
+      lua_rawseti(L,-2,static_cast<int>(i/3+1));
+    }
+    observe(L,2);
+  }
+  lua_settop(L,top);
+  if (draw_capture_disabled(L)) { LUA->Release(L); return; }
+  lua_getglobal(L,"ITGMANIA_HARNESS_DRAW_MODEL");
+  if (!lua_isfunction(L,-1)) { lua_settop(L,top); LUA->Release(L); return; }
+  drawing->PushSelf(L); lua_pushinteger(L,geometry.id);
+  lua_createtable(L,0,5);
+  note_context(L); field(L,"mesh_index",index);
+  field(L,"render_target",static_cast<double>(DISPLAY->GetRenderTarget()));
+  lua_pushstring(L,updating_screen?"during_update":"screen_draw"); lua_setfield(L,-2,"draw_phase");
+  lua_pushstring(L,mesh.sName.c_str()); lua_setfield(L,-2,"mesh_name");
+  lua_createtable(L,4,0);
+  for (int point=0;point<4;++point) {
+    RageVector4 local(point==1?1.0f:0.0f,point==2?1.0f:0.0f,point==3?1.0f:0.0f,1.0f),w,v,clip;
+    RageVec4TransformCoord(&w,&local,&world); RageVec4TransformCoord(&v,&w,&view);
+    RageVec4TransformCoord(&clip,&v,&projection);
+    const double values[]={clip.x,clip.y,clip.z,clip.w};
+    lua_createtable(L,4,0);
+    for(int k=0;k<4;++k){lua_pushnumber(L,values[k]);lua_rawseti(L,-2,k+1);}
+    lua_rawseti(L,-2,point+1);
+  }
+  lua_setfield(L,-2,"anchors_clip");
+  observe(L,3); lua_settop(L,top); LUA->Release(L);
+}
+
+ItgmaniaHarnessModelMeshScope::ItgmaniaHarnessModelMeshScope(const msMesh* mesh)
+    : previous(drawing_model_mesh) { drawing_model_mesh = mesh; }
+ItgmaniaHarnessModelMeshScope::~ItgmaniaHarnessModelMeshScope() { drawing_model_mesh = previous; }
+void itgmania_harness_draw_model_current(int index,
+    const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection) {
+  if (drawing_model_mesh) itgmania_harness_draw_model(*drawing_model_mesh, index, world, view, projection);
+}
+
+ItgmaniaHarnessNoteScope::ItgmaniaHarnessNoteScope(int player_, int column_,
+    float note_beat_, float draw_beat_, int part_, bool held_, const char* kind_)
+    : previous(drawing_note), player(player_), column(column_), part(part_),
+      note_beat(note_beat_), draw_beat(draw_beat_), held(held_), kind(kind_) { drawing_note = this; }
+ItgmaniaHarnessNoteScope::~ItgmaniaHarnessNoteScope() { drawing_note = previous; }

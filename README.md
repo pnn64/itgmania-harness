@@ -1241,6 +1241,56 @@ Player judgment progress and full scene reconstruction remain unsupported.
 
 ### Interactive executable traces
 
+Harness 0.1.94 adds `--notefield-samples` for actual native note rendering.
+The ordinary semantic recorder and its authored-actor drawable channel do not
+establish notefield parity: native hold actors lack song declarations, and
+compiled Model draws do not pass through the sprite-vertex submission API.
+
+The new mode uses a lightweight observer, without authored-method wrappers or
+source-derived poses. The native adapter observes `NoteDisplay` and the actual
+submitted Model meshes, including CPU skinning and mesh bone transforms. Each
+draw retains its player, column, note beat, rendered song beat, note/hold part,
+update/draw phase, render-target identity, and homogeneous transform anchors.
+Target zero identifies the screen; nonzero IDs identify offscreen targets within
+that run. Consumers must compare matching targets: the same note can be submitted
+under the Player perspective and an AFT's orthographic camera in one frame.
+Mesh positions are cached
+once per distinct submitted geometry, keeping recording overhead out of normal
+scroll motion. Hold strips and caps retain their submitted vertices.
+The result is an `itgmania_notefield_render_trace`, with
+`semantic_event_replay=false` and `raster_output=false`; it is not a replacement
+for semantic replay or a claim of pixel identity.
+
+Use `--player-options` to apply native modifiers at every ModsLevel before song
+construction, and `--drawable-from-beat` to bound the rendered observations.
+For example, capture only 7th Gear's first right arrow approach:
+
+```powershell
+target/debug/itgmania-harness-rs.exe song-lua-trace '7th Gear/7th Gear.ssc' `
+  --itgmania-bin target/native-engine-source/Program/ITGmania-harness-trace.exe `
+  --headless --notefield-samples --style single --difficulty Challenge `
+  --fallback-theme 'Harness Simply Love' --player-options 'm730, 60% mini, cel' `
+  --drawable-from-beat 130.2 --until-beat 130.74 --capture-fps 120 `
+  --out target/seventh-notefield-native.json
+```
+
+This mode requires the v2 geometry adapter and refuses older executables before
+launching them. Headless captures also require the offscreen graphics adapter
+and verify that the window remained hidden. The output retains source,
+executable, observer and raw-trace hashes. Validators reject missing mesh
+references, truncated triangle lists, incomplete draw boundaries and dropped
+observations. A small ignored headless control exercises Cel notes and normal
+and reversed Position-spline holds:
+
+```powershell
+cargo test --locked --bin itgmania-harness-rs native_notefield_capture_includes_models_and_position_caps -- --ignored
+```
+
+Use the default variable update clock for playback comparisons. A fixed update
+delta does not lock the audio clock or guarantee the requested rendering FPS;
+recording overhead can otherwise put authored timers and music on different
+clocks. `--capture-fps` is a pacing limit, not an assertion about achieved FPS.
+
 Harness 0.1.81 records each SongOptions and PlayerOptions `Approach` timer delta
 in `update_frames[].option_deltas` (`song` and `players`). `ModsGroup::Update`
 replaces the screen delta with a separate `RageTimer` delta for each group.
