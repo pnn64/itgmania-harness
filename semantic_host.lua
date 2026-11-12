@@ -607,6 +607,23 @@ local function state_key(name)
 	return key:lower()
 end
 
+-- ActorFrame::LoadChildrenFromNode sorts m_SubActors after loading each
+-- child's InitCommand. The same vector is later used for command dispatch
+-- and UpdateInternal, so sorting is observable even without drawing.
+function manual.sort_actor_children(frame)
+	local children = frame.children or {}
+	for index = 2, #children do
+		local child = children[index]
+		local order = tonumber(child.state.draworder) or 0
+		local at = index
+		while at > 1 and (tonumber(children[at - 1].state.draworder) or 0) > order do
+			children[at] = children[at - 1]
+			at = at - 1
+		end
+		children[at] = child
+	end
+end
+
 local function int_boolean(value)
 	if type(value) == "number" then return value ~= 0 end
 	return value == true
@@ -620,6 +637,7 @@ local TWEEN_DEFAULTS = {
 	x = 0, y = 0, z = 0,
 	zoom = 1, zoomx = 1, zoomy = 1, zoomz = 1,
 	rotationx = 0, rotationy = 0, rotationz = 0,
+	quaternion = { 0, 0, 0, 1 },
 	skewx = 0, skewy = 0,
 	cropleft = 0, croptop = 0, cropright = 0, cropbottom = 0,
 	fadeleft = 0, fadetop = 0, faderight = 0, fadebottom = 0,
@@ -683,6 +701,51 @@ local function add_tween_value(actor, key, value)
 	state[key] = _ITG_FLOAT(_ITG_FLOAT(state_value(state, key)) + _ITG_FLOAT(value))
 end
 
+-- Actor::AddRotationH/P/R appends a negative-axis Rage quaternion to the
+-- destination tween state. RageQuatMultiply normalizes after multiplication.
+function manual.quat_multiply(a, b)
+	local x = _ITG_FLOAT(a[4] * b[1] + a[1] * b[4] + a[2] * b[3] - a[3] * b[2])
+	local y = _ITG_FLOAT(a[4] * b[2] + a[2] * b[4] + a[3] * b[1] - a[1] * b[3])
+	local z = _ITG_FLOAT(a[4] * b[3] + a[3] * b[4] + a[1] * b[2] - a[2] * b[1])
+	local w = _ITG_FLOAT(a[4] * b[4] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3])
+	local square = _ITG_FLOAT(x*x + y*y + z*z + w*w)
+	local scale = square > 0 and _ITG_FLOAT(1 / _ITG_FLOAT(math.sqrt(square))) or 1
+	return { _ITG_FLOAT(x*scale), _ITG_FLOAT(y*scale), _ITG_FLOAT(z*scale), _ITG_FLOAT(w*scale) }
+end
+
+function manual.quat_rotate(quat, axis, degrees)
+	-- RageQuatFromH/P/R narrows its argument before multiplying PI/180, then
+	-- halves and negates the angle; H rotates Y, P rotates X, R rotates Z.
+	local radians = _ITG_FLOAT(_ITG_FLOAT(_ITG_FLOAT(degrees) * _ITG_FLOAT(math.pi / 180)) / 2)
+	radians = _ITG_FLOAT(-radians)
+	local axis_rotation = { 0, 0, 0, _ITG_FLOAT(math.cos(radians)) }
+	axis_rotation[axis] = _ITG_FLOAT(math.sin(radians))
+	return manual.quat_multiply(quat, axis_rotation)
+end
+
+function manual.quat_slerp(from, to, percent)
+	-- Actor::TweenState::MakeWeightedAverage calls RageQuatSlerp, rather than
+	-- interpolating four independent quaternion components.
+	local cosine = _ITG_FLOAT(from[1]*to[1] + from[2]*to[2] + from[3]*to[3] + from[4]*to[4])
+	if cosine < 0 then
+		cosine = -cosine
+		to = { -to[1], -to[2], -to[3], -to[4] }
+	end
+	local a, b
+	if cosine < 0.9999 then
+		local omega = _ITG_FLOAT(math.acos(cosine))
+		local sine = _ITG_FLOAT(math.sin(omega))
+		a = _ITG_FLOAT(math.sin(_ITG_FLOAT((1-percent)*omega)) / sine)
+		b = _ITG_FLOAT(math.sin(_ITG_FLOAT(percent*omega)) / sine)
+	else
+		a, b = _ITG_FLOAT(1-percent), _ITG_FLOAT(percent)
+	end
+	return {
+		_ITG_FLOAT(a*from[1] + b*to[1]), _ITG_FLOAT(a*from[2] + b*to[2]),
+		_ITG_FLOAT(a*from[3] + b*to[3]), _ITG_FLOAT(a*from[4] + b*to[4]),
+	}
+end
+
 local function tween_time_left(actor)
 	local hibernation = tonumber(rawget(actor, "hibernate_seconds")) or 0
 	local total = hibernation
@@ -736,7 +799,11 @@ end
 local function apply_tween(actor, start, finish, percent)
 	for key in pairs(TWEEN_DEFAULTS) do
 		if start[key] ~= nil or finish[key] ~= nil then
-			actor.state[key] = tween_value(state_value(start, key), state_value(finish, key), percent)
+			if key == "quaternion" then
+				actor.state[key] = manual.quat_slerp(state_value(start, key), state_value(finish, key), percent)
+			else
+				actor.state[key] = tween_value(state_value(start, key), state_value(finish, key), percent)
+			end
 		end
 	end
 end
@@ -1025,6 +1092,8 @@ local function actor_call(actor, name, ...)
 	elseif name == "set_mult_attrs_with_diffuse" then
 		-- GETTER_SETTER_BOOL_METHOD uses lua_toboolean, so even numeric 0 is true.
 		actor.state.mult_attrs_with_diffuse = not not (...)
+		elseif name == "SortByDrawOrder" then
+			manual.sort_actor_children(actor)
 	elseif name == "SetDrawFunction" then
 		actor.draw_fn = (...)
 		manual.actors[actor] = true
@@ -1123,10 +1192,14 @@ local function actor_call(actor, name, ...)
 	elseif name == "finishtweening" or name == "FinishTweening" then
 		if #(actor.tweens or {}) > 0 then merge_tween_state(actor.state, actor.tweens[#actor.tweens].state) end
 		actor.tweens = {}
-	elseif name == "HurryTweening" then
-		local factor = tonumber((...)) or 1
+		elseif name == "hurrytweening" or name == "HurryTweening" then
+			-- The native Lua method is lowercase. Actor::HurryTweening
+			-- rescales both outstanding times using single-precision floats.
+			local factor = _ITG_FLOAT(tonumber((...)) or 1)
+			if factor < 0 then error("Tweening hurry factor cannot be negative") end
 		for _, tween in ipairs(actor.tweens or {}) do
-			tween.duration, tween.time_left = tween.duration * factor, tween.time_left * factor
+				tween.duration = _ITG_FLOAT(tween.duration * factor)
+				tween.time_left = _ITG_FLOAT(tween.time_left * factor)
 		end
 	elseif name == "sleep" then
 		begin_tween(actor, (...), "linear", nil, event)
@@ -1179,6 +1252,10 @@ local function actor_call(actor, name, ...)
 		elseif name == "addx" or name == "addy" or name == "addz" then add_tween_value(actor, name:sub(4), first)
 		elseif name == "addrotationx" or name == "addrotationy" or name == "addrotationz" then
 			add_tween_value(actor, name:sub(4), first)
+			elseif name == "heading" or name == "pitch" or name == "roll" then
+				local axis = name == "heading" and 2 or name == "pitch" and 1 or 3
+				local state = dest_state(actor)
+				state.quaternion = manual.quat_rotate(state_value(state, "quaternion"), axis, _ITG_FLOAT(first))
 		elseif name == "xy" then set_tween_value(actor, "x", first); set_tween_value(actor, "y", select(2, ...))
 		elseif name == "xyz" then
 			set_tween_value(actor, "x", first); set_tween_value(actor, "y", select(2, ...)); set_tween_value(actor, "z", select(3, ...))
@@ -2518,6 +2595,20 @@ local function mat_rotation_xyz(x, y, z)
 	return _ITG_ROTATION_MATRIX(x, y, z)
 end
 
+function manual.mat_quaternion(q)
+	-- RageMatrixFromQuat constructor arguments are stored as m[row][column].
+	local x, y, z, w = unpack(q)
+	local xx, xy, xz = _ITG_FLOAT(x*(x+x)), _ITG_FLOAT(x*(y+y)), _ITG_FLOAT(x*(z+z))
+	local wx, wy, wz = _ITG_FLOAT(w*(x+x)), _ITG_FLOAT(w*(y+y)), _ITG_FLOAT(w*(z+z))
+	local yy, yz, zz = _ITG_FLOAT(y*(y+y)), _ITG_FLOAT(y*(z+z)), _ITG_FLOAT(z*(z+z))
+	return {
+		_ITG_FLOAT(1 - _ITG_FLOAT(yy+zz)), _ITG_FLOAT(xy+wz), _ITG_FLOAT(xz-wy), 0,
+		_ITG_FLOAT(xy-wz), _ITG_FLOAT(1 - _ITG_FLOAT(xx+zz)), _ITG_FLOAT(yz+wx), 0,
+		_ITG_FLOAT(xz+wy), _ITG_FLOAT(yz-wx), _ITG_FLOAT(1 - _ITG_FLOAT(xx+yy)), 0,
+		0, 0, 0, 1,
+	}
+end
+
 local function vec_transform(vector, matrix)
 	return _ITG_VECTOR_TRANSFORM(vector, matrix)
 end
@@ -2557,6 +2648,12 @@ local function actor_local_matrix(actor, width, height, parent_world)
 	matrix = mat_mul(mat_rotation_xyz(unpack(rotation)), matrix)
 	matrix = mat_mul(mat_scale(sx, sy, sz), matrix)
 	if align_x ~= 0 or align_y ~= 0 then matrix = mat_mul(mat_translate(align_x, align_y, 0), matrix) end
+	local quat = state_value(state, "quaternion")
+	if quat[1] ~= 0 or quat[2] ~= 0 or quat[3] ~= 0 or quat[4] ~= 1 then
+		-- Actor::BeginDraw calls MultMatrix (world-origin multiplication) here;
+		-- translation/rotation/scale/alignment above use PreMultMatrix.
+		matrix = mat_mul(matrix, manual.mat_quaternion(quat))
+	end
 	matrix = mat_mul(mat_skew_x(tonumber(state.skewx) or 0), matrix)
 	matrix = mat_mul(mat_skew_y(tonumber(state.skewy) or 0), matrix)
 	return matrix
@@ -2618,6 +2715,14 @@ local function actor_draw_colors(actor, diffuse, glow)
     local mode = state.effect
     if not COLOR_EFFECTS[mode] and mode ~= "rainbow" then mode = "none" end
     local period = tonumber(state.effectperiod) or 1
+    -- Actor::PreDraw multiplies m_internalDiffuse.a by m_fBaseAlpha
+    -- after evaluating the local color effect and before propagating the
+    -- rendered diffuse to children. Keep the getter/tween colors unchanged.
+    local base_alpha = tonumber(state.basealpha) or 1
+    if base_alpha ~= 1 then
+        diffuse = copy_value(diffuse)
+        diffuse[4] = _ITG_FLOAT(diffuse[4] * base_alpha)
+    end
     return _ITG_ACTOR_COLORS(mode, tonumber(state.spinclock) or 0,
         state_value(state, "diffuse"), state_value(state, "glow"),
         state.effectcolor1 or {1,1,1,1}, state.effectcolor2 or {1,1,1,1},
@@ -3237,6 +3342,9 @@ end
 local loaded_roots = {}
 local function init(actor)
 	for _, child in ipairs(actor.children) do init(child) end
+	if actor.class == "ActorFrame" or actor.class == "ActorFrameTexture" then
+		manual.sort_actor_children(actor)
+	end
 	run_command(actor, "Init")
 end
 

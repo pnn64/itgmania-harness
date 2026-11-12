@@ -268,8 +268,8 @@ pub fn enrich(document: &mut Value) -> Result<(), Error> {
             .map_err(|source| Error(format!("invalid semantic trace `events`: {source}")))?;
         let first_actor_event = event.actor.as_ref()
             .is_some_and(|actor| seen_actors.insert(actor.clone()));
-        retained_last = first_actor_event || matches!(event.operation.as_str(),
-            "Actor.draworder" | "ActorFrame.SortByDrawOrder" | "ActorFrame.SetDrawByZPosition");
+        retained_last = first_actor_event || is_draw_order_write(&event.operation) || matches!(event.operation.as_str(),
+            "ActorFrame.SortByDrawOrder" | "ActorFrame.SetDrawByZPosition");
         if retained_last { draw_events.push(event.clone()); }
         Ok(event)
     });
@@ -829,6 +829,12 @@ fn arg_f64(event: &Event, index: usize) -> f64 {
     event.args.get(index).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
+// Native traces qualify inherited Actor methods with the concrete class:
+// Sprite.draworder, ActorFrame.draworder, BitmapText.draworder, and so on.
+fn is_draw_order_write(operation: &str) -> bool {
+    operation.ends_with(".draworder")
+}
+
 fn build_draw_orders(
     definitions: &[Definition],
     actors: &[RuntimeActor],
@@ -989,7 +995,7 @@ fn draw_order_at(actor: Option<&str>, seq: u64, events: &HashMap<&str, Vec<&Even
         .into_iter()
         .flatten()
         .take_while(|event| event.seq <= seq)
-        .filter(|event| event.operation == "Actor.draworder")
+        .filter(|event| is_draw_order_write(&event.operation))
         .filter_map(|event| event.args.first().and_then(Value::as_f64))
         .last()
         .unwrap_or(0.0)
@@ -1094,6 +1100,51 @@ mod tests {
         assert_eq!(children[1]["definition_id"], "c");
         assert_eq!(children[2]["definition_id"], "a");
         assert_eq!(children[0]["draw_index"], 1);
+    }
+
+    #[test]
+    fn derives_subclass_draw_orders_at_load_and_after_explicit_resort() {
+        let mut trace = json!({
+            "actor_definitions": [
+                {"id":"root", "runtime_actors":["root"], "children":[
+                    {"layer_index":1,"definition_id":"sprite"},
+                    {"layer_index":2,"definition_id":"frame"},
+                    {"layer_index":3,"definition_id":"mesh"},
+                    {"layer_index":4,"definition_id":"text"}
+                ]},
+                {"id":"sprite", "runtime_actors":["sprite"], "children":[]},
+                {"id":"frame", "runtime_actors":["frame"], "children":[]},
+                {"id":"mesh", "runtime_actors":["mesh"], "children":[]},
+                {"id":"text", "runtime_actors":["text"], "children":[]}
+            ],
+            "events": [
+                raw_event(1, "sprite", "Sprite.draworder", json!([1])),
+                raw_event(2, "frame", "ActorFrame.draworder", json!([-1])),
+                raw_event(3, "mesh", "ActorMultiVertex.draworder", json!([1])),
+                raw_event(4, "text", "BitmapText.draworder", json!([0])),
+                raw_event(5, "root", "command.begin", json!([])),
+                raw_event(6, "text", "BitmapText.draworder", json!([-2])),
+                raw_event(7, "root", "ActorFrame.SortByDrawOrder", json!([])),
+                raw_event(8, "root", "command.end", json!([]))
+            ]
+        });
+        enrich(&mut trace).unwrap();
+
+        let snapshots = trace["draw_orders"][0]["snapshots"].as_array().unwrap();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0]["cause"], "native_load");
+        let at_load = snapshots[0]["children"].as_array().unwrap();
+        assert_eq!(at_load.iter().map(|child| child["actor"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["frame", "text", "sprite", "mesh"]);
+        assert_eq!(at_load.iter().map(|child| child["draw_order"].as_f64().unwrap()).collect::<Vec<_>>(),
+            [-1.0, 0.0, 1.0, 1.0]);
+
+        assert_eq!(snapshots[1]["cause"], "SortByDrawOrder");
+        let after_resort = trace["draw_orders"][0]["final_children"].as_array().unwrap();
+        assert_eq!(after_resort.iter().map(|child| child["actor"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["text", "frame", "sprite", "mesh"]);
+        assert_eq!(after_resort.iter().map(|child| child["draw_order"].as_f64().unwrap()).collect::<Vec<_>>(),
+            [-2.0, -1.0, 1.0, 1.0]);
     }
 
     #[test]

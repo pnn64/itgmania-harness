@@ -1457,6 +1457,182 @@ mod tests {
 
     #[cfg(itgmania_oracle)]
     #[test]
+    fn rendered_base_alpha_and_lowercase_hurry_follow_native_actor() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("song fixture folder");
+        let entry = song_dir.join("base-alpha-hurry.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Native draw alpha and hurry",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.12,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 1.0 / 60.0,
+            max_events: 100,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("native color and tween capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        assert_eq!(trace["dropped_events"], 0);
+        let track = trace["projected_vertex_tracks"]
+            .as_array()
+            .expect("projected tracks")
+            .iter()
+            .find(|track| track["class"] == "Quad")
+            .expect("projected child quad");
+        let samples = track["samples"].as_array().expect("projected samples");
+        assert!(samples.len() >= 2, "hurry must move the quad during its first update");
+        for sample in samples {
+            let alpha = sample[3].as_f64().expect("projected alpha");
+            assert!((alpha - 0.25).abs() < 1e-6,
+                "parent and child basealpha both apply to draw alpha: {alpha}");
+        }
+        let first_x = samples[0][4][0][0].as_f64().expect("initial world vertex x");
+        let second_x = samples[1][4][0][0].as_f64().expect("first updated world vertex x");
+        let movement = second_x - first_x;
+        assert!((movement - 2.0).abs() < 1e-4,
+            "hurrytweening(0.5) must halve the one-second tween: first update x delta {movement}");
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn loaded_actorframe_draw_order_controls_on_command_random_stream() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("song fixture folder");
+        let entry = song_dir.join("sorted-command-random.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Native sorted command dispatch",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 0.05,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 0.05,
+            max_events: 100,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("sorted command capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        let actors = trace["runtime_actors"].as_array().expect("runtime actors");
+        let events = trace["events"].as_array().expect("raw events");
+        let read_x = |name: &str| {
+            let actor = actors.iter().find(|actor| actor["name"] == name)
+                .and_then(|actor| actor["id"].as_str())
+                .expect("named child");
+            let event = events.iter()
+                .find(|event| event["actor"] == actor && event["operation"] == "Quad.x")
+                .expect("OnCommand random x write");
+            (
+                event["seq"].as_u64().expect("event sequence"),
+                event["args"][0].as_f64().expect("numeric random x"),
+            )
+        };
+        let earlier = read_x("DrawnFirst");
+        let later = read_x("AddedFirst");
+        assert!(earlier.0 < later.0,
+            "m_SubActors must be sorted before On command dispatch");
+        assert_eq!((earlier.1, later.1), (1.0, 2.0),
+            "sorted update order determines the shared native MT19937 stream");
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
+    fn heading_pitch_roll_apply_native_quaternion_projection_and_tween() {
+        let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/song-lua-headless")
+            .canonicalize()
+            .expect("song fixture folder");
+        let entry = song_dir.join("quaternion-projection.lua");
+        let context = Context {
+            simfile: &entry,
+            song_dir: &song_dir,
+            title: "Native HPR projected quad",
+            difficulty: "Difficulty_Challenge",
+            steps_type: "dance-single",
+            description: "",
+            max_beat: 1.0,
+            bpm: 60.0,
+            bpm_segments: &[],
+            beat_step: 0.5,
+            max_events: 1000,
+            random_seed: 1,
+        };
+        let trace = evaluate(
+            &[Entry {
+                path: entry.clone(),
+                layer: "foreground",
+                index: 0,
+                start_beat: 0.0,
+            }],
+            &context,
+        )
+        .expect("native quaternion projected capture");
+        assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+        let actors = trace["runtime_actors"].as_array().expect("native runtime actors");
+        let projected = trace["projected_vertex_tracks"].as_array().expect("native projected tracks");
+        let samples = |name: &str| {
+            let actor = actors.iter().find(|actor| actor["name"] == name)
+                .and_then(|actor| actor["id"].as_str())
+                .expect("named native quad");
+            projected.iter().find(|track| track["actor"] == actor)
+                .and_then(|track| track["samples"].as_array())
+                .expect("native quad projected vertices")
+        };
+        let extent = |sample: &serde_json::Value, axis: usize| {
+            let corners = sample[4].as_array().expect("world-space corners");
+            let values = corners.iter().map(|vertex| vertex[axis].as_f64().expect("world vertex"))
+                .collect::<Vec<_>>();
+            values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                - values.iter().copied().fold(f64::INFINITY, f64::min)
+        };
+        let heading = samples("Heading");
+        let pitch = samples("Pitch");
+        let roll = samples("Roll");
+        assert_eq!(heading.len(), 3, "three update frames for interpolated HPR");
+        assert!((extent(&heading[0], 0) - 0.0).abs() < 0.001,
+            "heading(90) rotates the quad width entirely into Z");
+        assert!((extent(&heading[1], 0) - 14.142_136).abs() < 0.01,
+            "RageQuatSlerp at halfway restores cosine(45°) of width");
+        assert!((extent(&heading[2], 0) - 20.0).abs() < 0.001,
+            "heading(0) restores the quad width");
+        assert!((extent(&pitch[0], 1) - 0.0).abs() < 0.001,
+            "pitch(90) rotates the quad height entirely into Z");
+        assert!((extent(&roll[0], 0) - 10.0).abs() < 0.001,
+            "roll(90) exchanges quad dimensions in the XY plane");
+        assert!((extent(&roll[0], 1) - 20.0).abs() < 0.001);
+    }
+
+    #[cfg(itgmania_oracle)]
+    #[test]
     fn foreground_init_precedes_next_file() {
         let song_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/song-lua-headless")
