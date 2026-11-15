@@ -1249,6 +1249,12 @@ Player judgment progress and full scene reconstruction remain unsupported.
 
 ### Interactive executable traces
 
+Harness 0.1.97 records the external trace executable's own source revision in
+semantic gameplay captures as well as notefield captures. Archive manifests use
+that validated stamp instead of the embedded oracle revision in a template.
+Use an executable built from `vendor/itgmania`'s pin for pinned-reference parity;
+another checkout can have different timing and rendering behavior.
+
 Harness 0.1.95 stamps the external trace executable's own source revision,
 tracked source modification state, and NoteDisplay/CubicSpline hashes into
 notefield captures. These are independent of the Rust CLI's pinned oracle.

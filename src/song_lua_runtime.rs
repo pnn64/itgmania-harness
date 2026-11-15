@@ -222,6 +222,7 @@ fn capture_in(
                 validate_interactive_inputs(&document)?;
             } else {
                 validate_runtime_inputs(&document)?;
+                validate_native_source(&document)?;
             }
             document["source_simfile"] = Value::String(slash_path(&options.simfile));
             // The installed probe wraps Actor::addcommand unconditionally.
@@ -574,6 +575,11 @@ fn metrics(fallback_theme: &str) -> String {
 
 pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     validate_interactive_inputs(document)?;
+    if document.pointer("/capabilities/native_source_provenance") == Some(&Value::Bool(true))
+        || document.pointer("/input/native_source").is_some()
+    {
+        validate_native_source(document)?;
+    }
     if document.pointer("/capabilities/native_random_seed").and_then(Value::as_bool) == Some(true)
         && (!document["random_seed"].as_u64().is_some_and(|seed| seed > 0 && seed <= i32::MAX as u64)
             || !document["random_reseeds"].is_array()
@@ -691,7 +697,7 @@ pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
+fn validate_native_source(document: &Value) -> Result<(), Error> {
     let source = &document["input"]["native_source"];
     for (key, length) in [("revision", 40), ("note_display_sha256", 64), ("cubic_spline_sha256", 64)] {
         if source[key].as_str().is_none_or(|value| {
@@ -703,6 +709,11 @@ fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
     if source["modified_src"].as_bool().is_none() {
         return Err(Error::new("native source modification state is missing"));
     }
+    Ok(())
+}
+
+fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
+    validate_native_source(document)?;
     if document["capabilities"]["native_notefield_geometry"] != true
         || document["capabilities"]["native_model_geometry_protocol"] != 2
         || document["dropped_model_geometry_samples"] != 0
@@ -1518,6 +1529,20 @@ mod tests {
             [true, true],
             "normal and reversed native caps"
         );
+    }
+
+    #[test]
+    fn semantic_captures_require_valid_executable_provenance() {
+        let native = serde_json::json!({"input":{"native_source":{
+            "revision":"a".repeat(40), "modified_src":false,
+            "note_display_sha256":"b".repeat(64), "cubic_spline_sha256":"c".repeat(64)}}});
+        validate_native_source(&native).unwrap();
+        for field in ["revision", "modified_src", "note_display_sha256", "cubic_spline_sha256"] {
+            let mut invalid = native.clone();
+            invalid["input"]["native_source"][field] = Value::Null;
+            assert!(validate_native_source(&invalid).is_err(), "accepted missing {field}");
+        }
+        assert!(validate_native_source(&serde_json::json!({})).is_err());
     }
 
     #[test]

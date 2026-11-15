@@ -1257,7 +1257,8 @@ function trace.finish(completion)
 		drawable_frames = drawable_frames,
 		dropped_drawable_samples = dropped_drawable_samples,
 		interactive_observer_error = ITGMANIA_HARNESS_INTERACTIVE_ERROR,
-        input = {lua_gc_mode = cfg.stop_lua_gc and "stopped" or "automatic", autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
+        input = {native_source = ITGMANIA_HARNESS_NATIVE_SOURCE,
+            lua_gc_mode = cfg.stop_lua_gc and "stopped" or "automatic", autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS == true,
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,
 			script = cfg.input_script, observer_frame_period_seconds = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60 or nil),
@@ -1266,6 +1267,7 @@ function trace.finish(completion)
             catalog_preferences = catalog_preferences},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
+            native_source_provenance = type(ITGMANIA_HARNESS_NATIVE_SOURCE) == "table",
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE == true,
 			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,

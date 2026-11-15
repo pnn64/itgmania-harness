@@ -840,7 +840,8 @@ local function child_result(children)
 	for i, child in ipairs(children) do group[i] = child end
 	return setmetatable(group, { __index = function(items, key)
 		if tonumber(key) then return rawget(items, key) end
-		local method = items[#items][key]
+		-- Native groups capture the class member, bypassing instance overrides.
+		local method = actor_mt.__index(items[#items], key)
 		return function(self, ...) return method(self[#self], ...) end
 	end })
 end

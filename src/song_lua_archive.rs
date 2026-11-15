@@ -445,6 +445,9 @@ fn archive_members(
         files.sort_by(|left,right| left.path.cmp(&right.path));
     }
     let itgmania = entry.itgmania.as_ref().unwrap_or(&semantic.itgmania);
+    // An external executable can differ from the embedded oracle or a reused
+    // manifest template. Its own validated stamp is authoritative when present.
+    let native_source = native_gameplay.then(|| trace.pointer("/input/native_source")).flatten();
     let command_observer = trace.get("command_observer")
         .map(|value| serde_json::from_value::<CommandObserverMetadata>(value.clone())
             .map_err(|error| Error(format!("invalid native command observer profile: {error}"))))
@@ -455,8 +458,10 @@ fn archive_members(
         oracle_schema_version: semantic.oracle_schema_version,
         harness_version: semantic.harness_version.clone(),
         itgmania: ArchiveItgmania {
-            source_revision: itgmania.git_revision.clone(),
-            source_dirty: itgmania.git_dirty.clone(),
+            source_revision: native_source.map_or_else(|| itgmania.git_revision.clone(),
+                |source| source["revision"].as_str().unwrap().to_owned()),
+            source_dirty: native_source.map_or_else(|| itgmania.git_dirty.clone(),
+                |source| source["modified_src"].as_bool().unwrap().to_string()),
             execution: if native_gameplay {
                 "native_gameplay"
             } else {
@@ -1602,6 +1607,19 @@ mod tests {
                 .expect("native gameplay archive");
         assert_eq!(manifest.itgmania.execution, "native_gameplay");
         assert!(manifest.itgmania.launches_executable);
+        let mut stamped = native.clone();
+        stamped["capabilities"]["native_source_provenance"] = serde_json::json!(true);
+        stamped["input"]["native_source"] = serde_json::json!({
+            "revision":"a".repeat(40), "modified_src":true,
+            "note_display_sha256":"b".repeat(64), "cubic_spline_sha256":"c".repeat(64)});
+        let (_, stamped_manifest) = archive_members(&root, &simfile,
+            serde_json::to_vec(&stamped).unwrap().into(), &stamped, &semantic, &entry, None).unwrap();
+        assert_eq!(stamped_manifest.itgmania.source_revision, "a".repeat(40));
+        assert_eq!(stamped_manifest.itgmania.source_dirty, "true");
+        stamped["input"]["native_source"]["revision"] = Value::Null;
+        assert!(archive_members(&root, &simfile, source.clone().into(),
+            &stamped, &semantic, &entry, None).is_err());
+
         assert_eq!(manifest.runtime.update_hz, None);
         assert_eq!(manifest.runtime.frame_clock, "native-update-frames");
         assert_eq!(members["trace/semantic.json"], source);

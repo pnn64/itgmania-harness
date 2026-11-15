@@ -19,9 +19,11 @@ cmake --build <build> --config Release --target ITGmania
 
 Reconfigure after changing the private source revision. The adapter stamps its
 own Git revision, tracked source modification state, and SHA-256 hashes of
-`NoteDisplay.cpp` and `CubicSpline.cpp` into the executable. Notefield traces
-retain these in `input.native_source`; the collector rejects missing provenance.
+`NoteDisplay.cpp` and `CubicSpline.cpp` into the executable. Semantic gameplay
+and notefield traces retain these in `input.native_source`; the collector rejects
+missing provenance. Native archive manifests use this stamp when available.
 The CLI's pinned oracle revision does not identify an external trace executable.
+Build from the pinned revision when comparing against pinned-reference behavior.
 
 Use `Program/ITGmania-harness-trace.exe` with `--itgmania-bin` on Windows.
 For headless captures the collector sets `ITGMANIA_HARNESS_HEADLESS`. The

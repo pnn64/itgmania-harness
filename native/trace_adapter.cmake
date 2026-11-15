@@ -194,6 +194,10 @@ function(itgmania_harness_trace_adapter)
   set(ITGMANIA_HARNESS_TRACE_NAME "ITGmania-harness-trace" CACHE STRING "Separate native trace executable name")
   set_target_properties(ITGmania PROPERTIES OUTPUT_NAME_RELEASE "${ITGMANIA_HARNESS_TRACE_NAME}")
   if(MSVC)
+    # The upstream post-build mapconv command also reads the original name.
+    # Without an explicit map path a fresh renamed build fails after linking.
+    set_property(TARGET ITGmania APPEND_STRING PROPERTY LINK_FLAGS_RELEASE
+      " /MAP:\"${CMAKE_SOURCE_DIR}/Program/ITGmania.map\"")
     # Upstream's mapconv command still writes the original product filename.
     # CrashHandler looks for a sidecar matching this adapter's executable.
     add_custom_target(itgmania-harness-crash-symbols

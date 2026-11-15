@@ -29,6 +29,9 @@ local root = Def.ActorFrame {
         assert(lines["3"] == nil, "numeric strings do not resolve as methods")
         assert(#self:GetChild("Line") == 2, "GetChild returns a group snapshot")
         assert(#self:GetChildren().Line == 2, "GetChildren returns a group snapshot")
+        for _, child in ipairs(self:GetChild("Line")) do child:name("same"); child:x(0) end
+        local probe=assert(loadfile(GAMESTATE:GetCurrentSong():GetSongDir().."duplicate-child-forwarding.lua"))()
+        probe(self)
         MESSAGEMAN:Broadcast("ChildTableChecked")
     end,
 }
