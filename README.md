@@ -652,6 +652,14 @@ compact fixture contains:
   plane instead of discarding the whole actor;
 - structured runtime errors, event counts, and capability flags.
 
+The embedded screen adapter retains Simply Love's complete gameplay child list,
+including unnamed transitions and hidden HUD actors, in native draw order.
+`ActorFrame::PushChildrenTable` inserts that list into a fresh Lua 5.1 table;
+omitting empty children changes authored `pairs(GetChildren())` order. The
+one-player and two-player orders are checked against native engine probes.
+The footer keeps its `Graphics/_footer.lua` Init draw order of 90 even while
+hibernating. Captures advertise `native_screen_child_table` for this model.
+
 This records semantic causes and values, not screenshots. The binding surface
 models the engine objects needed by the corpus while the parser, bytecode, Lua
 language behavior, and StepMania `cmd(...)` syntax come from ITGmania's checked-

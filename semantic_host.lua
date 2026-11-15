@@ -2101,19 +2101,60 @@ GAMESTATE = {
 }
 
 local top_screen = external_actor("ScreenGameplay", "Screen")
-tracked_players = { typed_child(top_screen, "PlayerP1", "Player") }
-if not is_double then tracked_players[2] = typed_child(top_screen, "PlayerP2", "Player") end
-for _, name in ipairs({ "Overlay", "Underlay", "SongBackground", "SongForeground", "In" }) do
-    typed_child(top_screen, name, "ActorFrame")
-end
--- ScreenWithMenuElements keeps In as a separate Transition child. Simply
--- Love's in/default.lua retains its Stage/Event text after the visual lead-in
--- ends, so explicitly drawing In during a song is not an empty operation.
--- ScreenGameplay.cpp names these engine children. Simply-Love-SM5's
--- [ScreenGameplay] On commands hibernate them forever and draw its own HUD
--- under Underlay. Hibernation does not change the Actor visible flag.
-for _, name in ipairs({ "LifeP1", "LifeP2", "ScoreP1", "ScoreP2", "StepsDisplayP1", "StepsDisplayP2" }) do
-    actor_child(top_screen, name).hibernate_seconds = math.huge
+top_screen.child_lookup_exact = true
+tracked_players = {}
+do
+    -- ScreenWithMenuElements::Init / ScreenGameplay::Init construct this
+    -- complete list before the stable SortByDrawOrder. Even empty children
+    -- affect Lua 5.1's GetChildren table layout and authored pairs() draws.
+    -- Simply Love's Graphics/_footer.lua assigns 90 during Init even though
+    -- ScreenGameplay subsequently hibernates it.
+    local orders = { SongBackground = -200, Underlay = -100, Footer = 90, Overlay = 100,
+        SongForeground = 101, NextSong = 199, Failed = 199, Debug = 199,
+        In = 200, Out = 200, Cancel = 200 }
+    local unnamed = { Toasty = true, NextSong = true, Ready = true, Go = true, Failed = true }
+    local layers = { SongBackground = true, Underlay = true, Overlay = true,
+        SongForeground = true, In = true }
+    for rank, role in ipairs({
+        "Underlay", "Overlay", "Header", "Footer", "In", "Out", "Cancel",
+        "SongBackground", "SongForeground", "Toasty", "PlayerP1", "PlayerP2",
+        "OniGameOverP1", "OniGameOverP2", "NextSong", "LifeP1", "LifeP2",
+        "ScoreP1", "ScoreP2", "StepsDescriptionP1", "PlayerOptionsP1", "StepsDisplayP1",
+        "StepsDescriptionP2", "PlayerOptionsP2", "StepsDisplayP2", "SongOptions",
+        "ActiveAttackListP1", "ActiveAttackListP2", "LyricDisplay", "Ready", "Go", "Failed", "Debug",
+    }) do
+        -- ActiveAttackList exists for both sides, including double mode.
+        if not (is_double and role:match("P2$") and role ~= "ActiveAttackListP2") then
+            local player = role:match("^PlayerP([12])$")
+            local child = typed_child(top_screen, role, player and "Player" or "ActorFrame")
+            child.screen_construction_rank = rank
+            child.state.draworder = orders[role] or 0
+            if player then tracked_players[tonumber(player)] = child end
+            if unnamed[role] then
+                top_screen.children_by_name[role] = nil
+                child.__songlua_name = ""
+                local group = top_screen.children_by_name[""] or {}
+                group[#group + 1] = child
+                top_screen.children_by_name[""] = group
+            end
+            if role:match("^LifeP") or role:match("^ScoreP") or role:match("^StepsDisplayP")
+                or role:match("^StepsDescriptionP") or role == "Header" or role == "Footer" then
+                -- Simply Love hibernates the engine HUD; GetVisible stays true.
+                child.hibernate_seconds = math.huge
+            end
+            if role:match("^PlayerOptionsP") or role:match("^ActiveAttackListP")
+                or role == "SongOptions" or role == "Toasty" then child.state.visible = false end
+            -- Waiting transitions, empty text and the unused Oni display have
+            -- no primitives. In retains Simply Love's Stage/Event text.
+            child.screen_draw_empty = not player and not layers[role]
+        end
+    end
+    table.sort(top_screen.children, function(a, b)
+        if a.state.draworder == b.state.draworder then
+            return a.screen_construction_rank < b.screen_construction_rank
+        end
+        return a.state.draworder < b.state.draworder
+    end)
 end
 local fallback_player_x = {
 	math.floor((0.85 / 3) * harness.screen_width),
@@ -3250,6 +3291,7 @@ end
 
 manual.draw = function(actor)
     if not actor_draw_visible(actor) then return end
+    if rawget(actor, "screen_draw_empty") then return end
     local target = actor.class == "ActorFrameTexture" and rawget(actor, "allocated_texture")
     if actor.class == "ActorFrameTexture" and not target then return end
 	local prior = manual.context
@@ -3600,6 +3642,7 @@ return json_encode({
 		stage_score_judgments = false,
 		delayed_screen_loading = false,
 		native_delayed_screen_dispatch = true,
+		native_screen_child_table = true,
 		sprite_texture_alias_samples = true,
 		sprite_crop_samples = true,
 		sprite_shadow_samples = true,
