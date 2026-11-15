@@ -604,6 +604,9 @@ fn metrics(fallback_theme: &str) -> String {
 }
 
 pub(crate) fn validate_runtime_inputs(document: &Value) -> Result<(), Error> {
+    if document.get("script_errors").is_some() || document.get("dropped_script_errors").is_some() {
+        validate_script_errors(document)?;
+    }
     validate_interactive_inputs(document)?;
     if document.pointer("/capabilities/native_source_provenance") == Some(&Value::Bool(true))
         || document.pointer("/input/native_source").is_some()
@@ -1732,6 +1735,20 @@ mod tests {
             ]
         });
         assert!(validate_runtime_inputs(&document).is_ok());
+        let mut observed = document.clone();
+        observed["script_errors"] = serde_json::json!([]);
+        observed["dropped_script_errors"] = serde_json::json!(0);
+        assert!(validate_runtime_inputs(&observed).is_ok());
+        for (errors, dropped) in [
+            (serde_json::json!(["invalid Lua source"]), serde_json::json!(0)),
+            (serde_json::json!([]), serde_json::json!(1)),
+            (Value::Null, serde_json::json!(0)),
+            (serde_json::json!([]), Value::Null),
+        ] {
+            observed["script_errors"] = errors;
+            observed["dropped_script_errors"] = dropped;
+            assert!(validate_runtime_inputs(&observed).is_err());
+        }
         let mut seeded = document.clone();
         seeded["capabilities"]["native_random_seed"] = serde_json::json!(true);
         assert!(validate_runtime_inputs(&seeded).is_err());
