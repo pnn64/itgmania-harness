@@ -174,8 +174,8 @@ fn manual_player_poses_match_the_checked_in_native_golden() {
     let golden: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/manual-player-native.json"))
             .expect("checked-in native manual-draw baseline");
-    // The original provenance identifies the old workspace commit. Compare the
-    // captured geometry directly; upstream source revisions are pinned by Git.
+    // Compare captured native geometry exactly, including round-trippable
+    // decimal values; source provenance is retained in the fixture.
     let sprites = golden["sprites"].as_object().expect("native sprite map");
     let actors = output["samples"][0]["actors"]
         .as_array()
