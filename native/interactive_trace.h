@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 class Actor;
 class Screen;
 struct RageMatrix;
@@ -23,6 +24,12 @@ struct ItgmaniaHarnessUpdateFrame {
 };
 void itgmania_harness_option_delta(const void* options, float delta, bool song);
 void itgmania_harness_catalog_inputs(const void* song, float offset, float rate);
+void itgmania_harness_script_error(const std::string& message);
+struct ItgmaniaHarnessScreenLoad {
+  std::string previous;
+  explicit ItgmaniaHarnessScreenLoad(const std::string& screen);
+  ~ItgmaniaHarnessScreenLoad();
+};
 double itgmania_harness_arrow_clock(double value);
 void itgmania_harness_arrow_update_clock(double value);
 void itgmania_harness_after_arrow_update();

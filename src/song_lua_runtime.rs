@@ -2,6 +2,7 @@ use serde_json::Value;
 use sha2::Digest;
 use std::fmt;
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -153,6 +154,9 @@ fn capture_in(
         { return Err(Error::new("notefield capture requires native source provenance; rebuild the trace executable")); }
     }
     let mut command = Command::new(&staged_binary);
+    // Unix crash reporting writes $HOME/crashinfo.txt. Keep it with this run's
+    // diagnostics, including when systemd does not provide a HOME environment.
+    command.env("HOME", run_dir);
     if options.headless { command.env("ITGMANIA_HARNESS_HEADLESS", "1"); }
     if headless_graphics { command.env("ITGMANIA_HARNESS_HEADLESS_GRAPHICS", "1"); }
     let mut child = command.args(["--game=dance", &format!("--theme={THEME_NAME}")])
@@ -176,20 +180,33 @@ fn capture_in(
             // parsing it so evaluation cannot compete with analysis for CPU/RAM.
             let _ = child.kill();
             let _ = child.wait();
-            let bytes = fs::read(&result_path).map_err(|source| {
+            let file = fs::File::open(&result_path).map_err(|source| {
                 Error::new(format!(
                     "could not read runtime result {}: {source}",
                     result_path.display()
                 ))
             })?;
-            let raw_sha256 = sha256_hex(&bytes);
-            let mut document: Value = serde_json::from_slice(&bytes).map_err(|source| {
+            let raw_sha256 = if options.notefield_samples {
+                let mut file = file.try_clone().map_err(|e| Error::new(e.to_string()))?;
+                let mut digest = sha2::Sha256::new();
+                let mut buffer = [0u8; 64 * 1024];
+                loop {
+                    let count = file.read(&mut buffer).map_err(|e| Error::new(e.to_string()))?;
+                    if count == 0 { break; }
+                    digest.update(&buffer[..count]);
+                }
+                // try_clone shares the file position; reopen for JSON parsing.
+                Some(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+            } else { None };
+            let file = if options.notefield_samples {
+                fs::File::open(&result_path).map_err(|e| Error::new(e.to_string()))?
+            } else { file };
+            let mut document: Value = serde_json::from_reader(BufReader::new(file)).map_err(|source| {
                 Error::new(format!(
                     "ITGmania wrote invalid runtime JSON to {}: {source}",
                     result_path.display()
                 ))
             })?;
-            drop(bytes);
             if let Some(message) = document.get("error").and_then(Value::as_str) {
                 return Err(Error::new(format!(
                     "ITGmania probe script reported: {message}"
@@ -206,6 +223,7 @@ fn capture_in(
                 return Err(Error::new("native graphics capture did not remain offscreen"));
             }
             if options.until_gameplay_end {
+                validate_script_errors(&document)?;
                 if document.pointer("/completion/reason").and_then(Value::as_str) != Some("gameplay-exit") {
                     return Err(Error::new("ITGmania did not reach native gameplay exit"));
                 }
@@ -282,6 +300,18 @@ fn capture_in(
     let _ = child.kill();
     let _ = child.wait();
     result
+}
+
+fn validate_script_errors(document: &Value) -> Result<(), Error> {
+    let errors = document.get("script_errors").and_then(Value::as_array)
+        .ok_or_else(|| Error::new("native script-error observer is missing; rebuild the trace executable"))?;
+    if document.get("dropped_script_errors").and_then(Value::as_u64) != Some(0) {
+        return Err(Error::new("native script-error diagnostics are incomplete"));
+    }
+    if let Some(error) = errors.first() {
+        return Err(Error::new(format!("native script loading or execution failed: {error}")));
+    }
+    Ok(())
 }
 
 fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
@@ -1321,6 +1351,16 @@ impl fmt::Display for Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn whole_song_acceptance_requires_native_script_error_observation() {
+        assert!(super::validate_script_errors(&serde_json::json!({"script_errors":[],"dropped_script_errors":0})).is_ok());
+        for value in [serde_json::json!({}), serde_json::json!({"script_errors":null}),
+            serde_json::json!({"script_errors":[],"dropped_script_errors":1}),
+            serde_json::json!({"script_errors":[],"dropped_script_errors":null}),
+            serde_json::json!({"script_errors":["FastEnd.lua:47: '<eof>' expected near 'local'"],"dropped_script_errors":0})] {
+            assert!(super::validate_script_errors(&value).is_err());
+        }
+    }
     use super::*;
 
     #[test]

@@ -20,9 +20,29 @@
 #include <chrono>
 #include <thread>
 #include <map>
+#include <mutex>
 #include <vector>
 
 namespace {
+std::mutex script_errors_mutex;
+struct ScriptError { std::string message, screen; };
+std::vector<ScriptError> script_errors;
+unsigned long long dropped_script_errors = 0;
+thread_local std::string loading_screen;
+int read_script_errors(lua_State* L) {
+  std::lock_guard<std::mutex> lock(script_errors_mutex);
+  lua_createtable(L, static_cast<int>(script_errors.size()), 0);
+  for (size_t i = 0; i < script_errors.size(); ++i) {
+    lua_createtable(L, 0, 2);
+    lua_pushlstring(L, script_errors[i].message.data(), script_errors[i].message.size());
+    lua_setfield(L, -2, "message");
+    lua_pushlstring(L, script_errors[i].screen.data(), script_errors[i].screen.size());
+    lua_setfield(L, -2, "screen");
+    lua_rawseti(L, -2, static_cast<int>(i + 1));
+  }
+  lua_pushnumber(L, static_cast<lua_Number>(dropped_script_errors));
+  return 2;
+}
 Actor* drawing = nullptr;
 const msMesh* drawing_model_mesh = nullptr;
 bool updating_screen = false;
@@ -154,6 +174,8 @@ int pace_capture(lua_State* L) {
   return 0;
 }
 void register_interactive(Lua* L) {
+  lua_pushcfunction(L, read_script_errors);
+  lua_setglobal(L, "ITGMANIA_HARNESS_SCRIPT_ERRORS");
   lua_newtable(L);
   lua_pushstring(L, HARNESS_NATIVE_REVISION); lua_setfield(L, -2, "revision");
   lua_pushboolean(L, HARNESS_NATIVE_DIRTY); lua_setfield(L, -2, "modified_src");
@@ -184,6 +206,21 @@ void itgmania_harness_catalog_inputs(const void* song, float offset, float rate)
   // Never expose the stored Song getter values through the input bridge.
   catalog_inputs[song] = {offset, rate};
 }
+
+void itgmania_harness_script_error(const std::string& message) {
+  std::lock_guard<std::mutex> lock(script_errors_mutex);
+  // An error storm must not exhaust the recorder; a nonempty sample rejects
+  // acceptance regardless of the number of duplicate diagnostics.
+  const auto* screen = SCREENMAN ? SCREENMAN->GetTopScreen() : nullptr;
+  const std::string name = !loading_screen.empty() ? loading_screen
+      : screen ? screen->GetName() : "";
+  if (script_errors.size() < 128) script_errors.push_back({message, name});
+  else ++dropped_script_errors;
+}
+
+ItgmaniaHarnessScreenLoad::ItgmaniaHarnessScreenLoad(const std::string& screen)
+    : previous(loading_screen) { loading_screen = screen; }
+ItgmaniaHarnessScreenLoad::~ItgmaniaHarnessScreenLoad() { loading_screen = previous; }
 
 double itgmania_harness_arrow_clock(double value) {
   if (arrow_query_scope) arrow_query_clocks.push_back(value);

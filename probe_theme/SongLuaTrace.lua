@@ -771,6 +771,10 @@ local function assign_result_path(class, method, args, result)
 	elseif class == "PlayerState" and method == "GetPlayerOptions" then
 		actor_paths[result] = (actor_paths[args[1]] or "player-state")
 			.. "/options:" .. tostring(args[2])
+	elseif object_result and (class == "PlayerOptions" or class == "SongOptions") then
+		-- Native fluent setters push a new userdata wrapper for the same object.
+		-- Its identity belongs to the receiver, not to the wrapper allocation.
+		actor_paths[result] = actor_paths[args[1]]
 	elseif object_result and class == "StatsManager" and method == "GetCurStageStats" then
 		actor_paths[result] = "stage:current"
 	elseif object_result and class == "StatsManager" and method == "GetPlayedStageStats" then
@@ -1073,6 +1077,7 @@ end
 
 function trace.capture_inputs(game_mode_initialized)
 	input_preferences = {
+		last_seen_video_driver = PREFSMAN:GetPreference("LastSeenVideoDriver"),
 		global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
 		default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
 		visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
@@ -1214,6 +1219,22 @@ function trace.finish(completion)
 	local steps = GAMESTATE:GetCurrentSteps(PLAYER_1)
 	local beat, seconds = position()
 	local weights = {}
+	local script_errors, transition_script_errors, dropped_script_errors
+	if type(ITGMANIA_HARNESS_SCRIPT_ERRORS) == "function" then
+		script_errors, transition_script_errors = {}, {}
+		local observed
+		observed, dropped_script_errors = ITGMANIA_HARNESS_SCRIPT_ERRORS()
+		for _, err in ipairs(observed) do
+			-- ScreenChanged arrives after the destination's constructor. Keep its
+			-- diagnostics, but do not attribute evaluation-theme failures to song
+			-- execution. Native screen-load scope includes its background assets.
+			local destination = completion.reason == "gameplay-exit"
+				and err.screen == completion.next_screen and err.screen ~= "ScreenGameplay"
+				and not err.message:find("/Songs/Harness/Probe/", 1, true)
+			local errors = destination and transition_script_errors or script_errors
+			errors[#errors + 1] = err
+		end
+	end
 	for _, name in ipairs({"W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo"}) do
 		weights[name] = THEME:GetMetric("ScoreKeeperNormal", "PercentScoreWeight" .. name)
 	end
@@ -1250,6 +1271,9 @@ function trace.finish(completion)
 		actor_creation_inputs = actor_creation_inputs,
 		actor_creation_error = ITGMANIA_HARNESS_ACTOR_CREATION_ERROR,
 		completion = completion,
+		script_errors = script_errors,
+		transition_script_errors = transition_script_errors,
+		dropped_script_errors = dropped_script_errors,
 		input_events = input_events,
 		injected_commands = injected_commands,
 		dropped_input_events = dropped_input_events,

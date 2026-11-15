@@ -1,6 +1,6 @@
 [submodule "vendor/itgmania"]
 	path = vendor/itgmania
-	url = https://github.com/itgmania/itgmania.git
+	url = https://github.com/pnn64/itgmania.git
 	shallow = true
 [submodule "vendor/simply-love"]
 	path = vendor/simply-love
