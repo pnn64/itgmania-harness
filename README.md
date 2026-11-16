@@ -55,13 +55,18 @@ that updates either source pin. The harness records exact commits in Git:
   `663525dcb86eb570d0ef6a2e209678436660ae26` (based on upstream
   `5c737928d93778c2c9f68e276052b220b43a468f`).
 - `vendor/simply-love`: Simply Love 5.9.0 with the missing pump couple
-  notefield width defined, `e2157b744051e1873bac5389246afac22e2cf05f`.
+  notefield width defined and deferred score redraws,
+  `1feda1fd43d96baca951351bb28a35d5e690ebc7`.
 
 The routine backport incorporates upstream PRs
 [1216](https://github.com/itgmania/itgmania/pull/1216) and
 [1445](https://github.com/itgmania/itgmania/pull/1445): participant ownership,
 separate team statistics, shared scoring/life, and dance/pump routine noteskins.
-The theme change supplies the five-column width for pump couple gameplay.
+The theme changes supply the five-column width for pump couple gameplay and
+coalesce score redraws in the gameplay underlay update. Bursts of judgments
+therefore refresh each score once without overflowing its tween queue or
+cancelling song-authored score tweens. This changes the pinned theme behavior;
+the native engine's tween queue semantics remain unchanged.
 Simply Love is separate because ITGmania v1.2.0's
 nested theme pin is 5.8.0, while the existing harness baselines use 5.9.0.
 
