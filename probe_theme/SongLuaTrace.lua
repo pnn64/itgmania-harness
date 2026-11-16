@@ -1310,6 +1310,7 @@ function trace.finish(completion)
             native_source_provenance = type(ITGMANIA_HARNESS_NATIVE_SOURCE) == "table",
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE == true,
 			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
+			native_input_step_clocks = ITGMANIA_HARNESS_INPUT_CLOCKS_AVAILABLE == true,
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
             native_notefield_geometry = false,
 			native_random_seed = true,
@@ -1426,11 +1427,12 @@ if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 			next_input = next_input + 1
 		end
 	end
-	ITGMANIA_HARNESS_INPUT_EVENT = function(event)
+	ITGMANIA_HARNESS_INPUT_EVENT = function(event, clocks)
 		if finished or scene_count == 0 then return end
 		if #input_events >= cfg.max_events then dropped_input_events=dropped_input_events+1; return end
 		input_events[#input_events+1] = {sequence=#input_events+1,scene=scene_count,
-			after_update_sequence=#update_frames,before_update_sequence=#update_frames+1,event=safe_value(event,0,{})}
+			after_update_sequence=#update_frames,before_update_sequence=#update_frames+1,
+			event=safe_value(event,0,{}),step_clock_inputs=safe_value(clocks,0,{})}
 	end
 	ITGMANIA_HARNESS_AFTER_SCREEN_DRAW = function()
 		if finished or scene_count == 0 or #update_frames == 0 then return end

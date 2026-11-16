@@ -29,6 +29,16 @@ missing provenance. Native archive manifests use this stamp when available.
 The CLI's pinned oracle revision does not identify an external trace executable.
 Build from the pinned revision when comparing against pinned-reference behavior.
 
+Interactive traces from 0.1.103 retain `step_clock_inputs` for each input dispatch.
+These are the original `Player::Step` timer reads, position and music rate,
+observed before note selection and scoring. The Lua event's later `DeviceInput.ago`
+cannot reconstruct that clock. A scoped observer keeps separate P1/P2 reads in
+routine mode and excludes autoplay calls outside physical input dispatch.
+Player and column observations let consumers check their independent routing;
+they are not instructions to select a note or import a judgment. Repeat, redirected,
+and non-step events have no Step clocks. Interactive capture requires the
+`native_input_step_clocks` capability and rejects outdated native executables.
+
 Use `Program/ITGmania-harness-trace.exe` with `--itgmania-bin` on Windows.
 For headless captures the collector sets `ITGMANIA_HARNESS_HEADLESS`. The
 observed Windows crash handler saves the native `crashinfo.txt` and exits

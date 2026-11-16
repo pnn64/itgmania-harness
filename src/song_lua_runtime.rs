@@ -877,6 +877,9 @@ fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
         if document["capabilities"]["native_input_events"] != true || document["dropped_input_events"] != 0 {
             return Err(Error::new("native input-event capture is incomplete"));
         }
+        if document["capabilities"]["native_input_step_clocks"] != true {
+            return Err(Error::new("native input step clocks are unavailable; rebuild the trace executable"));
+        }
         let events = document["input_events"].as_array().ok_or_else(|| Error::new("native input events are missing"))?;
         let frames = document["update_frames"].as_array().ok_or_else(|| Error::new("input events have no frame anchors"))?;
         let mut previous = 0;
@@ -886,6 +889,17 @@ fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
                 || before > frames.len() as u64
                 || !matches!(event["event"]["type"].as_str(), Some("InputEventType_FirstPress"|"InputEventType_Repeat"|"InputEventType_Release"))
             { return Err(Error::new("invalid native input-event anchor or type")); }
+            let clocks = event["step_clock_inputs"].as_array()
+                .ok_or_else(|| Error::new("native input step clocks are missing"))?;
+            if clocks.len() > 2 || (event["event"]["type"] == "InputEventType_Repeat" && !clocks.is_empty())
+                || clocks.iter().any(|clock| {
+                    clock["player"].as_u64().is_none_or(|n| n > 1)
+                        || clock["column"].as_u64().is_none_or(|n| n >= 10)
+                        || ["music_seconds", "music_rate", "last_beat_update_ago", "step_ago", "search_seconds"]
+                            .iter().any(|key| clock[key].as_f64().is_none_or(|n| !n.is_finite()))
+                        || clock["music_rate"].as_f64().is_none_or(|n| n <= 0.0)
+                })
+            { return Err(Error::new("invalid native input step clocks")); }
             previous = before;
         }
         if inputs {
@@ -1392,10 +1406,10 @@ mod tests {
     fn interactive_capture_requires_delivered_input_and_complete_draws() {
         let command=serde_json::json!({"scene":1,"seconds":1.0,"player":1,"button":"Right","key":"right","down":true});
         let native=serde_json::json!({"input":{"injected_inputs":true,"script":[command.clone()]},
-            "capabilities":{"native_input_events":true,"native_drawable_vertices":true},
+            "capabilities":{"native_input_events":true,"native_input_step_clocks":true,"native_drawable_vertices":true},
             "update_frames":[{"sequence":1,"scene":1},{"sequence":2,"scene":1}],
             "injected_commands":[{"command":command,"before_update_sequence":1}],
-            "input_events":[{"sequence":1,"scene":1,"before_update_sequence":2,
+            "input_events":[{"sequence":1,"scene":1,"before_update_sequence":2,"step_clock_inputs":[],
                 "event":{"PlayerNumber":"PlayerNumber_P1","button":"Right","type":"InputEventType_FirstPress"}}],
             "dropped_input_events":0,"dropped_drawable_samples":0,
             "drawable_frames":[{"scene":1,"update_sequence":2,"samples":1}],
@@ -1404,6 +1418,8 @@ mod tests {
                 "vertices":[[0,0,0,-1,1,0,1,0,0,1,1,1,1]]}]});
         validate_interactive_inputs(&native).unwrap();
         for (pointer,value) in [("/input_events",serde_json::json!([])),
+            ("/capabilities/native_input_step_clocks",serde_json::json!(false)),
+            ("/input_events/0/step_clock_inputs",serde_json::json!(null)),
             ("/drawable_frames/0/samples",serde_json::json!(0)),
             ("/drawable_samples/0/vertices/0/3",serde_json::json!({"type":"number","value":"nan"})),
             ("/input_events/0/before_update_sequence",serde_json::json!(3)),
@@ -1481,6 +1497,15 @@ end }
                 assert_eq!(event["event"]["type"], kind);
                 assert_eq!(event["event"]["button"], "Left");
                 assert_eq!(event["event"]["PlayerNumber"], "PlayerNumber_P1");
+                let clocks = event["step_clock_inputs"].as_array().unwrap();
+                assert_eq!(clocks.len(), 1);
+                assert_eq!(clocks[0]["player"], 0);
+                assert_eq!(clocks[0]["column"], 0);
+                let number = |key: &str| clocks[0][key].as_f64().unwrap() as f32;
+                let step_seconds = (number("music_seconds") + number("last_beat_update_ago") * number("music_rate"))
+                    - number("step_ago") * number("music_rate");
+                let expected = if kind == "InputEventType_FirstPress" { 0.5 } else { 0.55 };
+                assert!((step_seconds - expected).abs() < 0.04, "raw native step clock: {clocks:?}");
             }
             let broadcasts: Vec<_> = trace["events"].as_array().unwrap().iter()
                 .filter(|event| event["operation"] == "MessageManager.Broadcast").collect();

@@ -46,6 +46,7 @@ int read_script_errors(lua_State* L) {
 Actor* drawing = nullptr;
 const msMesh* drawing_model_mesh = nullptr;
 bool updating_screen = false;
+ItgmaniaHarnessInputScope* input_scope = nullptr;
 const ItgmaniaHarnessNoteScope* drawing_note = nullptr;
 struct ModelGeometry { int id = 0; std::vector<float> vertices; };
 std::map<const msMesh*,ModelGeometry> model_geometries;
@@ -195,6 +196,8 @@ void register_interactive(Lua* L) {
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE");
   lua_pushboolean(L, true);
+  lua_setglobal(L, "ITGMANIA_HARNESS_INPUT_CLOCKS_AVAILABLE");
+  lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_MODEL_GEOMETRY_AVAILABLE");
   lua_pushinteger(L,2); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2");
 }
@@ -276,11 +279,34 @@ void itgmania_harness_after_screen_draw() {
   lua_settop(L, top); LUA->Release(L);
 }
 
+ItgmaniaHarnessInputScope::ItgmaniaHarnessInputScope() : previous(input_scope) {
+  input_scope = this;
+}
+ItgmaniaHarnessInputScope::~ItgmaniaHarnessInputScope() { input_scope = previous; }
+void itgmania_harness_input_clock(int player, int column, float music_seconds,
+    float music_rate, float last_beat_update_ago, float step_ago, float search_seconds) {
+  if (input_scope) input_scope->clocks.push_back({player, column, music_seconds,
+      music_rate, last_beat_update_ago, step_ago, search_seconds});
+}
+
 void itgmania_harness_observe_input(lua_State* L, Screen* screen) {
   if (screen != SCREENMAN->GetTopScreen()) return;
   const int top = lua_gettop(L);
   lua_getglobal(L, "ITGMANIA_HARNESS_INPUT_EVENT");
-  if (lua_isfunction(L, -1)) { lua_pushvalue(L, top); observe(L, 1); }
+  if (lua_isfunction(L, -1)) {
+    lua_pushvalue(L, top);
+    lua_newtable(L);
+    if (input_scope) for (size_t i = 0; i < input_scope->clocks.size(); ++i) {
+      const auto& clock = input_scope->clocks[i];
+      lua_createtable(L, 0, 7);
+      field(L, "player", clock.player); field(L, "column", clock.column);
+      field(L, "music_seconds", clock.music_seconds); field(L, "music_rate", clock.music_rate);
+      field(L, "last_beat_update_ago", clock.last_beat_update_ago);
+      field(L, "step_ago", clock.step_ago); field(L, "search_seconds", clock.search_seconds);
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    observe(L, 2);
+  }
   lua_settop(L, top);
 }
 

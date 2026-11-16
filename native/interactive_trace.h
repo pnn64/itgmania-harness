@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 class Actor;
 class Screen;
 class InputEventPlus;
@@ -44,6 +45,18 @@ struct ItgmaniaHarnessDrawFrame {
   ~ItgmaniaHarnessDrawFrame() { itgmania_harness_after_screen_draw(); }
 };
 void itgmania_harness_observe_input(lua_State* L, Screen* screen);
+struct ItgmaniaHarnessInputClock {
+  int player, column;
+  float music_seconds, music_rate, last_beat_update_ago, step_ago, search_seconds;
+};
+struct ItgmaniaHarnessInputScope {
+  ItgmaniaHarnessInputScope* previous;
+  std::vector<ItgmaniaHarnessInputClock> clocks;
+  ItgmaniaHarnessInputScope();
+  ~ItgmaniaHarnessInputScope();
+};
+void itgmania_harness_input_clock(int player, int column, float music_seconds,
+    float music_rate, float last_beat_update_ago, float step_ago, float search_seconds);
 void itgmania_harness_observe_screen_input(const InputEventPlus& input, Screen* screen);
 Actor* itgmania_harness_draw_actor(Actor* actor);
 void itgmania_harness_render_state(Actor* actor, bool write, int test, bool wrap,
