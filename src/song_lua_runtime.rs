@@ -897,7 +897,7 @@ fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
                     && event["before_update_sequence"].as_u64() >= command["before_update_sequence"].as_u64()
                     && event["event"]["button"] == expected["button"]
                     && event["event"]["PlayerNumber"] == player && event["event"]["type"] == kind)
-                { return Err(Error::new("scripted input did not reach a native screen callback")); }
+                { return Err(Error::new("scripted input did not reach native screen input dispatch")); }
             }
         }
     }
@@ -1410,6 +1410,89 @@ mod tests {
             ("/dropped_input_events",serde_json::json!(1))] {
             let mut bad=native.clone(); *bad.pointer_mut(pointer).unwrap()=value;
             assert!(validate_interactive_inputs(&bad).is_err(),"accepted {pointer}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the native trace executable (ITGMANIA_HARNESS_TRACE_BIN)"]
+    fn native_inputs_are_observed_once_with_or_without_lua_callbacks() {
+        let directory = std::env::temp_dir().join(format!("itgmania-input-dispatch-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let length = 8_000u32 * 4;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + length).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&length.to_le_bytes());
+        wav.resize(44 + length as usize, 128);
+        fs::write(directory.join("silence.wav"), wav).unwrap();
+        fs::write(directory.join("control.sm"), "#TITLE:Input dispatch;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n#NOTES:dance-single:Input dispatch:Challenge:1:0,0,0,0,0:\n0000\n1000\n0000\n0000\n;\n").unwrap();
+        let options = Options {
+            simfile: directory.join("control.sm"),
+            itgmania_bin: std::env::var_os("ITGMANIA_HARNESS_TRACE_BIN").map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target/native-engine-source/Program/ITGmania-harness-trace.exe")),
+            until_beat: 4.0, game: "dance".into(), style: "single".into(),
+            difficulty: Some("Challenge".into()), chart_index: None,
+            fallback_theme: "Harness Simply Love".into(), timeout: Duration::from_secs(45),
+            keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: false,
+            max_events: DEFAULT_MAX_EVENTS, random_seed: 1,
+            inputs: [(0.5, true), (0.55, false)].into_iter().map(|(seconds, down)| ScheduledInput {
+                scene: 1, seconds, player: 1, button: "Left".into(), key: "left".into(), down,
+            }).collect(),
+            drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
+            stop_lua_gc: false, notefield_samples: false, drawable_from_beat: 0.0, player_options: None,
+        };
+        for with_callback in [false, true] {
+            let callback = if with_callback { r#"
+    SCREENMAN:GetTopScreen():AddInputCallback(function(event)
+        MESSAGEMAN:Broadcast('ObservedCallback', {kind=event.type, button=event.button})
+        return false
+    end)
+"# } else { "" };
+            let source = r#"
+return Def.ActorFrame { OnCommand=function(self)
+    self:sleep(30)
+    CALLBACK_SETUP
+    self:SetUpdateFunction(function(self)
+        if GAMESTATE:GetCurMusicSeconds() > 1 then
+            local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(PLAYER_1)
+            MESSAGEMAN:Broadcast('InputScore', {actual=stats:GetActualDancePoints(),
+                w1=stats:GetTapNoteScores('TapNoteScore_W1'), miss=stats:GetTapNoteScores('TapNoteScore_Miss')})
+            self:SetUpdateFunction(nil)
+        end
+    end)
+end }
+"#.replace("CALLBACK_SETUP", callback);
+            fs::write(directory.join("default.lua"), source).unwrap();
+            let trace = capture(&options).unwrap();
+            fs::write(directory.join(format!("callback-{with_callback}.json")), serde_json::to_vec(&trace).unwrap()).unwrap();
+            let inputs = trace["input_events"].as_array().unwrap();
+            assert_eq!(inputs.len(), 2, "one native observation per press/release, callback={with_callback}");
+            for (event, kind) in inputs.iter().zip(["InputEventType_FirstPress", "InputEventType_Release"]) {
+                assert_eq!(event["event"]["type"], kind);
+                assert_eq!(event["event"]["button"], "Left");
+                assert_eq!(event["event"]["PlayerNumber"], "PlayerNumber_P1");
+            }
+            let broadcasts: Vec<_> = trace["events"].as_array().unwrap().iter()
+                .filter(|event| event["operation"] == "MessageManager.Broadcast").collect();
+            let scores: Vec<_> = broadcasts.iter().filter(|event| event["args"][0] == "InputScore").collect();
+            assert_eq!(scores.len(), 1);
+            assert_eq!(scores[0]["args"][1], serde_json::json!({"actual":5,"w1":1,"miss":0}),
+                "native gameplay must judge the physical input with autoplay disabled");
+            let callbacks: Vec<_> = broadcasts.iter().filter(|event| event["args"][0] == "ObservedCallback").collect();
+            assert_eq!(callbacks.len(), if with_callback { 2 } else { 0 });
+            for (event, kind) in callbacks.iter().zip(["InputEventType_FirstPress", "InputEventType_Release"]) {
+                assert_eq!(event["args"][1], serde_json::json!({"kind":kind,"button":"Left"}));
+            }
         }
     }
 

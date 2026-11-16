@@ -1338,7 +1338,8 @@ These are clock inputs; the observer does not change options or authored results
 Build the executable with `native/trace_adapter.cmake`, then add
 `--input-script controls.json --drawable-samples` to `song-lua-trace`.
 These features require the native observer adapter and fail if observation is
-missing, truncated, or a scripted press/release never reaches a screen callback.
+missing, truncated, or a scripted press/release never reaches native screen input
+dispatch.
 The input script is an ordered JSON array; seconds are the native scene's music
 seconds, independent of rendering frame rate:
 
@@ -1350,12 +1351,15 @@ seconds, independent of rendering frame rate:
 ```
 
 The injector feeds the real InputMapper/InputFilter. ITGmania generates the
-presses, held-button repeats, and releases; the trace observes the native table
-passed to Screen's Lua callbacks. Each observation retains its scene and the
+presses, held-button repeats, and releases. Since 0.1.101, the trace observes top
+screen input dispatch after native overlay/transition routing and gameplay input
+handling, before Lua callbacks. It uses Screen's native event serialization and
+does not require a Lua input callback. Each observation retains its scene and the
 completed and following gameplay update sequences. Native GameLoop delivers input
 after update and before draw; immediate text changes therefore affect that draw,
-while held controls affect the next update. Schedule inputs after the authored callback
-has been installed. Use distinct physical keys for simultaneous players.
+while held controls affect the next update. When testing an authored callback,
+schedule inputs after it has been installed. Use distinct physical keys for
+simultaneous players.
 
 Drawable samples observe native RageDisplay submissions: local XYZ, homogeneous
 logical clip XYZW, transformed UV, packed vertex color, resource identity, and

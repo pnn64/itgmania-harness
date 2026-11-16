@@ -2,6 +2,7 @@
 #include <string>
 class Actor;
 class Screen;
+class InputEventPlus;
 struct RageMatrix;
 struct RageSpriteVertex;
 struct lua_State;
@@ -43,6 +44,7 @@ struct ItgmaniaHarnessDrawFrame {
   ~ItgmaniaHarnessDrawFrame() { itgmania_harness_after_screen_draw(); }
 };
 void itgmania_harness_observe_input(lua_State* L, Screen* screen);
+void itgmania_harness_observe_screen_input(const InputEventPlus& input, Screen* screen);
 Actor* itgmania_harness_draw_actor(Actor* actor);
 void itgmania_harness_render_state(Actor* actor, bool write, int test, bool wrap,
     bool filter, int blend, float bias, int cull);
