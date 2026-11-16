@@ -50,14 +50,15 @@ cargo run -- doctor
 For an existing clone, run `git submodule update --init` after pulling a change
 that updates either source pin. The harness records exact commits in Git:
 
-- `vendor/itgmania`: upstream ITGmania v1.2.0,
-  `5c737928d93778c2c9f68e276052b220b43a468f`.
+- `vendor/itgmania`: ITGmania v1.2.0 plus the movie-surface padding fix,
+  `008bfcfef57a107eaafe08b4de7d9d42c6dd1e2f` (based on upstream
+  `5c737928d93778c2c9f68e276052b220b43a468f`).
 - `vendor/simply-love`: upstream Simply Love 5.9.0,
   `dd06138b15492f4136796dfe4b6708ced0f7b9eb`.
 
 These trees match the engine and theme resources from the previous workspace
-after normalizing line endings. The engine source pin is deliberately retained
-at the baseline version. Simply Love is separate because ITGmania v1.2.0's
+after normalizing line endings, with the engine fix recorded in its source pin.
+Simply Love is separate because ITGmania v1.2.0's
 nested theme pin is 5.8.0, while the existing harness baselines use 5.9.0.
 
 The harness uses the engine's checked-in Lua, JSONCPP, PCRE, miniz, noteskins,
