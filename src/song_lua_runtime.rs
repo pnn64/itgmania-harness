@@ -1470,7 +1470,9 @@ mod tests {
         for with_callback in [false, true] {
             let callback = if with_callback { r#"
     SCREENMAN:GetTopScreen():AddInputCallback(function(event)
-        MESSAGEMAN:Broadcast('ObservedCallback', {kind=event.type, button=event.button})
+        local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(PLAYER_1)
+        MESSAGEMAN:Broadcast('ObservedCallback', {kind=event.type, button=event.button,
+            actual=stats:GetActualDancePoints(), w1=stats:GetTapNoteScores('TapNoteScore_W1')})
         return false
     end)
 "# } else { "" };
@@ -1516,7 +1518,10 @@ end }
             let callbacks: Vec<_> = broadcasts.iter().filter(|event| event["args"][0] == "ObservedCallback").collect();
             assert_eq!(callbacks.len(), if with_callback { 2 } else { 0 });
             for (event, kind) in callbacks.iter().zip(["InputEventType_FirstPress", "InputEventType_Release"]) {
-                assert_eq!(event["args"][1], serde_json::json!({"kind":kind,"button":"Left"}));
+                let scored = kind == "InputEventType_Release";
+                assert_eq!(event["args"][1], serde_json::json!({"kind":kind,"button":"Left",
+                    "actual":if scored {5} else {0},"w1":if scored {1} else {0}}),
+                    "Step records the hit before input callbacks; UpdateJudgedRows publishes it next frame");
             }
         }
     }
