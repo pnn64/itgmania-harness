@@ -1489,6 +1489,9 @@ end }
         assert!(capture(&options).unwrap_err().to_string().contains("matched difficulty Hard"));
         options.difficulty = Some("Edit".into());
         options.game = "pump".into();
+        // Simply Love's default Cel skin is dance-only in the pinned install.
+        // A direct gameplay capture must declare a valid pump player profile.
+        options.player_options = Some("default".into());
         options.chart_index = Some(3);
         let trace = capture(&options).unwrap();
         assert_eq!(trace["input"]["game"], "pump");

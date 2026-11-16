@@ -170,6 +170,9 @@ difficulty. The index must also match `--style` and any requested `--difficulty`
 an absent or incompatible index fails without choosing another chart. With no
 index, selection retains the first matching chart behavior. `--game` defaults to
 `dance`; the selected native style determines the required Steps type.
+When capturing pump with Simply Love, use a valid pump noteskin profile such as
+`--player-options default`; that theme's default Cel skin may only be installed
+for dance. Native setup errors are retained and reject the capture.
 
 Traces preserve `input.starting_chart` and `input.chart_catalog` before song Lua
 runs, including native indices, types, difficulties, descriptions, chart names,
