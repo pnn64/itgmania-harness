@@ -63,7 +63,9 @@ local function configure_song()
 		SetGameModePreferences()
 		THEME:ReloadMetrics()
 	end
-	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+	-- A song can join the other side and reload ScreenGameplay. Configure the
+	-- declared controller/profile for that side too, without joining it early.
+	for _, player in ipairs({PLAYER_1, PLAYER_2}) do
 		-- Profile inputs must reach the song before it constructs its splines.
 		if cfg.player_options then
 			for _,level in ipairs({"ModsLevel_Preferred","ModsLevel_Stage","ModsLevel_Song","ModsLevel_Current"}) do

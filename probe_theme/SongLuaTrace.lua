@@ -1088,7 +1088,7 @@ function trace.capture_inputs(game_mode_initialized)
 	for _, window in ipairs({"W1", "W2", "W3", "W4", "W5", "Hold", "Mine", "Roll", "Attack", "Checkpoint"}) do
 		windows[window] = PREFSMAN:GetPreference("TimingWindowSeconds" .. window)
 	end
-	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+	for _, player in ipairs({PLAYER_1, PLAYER_2}) do
 		local options = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
 		local theme_player = SL and SL[ToEnumShortString(player)]
 		local disabled = {}
@@ -1097,6 +1097,7 @@ function trace.capture_inputs(game_mode_initialized)
 		end
 		players[#players + 1] = {
 			player = tostring(player), fail_setting = tostring(options:FailSetting()),
+			enabled = GAMESTATE:IsPlayerEnabled(player),
 			options_string = GAMESTATE:GetPlayerState(player):GetPlayerOptionsString("ModsLevel_Preferred"),
 			min_tns_to_hide_notes = tostring(options:MinTNSToHideNotes()),
 			disabled_timing_windows = disabled,
@@ -1330,6 +1331,7 @@ function trace.finish(completion)
 			native_machine_preferences = input_preferences ~= nil,
 			native_display_preference = input_preferences ~= nil,
 			native_initial_player_options = gameplay_preferences ~= nil,
+			native_inactive_player_options = gameplay_preferences ~= nil,
 			native_gameplay_preferences = gameplay_preferences ~= nil,
 			native_initial_theme_modifiers = gameplay_preferences ~= nil
 				and gameplay_preferences.column_cue_min_time ~= nil,

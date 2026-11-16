@@ -1114,6 +1114,16 @@ fn validate_gameplay_preferences(document: &Value) -> Result<(), Error> {
     {
         return Err(Error::new("native initial player option inputs are incomplete"));
     }
+    if document["capabilities"]["native_inactive_player_options"] == true
+        && !players.is_some_and(|players| players.len() == 2
+            && players.iter().enumerate().all(|(index, player)|
+                player["player"] == format!("PlayerNumber_P{}", index + 1)
+                    && player["enabled"].is_boolean()
+                    && player["options_string"].is_string())
+            && players.iter().any(|player| player["enabled"] == true))
+    {
+        return Err(Error::new("native active/inactive player option inputs are incomplete"));
+    }
     Ok(())
 }
 
@@ -1772,6 +1782,25 @@ mod tests {
         recorded["input"]["gameplay_preferences"]["players"][0]["options_string"] =
             serde_json::json!("NoHideLights, PlayerAutoPlay, Overhead");
         assert!(validate_runtime_inputs(&recorded).is_ok());
+        let mut both = recorded.clone();
+        both["capabilities"]["native_inactive_player_options"] = serde_json::json!(true);
+        assert!(validate_runtime_inputs(&both).is_err());
+        let mut second = both["input"]["gameplay_preferences"]["players"][0].clone();
+        second["player"] = serde_json::json!("PlayerNumber_P2");
+        second["enabled"] = serde_json::json!(false);
+        both["input"]["gameplay_preferences"]["players"][0]["enabled"] = serde_json::json!(true);
+        both["input"]["gameplay_preferences"]["players"].as_array_mut().unwrap().push(second);
+        assert!(validate_runtime_inputs(&both).is_ok());
+        for (path, value) in [
+            ("/input/gameplay_preferences/players/1/enabled", Value::Null),
+            ("/input/gameplay_preferences/players/1/player", serde_json::json!("PlayerNumber_P1")),
+            ("/input/gameplay_preferences/players/1/options_string", Value::Null),
+            ("/input/gameplay_preferences/players/0/enabled", serde_json::json!(false)),
+        ] {
+            let mut invalid = both.clone();
+            *invalid.pointer_mut(path).unwrap() = value;
+            assert!(validate_runtime_inputs(&invalid).is_err(), "accepted incomplete roster: {path}");
+        }
         recorded["input"]["preferences"]["display_aspect_ratio"] = serde_json::json!(-1);
         assert!(validate_runtime_inputs(&recorded).is_err());
         let mut lost = document.clone();
