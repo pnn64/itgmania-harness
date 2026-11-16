@@ -17,6 +17,10 @@ cmake -S <private-source> -B <build> -DCMAKE_PROJECT_INCLUDE=<harness>/native/tr
 cmake --build <build> --config Release --target ITGmania
 ```
 
+On a fresh Linux build, first run `cmake --build <build> --target libusb`.
+The pinned engine links the bundled static library without declaring that
+target dependency; building only `ITGmania` can otherwise fail at the link step.
+
 Reconfigure after changing the private source revision. The adapter stamps its
 own Git revision, tracked source modification state, and SHA-256 hashes of
 `NoteDisplay.cpp` and `CubicSpline.cpp` into the executable. Semantic gameplay

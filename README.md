@@ -50,14 +50,18 @@ cargo run -- doctor
 For an existing clone, run `git submodule update --init` after pulling a change
 that updates either source pin. The harness records exact commits in Git:
 
-- `vendor/itgmania`: ITGmania v1.2.0 plus the movie-surface padding fix,
-  `008bfcfef57a107eaafe08b4de7d9d42c6dd1e2f` (based on upstream
+- `vendor/itgmania`: ITGmania v1.2.0 plus the movie-surface padding fix and
+  upstream routine scoring/noteskin backports,
+  `663525dcb86eb570d0ef6a2e209678436660ae26` (based on upstream
   `5c737928d93778c2c9f68e276052b220b43a468f`).
-- `vendor/simply-love`: upstream Simply Love 5.9.0,
-  `dd06138b15492f4136796dfe4b6708ced0f7b9eb`.
+- `vendor/simply-love`: Simply Love 5.9.0 with the missing pump couple
+  notefield width defined, `e2157b744051e1873bac5389246afac22e2cf05f`.
 
-These trees match the engine and theme resources from the previous workspace
-after normalizing line endings, with the engine fix recorded in its source pin.
+The routine backport incorporates upstream PRs
+[1216](https://github.com/itgmania/itgmania/pull/1216) and
+[1445](https://github.com/itgmania/itgmania/pull/1445): participant ownership,
+separate team statistics, shared scoring/life, and dance/pump routine noteskins.
+The theme change supplies the five-column width for pump couple gameplay.
 Simply Love is separate because ITGmania v1.2.0's
 nested theme pin is 5.8.0, while the existing harness baselines use 5.9.0.
 
