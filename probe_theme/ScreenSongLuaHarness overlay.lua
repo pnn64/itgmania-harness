@@ -20,6 +20,9 @@ end
 local function configure_song()
 	local song = SONGMAN:FindSong(cfg.song)
 	if not song then return nil, "could not find staged song " .. cfg.song end
+	if GAMESTATE:GetCurrentGame():GetName() ~= cfg.game then
+		return nil, "ITGmania rejected game " .. tostring(cfg.game)
+	end
 
 	for _, player in ipairs(GAMESTATE:GetHumanPlayers()) do
 		GAMESTATE:UnjoinPlayer(player)
@@ -31,23 +34,28 @@ local function configure_song()
 	GAMESTATE:SetCurrentPlayMode("PlayMode_Regular")
 	GAMESTATE:SetCurrentSong(song)
 	GAMESTATE:SetCurrentStyle(cfg.style)
-	if not GAMESTATE:GetCurrentStyle() then
+	if not GAMESTATE:GetCurrentStyle() or GAMESTATE:GetCurrentStyle():GetName() ~= cfg.style then
 		return nil, "ITGmania rejected style " .. cfg.style
 	end
 
-	local wanted_type = "StepsType_Dance_" .. (cfg.style == "versus" and "Single" or cfg.style:gsub("^%l", string.upper))
+	local wanted_type = tostring(GAMESTATE:GetCurrentStyle():GetStepsType())
 	local selected = nil
-	for _, steps in ipairs(song:GetAllSteps()) do
+	local all_steps = song:GetAllSteps()
+	if cfg.chart_index and not all_steps[cfg.chart_index] then
+		return nil, "chart index " .. cfg.chart_index .. " is outside Song:GetAllSteps (" .. #all_steps .. " charts)"
+	end
+	for index, steps in ipairs(all_steps) do
 		local type_matches = tostring(steps:GetStepsType()) == wanted_type
 		local difficulty_matches = cfg.difficulty == nil
 			or normalized_enum(steps:GetDifficulty()) == cfg.difficulty:lower()
-		if type_matches and difficulty_matches then
+		if type_matches and difficulty_matches and (cfg.chart_index == nil or index == cfg.chart_index) then
 			selected = steps
 			break
 		end
 	end
 	if not selected then
 		return nil, "no " .. wanted_type .. " chart matched difficulty " .. tostring(cfg.difficulty)
+			.. " at chart index " .. tostring(cfg.chart_index)
 	end
 
 	GAMESTATE:SetCurrentSteps(PLAYER_1, selected)

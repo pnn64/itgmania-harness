@@ -32,8 +32,10 @@ pub struct Options {
     pub simfile: PathBuf,
     pub itgmania_bin: PathBuf,
     pub until_beat: f64,
+    pub game: String,
     pub style: String,
     pub difficulty: Option<String>,
+    pub chart_index: Option<u32>,
     pub fallback_theme: String,
     pub timeout: Duration,
     pub keep_run_dir: bool,
@@ -79,6 +81,12 @@ pub fn capture(options: &Options) -> Result<Value, Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
+    if options.game.trim().is_empty() {
+        return Err(Error::new("game must not be empty"));
+    }
+    if options.chart_index == Some(0) {
+        return Err(Error::new("chart index must be greater than zero"));
+    }
     if !options.drawable_from_beat.is_finite() || options.drawable_from_beat < 0.0
         || !options.until_gameplay_end && options.drawable_from_beat > options.until_beat
     { return Err(Error::new("drawable start beat must be within the capture")); }
@@ -159,7 +167,7 @@ fn capture_in(
     command.env("HOME", run_dir);
     if options.headless { command.env("ITGMANIA_HARNESS_HEADLESS", "1"); }
     if headless_graphics { command.env("ITGMANIA_HARNESS_HEADLESS_GRAPHICS", "1"); }
-    let mut child = command.args(["--game=dance", &format!("--theme={THEME_NAME}")])
+    let mut child = command.args([format!("--game={}", options.game), format!("--theme={THEME_NAME}")])
         .current_dir(staged_binary.parent().unwrap_or(run_dir))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1170,8 +1178,10 @@ fn config_lua(options: &Options) -> String {
          \tschema_version = 1,\n\
          \tharness_version = {},\n\
          \tsong = \"Harness/Probe\",\n\
+         \tgame = {},\n\
          \tstyle = {},\n\
          \tdifficulty = {},\n\
+         \tchart_index = {},\n\
          \tfallback_theme = {},\n\
          \tbase_gameplay_overlay = {},\n\
          \tbase_system_overlay = {},\n\
@@ -1190,8 +1200,10 @@ fn config_lua(options: &Options) -> String {
          \tcapture_frame_period_seconds = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
+        lua_quote(&options.game),
         lua_quote(&options.style),
         difficulty,
+        options.chart_index.map(|index| index.to_string()).unwrap_or_else(|| "nil".into()),
         lua_quote(&options.fallback_theme),
         lua_quote(&base_overlay),
         lua_quote(&format!("/Themes/{}/BGAnimations/ScreenSystemLayer overlay", options.fallback_theme)),
@@ -1402,6 +1414,89 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the native trace executable (ITGMANIA_HARNESS_TRACE_BIN)"]
+    fn native_chart_index_selects_duplicate_difficulties_and_rejects_mismatches() {
+        let directory = std::env::temp_dir().join(format!("itgmania-chart-selector-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let length = 8_000u32 * 8;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + length).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&length.to_le_bytes());
+        wav.resize(44 + length as usize, 128);
+        fs::write(directory.join("silence.wav"), wav).unwrap();
+        fs::write(directory.join("default.lua"), r#"
+return Def.ActorFrame { OnCommand=function(self)
+    self:sleep(30)
+    local selected = GAMESTATE:GetCurrentSteps(PLAYER_1)
+    MESSAGEMAN:Broadcast('SelectedChart', {description=selected:GetDescription()})
+end }
+"#).unwrap();
+        let mut options = Options {
+            simfile: directory.join("control.ssc"),
+            itgmania_bin: std::env::var_os("ITGMANIA_HARNESS_TRACE_BIN").map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target/native-engine-source/Program/ITGmania-harness-trace.exe")),
+            until_beat: 1.0, game: "dance".into(), style: "single".into(),
+            difficulty: Some("Edit".into()), chart_index: Some(2),
+            fallback_theme: "Harness Simply Love".into(), timeout: Duration::from_secs(45),
+            keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
+            max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
+            drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
+            stop_lua_gc: false, notefield_samples: false, drawable_from_beat: 0.0, player_options: None,
+        };
+        for extension in ["sm", "ssc"] {
+            let mut source = "#VERSION:0.83;#TITLE:Chart selector;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n".to_owned();
+            for (kind, description, notes) in [
+                ("dance-single", "First", "1000\n0000\n0000\n0000"),
+                ("dance-single", "Second", "0100\n0000\n0000\n0000"),
+                ("pump-single", "Pump", "00100\n00000\n00000\n00000"),
+            ] {
+                if extension == "sm" {
+                    source.push_str(&format!("#NOTES:{kind}:{description}:Edit:1:0,0,0,0,0:\n{notes}\n;\n"));
+                } else {
+                    source.push_str(&format!("#NOTEDATA:;#STEPSTYPE:{kind};#DESCRIPTION:{description};#CHARTNAME:{description};#DIFFICULTY:Edit;#METER:1;#NOTES:\n{notes}\n;\n"));
+                }
+            }
+            options.simfile = directory.join(format!("control.{extension}"));
+            fs::write(&options.simfile, source).unwrap();
+            let trace = capture(&options).unwrap();
+            fs::write(directory.join(format!("selected-{extension}.json")), serde_json::to_vec(&trace).unwrap()).unwrap();
+            assert_eq!(trace["input"]["requested_chart_index"], 2);
+            assert_eq!(trace["input"]["starting_chart"]["index"], 2);
+            assert_eq!(trace["input"]["starting_chart"]["description"], "Second");
+            assert_eq!(trace["input"]["starting_chart"], trace["input"]["chart_catalog"][1]);
+            assert!(trace["events"].as_array().unwrap().iter().any(|event|
+                event["operation"] == "MessageManager.Broadcast" && event["args"][0] == "SelectedChart"
+                    && event["args"][1]["description"] == "Second"),
+                "authored code must observe the selected second chart");
+        }
+        options.chart_index = Some(99999);
+        assert!(capture(&options).unwrap_err().to_string().contains("outside Song:GetAllSteps"));
+        options.chart_index = Some(3);
+        assert!(capture(&options).unwrap_err().to_string().contains("no StepsType_Dance_Single chart"));
+        options.chart_index = Some(2);
+        options.difficulty = Some("Hard".into());
+        assert!(capture(&options).unwrap_err().to_string().contains("matched difficulty Hard"));
+        options.difficulty = Some("Edit".into());
+        options.game = "pump".into();
+        options.chart_index = Some(3);
+        let trace = capture(&options).unwrap();
+        assert_eq!(trace["input"]["game"], "pump");
+        assert_eq!(trace["input"]["starting_chart"]["steps_type"], "StepsType_Pump_Single");
+        assert_eq!(trace["input"]["starting_chart"]["description"], "Pump");
+    }
+
+    #[test]
     #[ignore = "requires the headless native model geometry adapter"]
     fn native_notefield_capture_includes_models_and_position_caps() {
         let directory =
@@ -1491,6 +1586,8 @@ mod tests {
                         .join("target/native-engine-source/Program/ITGmania-harness-trace.exe")
                 }),
             until_beat: 6.75,
+            game: "dance".into(),
+            chart_index: None,
             style: "single".into(),
             difficulty: Some("Challenge".into()),
             fallback_theme: "Harness Simply Love".into(),
@@ -1677,6 +1774,8 @@ mod tests {
             simfile: PathBuf::from("song.ssc"),
             itgmania_bin: PathBuf::from("ITGmania.exe"),
             until_beat: 4.5,
+            game: "dance".into(),
+            chart_index: None,
             style: "single".into(),
             difficulty: Some("Challenge".into()),
             fallback_theme: "Simply-Love-SM5".into(),
@@ -1702,6 +1801,18 @@ mod tests {
         assert!(lua.contains("difficulty = \"Challenge\""));
         assert!(lua.contains("max_events = 250000"));
         assert!(lua.contains("random_seed = 73"));
+        assert!(lua.contains("game = \"dance\""));
+        assert!(lua.contains("chart_index = nil"));
+        options.game = "pump".into();
+        options.chart_index = Some(7);
+        assert!(config_lua(&options).contains("game = \"pump\""));
+        assert!(config_lua(&options).contains("chart_index = 7"));
+        options.chart_index = Some(0);
+        assert!(validate_options(&options).is_err());
+        options.chart_index = None;
+        options.game = String::new();
+        assert!(validate_options(&options).is_err());
+        options.game = "dance".into();
         options.notefield_samples=true; options.drawable_samples=true; options.headless=true;
         options.drawable_from_beat=2.0;
         options.player_options=Some("m730, 60% mini, cel".into());
@@ -2137,6 +2248,8 @@ mod tests {
             simfile: song.join("song.ssc"),
             itgmania_bin: program.join("ITGmania.exe"),
             until_beat: 4.0,
+            game: "dance".into(),
+            chart_index: None,
             style: "single".into(),
             difficulty: None,
             fallback_theme: "Simply-Love-SM5".into(),

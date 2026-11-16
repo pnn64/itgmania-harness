@@ -164,6 +164,21 @@ scoring and screen replacement. It records Lua semantics without opening a
 render window; it does not produce framebuffer reference images. Omit this
 option to use the install's normal renderer.
 
+Use `--chart-index N` to select the one-based index in the staged song's native
+`Song:GetAllSteps()` catalog. This distinguishes charts sharing a type and
+difficulty. The index must also match `--style` and any requested `--difficulty`;
+an absent or incompatible index fails without choosing another chart. With no
+index, selection retains the first matching chart behavior. `--game` defaults to
+`dance`; the selected native style determines the required Steps type.
+
+Traces preserve `input.starting_chart` and `input.chart_catalog` before song Lua
+runs, including native indices, types, difficulties, descriptions, chart names,
+meters, note hashes and autogen flags. `input.requested_chart_index` records an
+explicit selector. The native note hash can be zero before note data is loaded;
+it is diagnostic metadata, not a standalone identity check. Use the native catalog to enumerate charts; source header
+positions can differ after the engine removes duplicate charts or adds autogens.
+The final top-level chart fields may differ if authored code switches charts.
+
 On Windows, `--headless --drawable-samples` instead uses native OpenGL and AFTs
 with an invisible context window. Build the executable with the current
 `native/trace_adapter.cmake`; the CLI rejects an older adapter before launching

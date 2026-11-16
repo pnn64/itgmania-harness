@@ -158,8 +158,10 @@ fn parse_song_lua_trace_args(
         .ok_or_else(|| CliError::Usage("song-lua-trace command requires a simfile".into()))?;
     let mut itgmania_bin = None;
     let mut until_beat = None;
+    let mut game = None;
     let mut style = None;
     let mut difficulty = None;
+    let mut chart_index = None;
     let mut fallback_theme = None;
     let mut timeout = None;
     let mut out = None;
@@ -196,7 +198,14 @@ fn parse_song_lua_trace_args(
                 }
                 set_once(&mut until_beat, beat, "--until-beat")?;
             }
+            Some("--game") => set_once(&mut game, next_utf8(&mut args, "--game")?, "--game")?,
             Some("--style") => set_once(&mut style, next_utf8(&mut args, "--style")?, "--style")?,
+            Some("--chart-index") => {
+                let raw = next_utf8(&mut args, "--chart-index")?;
+                let index = raw.parse::<u32>().ok().filter(|index| *index > 0)
+                    .ok_or_else(|| CliError::Usage("chart index must be a positive integer (Song:GetAllSteps is one-based)".into()))?;
+                set_once(&mut chart_index, index, "--chart-index")?;
+            }
             Some("--difficulty") => set_once(
                 &mut difficulty,
                 next_utf8(&mut args, "--difficulty")?,
@@ -321,8 +330,10 @@ fn parse_song_lua_trace_args(
             itgmania_bin: itgmania_bin
                 .ok_or_else(|| CliError::Usage("song-lua-trace requires --itgmania-bin".into()))?,
             until_beat: until_beat.unwrap_or(16.0),
+            game: game.unwrap_or_else(|| "dance".into()),
             style: style.unwrap_or_else(|| "single".into()),
             difficulty,
+            chart_index,
             fallback_theme: fallback_theme.unwrap_or_else(|| "Simply-Love-SM5".into()),
             timeout: timeout.unwrap_or_else(|| std::time::Duration::from_secs(120)),
             keep_run_dir,
@@ -1361,7 +1372,7 @@ fn print_help() {
            itgmania-harness-rs song-lua-archive SONGS_DIR --traces DIR --out DIR [--uncompressed] [--theme-assets DIR]\n\
            itgmania-harness-rs song-lua-pack CANDIDATE.tar --report REPORT.json --out DIR\n\
            itgmania-harness-rs song-lua-trace SIMFILE --itgmania-bin PATH\n\
-             [--until-beat 16] [--style single] [--difficulty Challenge]\n\
+             [--until-beat 16] [--game dance] [--style single] [--difficulty Challenge] [--chart-index 1]\n\
              [--fallback-theme Simply-Love-SM5] [--timeout SECONDS] [--out FILE]\n\
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
@@ -1592,6 +1603,27 @@ mod tests {
         assert!(!trace.options.autoplay);
         assert_eq!(trace.options.max_events, song_lua_runtime::DEFAULT_MAX_EVENTS);
         assert_eq!(trace.options.random_seed, 1);
+    }
+
+    #[test]
+    fn trace_selects_an_exact_native_chart() {
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--game", "pump",
+            "--style", "double", "--difficulty", "Edit", "--chart-index", "7"].map(OsString::from);
+        let options = parse_song_lua_trace_args(args.into_iter()).unwrap().options;
+        assert_eq!(options.game, "pump");
+        assert_eq!(options.style, "double");
+        assert_eq!(options.difficulty.as_deref(), Some("Edit"));
+        assert_eq!(options.chart_index, Some(7));
+        for index in ["0", "-1", "1.5", "nan", "4294967296"] {
+            let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--chart-index", index].map(OsString::from);
+            assert!(parse_song_lua_trace_args(args.into_iter()).is_err());
+        }
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe", "--chart-index", "1", "--chart-index", "2"].map(OsString::from);
+        assert!(parse_song_lua_trace_args(args.into_iter()).is_err());
+        let args = ["song.ssc", "--itgmania-bin", "ITGmania.exe"].map(OsString::from);
+        let options = parse_song_lua_trace_args(args.into_iter()).unwrap().options;
+        assert_eq!(options.game, "dance");
+        assert_eq!(options.chart_index, None);
     }
 
     #[test]

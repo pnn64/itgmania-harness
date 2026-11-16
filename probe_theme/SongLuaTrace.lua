@@ -6,6 +6,7 @@ if cfg.stop_lua_gc then collectgarbage("stop") end
 
 local input_preferences = nil
 local gameplay_preferences = nil
+local starting_chart, chart_catalog = nil, nil
 
 local definitions = {}
 local definition_by_table = setmetatable({}, {__mode = "k"})
@@ -1076,6 +1077,19 @@ function trace.capture_catalog_inputs()
 end
 
 function trace.capture_inputs(game_mode_initialized)
+	-- Preserve the launch selection before authored code changes charts or reloads.
+	-- Native indices include every loaded Steps type, not just playable dance charts.
+	chart_catalog = {}
+	local selected = GAMESTATE:GetCurrentSteps(PLAYER_1)
+	for index, steps in ipairs(GAMESTATE:GetCurrentSong():GetAllSteps()) do
+		local identity = {index = index, steps_type = tostring(steps:GetStepsType()),
+			difficulty = tostring(steps:GetDifficulty()), description = steps:GetDescription(),
+			chart_name = steps:GetChartName(), meter = steps:GetMeter(),
+			hash = steps:GetHash(), is_autogen = steps:IsAutogen()}
+		chart_catalog[index] = identity
+		if steps == selected then starting_chart = identity end
+	end
+	assert(starting_chart, "starting chart is absent from native catalog")
 	input_preferences = {
 		last_seen_video_driver = PREFSMAN:GetPreference("LastSeenVideoDriver"),
 		global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
@@ -1287,7 +1301,8 @@ function trace.finish(completion)
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS == true,
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,
 			script = cfg.input_script, observer_frame_period_seconds = cfg.capture_frame_period_seconds or (cfg.drawable_samples and 1/60 or nil),
-			requested_difficulty = cfg.difficulty, style = cfg.style,
+			requested_difficulty = cfg.difficulty, requested_chart_index = cfg.chart_index,
+			game = cfg.game, style = cfg.style, starting_chart = starting_chart, chart_catalog = chart_catalog,
 			preferences = input_preferences, gameplay_preferences = gameplay_preferences,
             catalog_preferences = catalog_preferences},
 		end_position = {beat = beat, seconds = seconds},
