@@ -6,6 +6,7 @@ if cfg.stop_lua_gc then collectgarbage("stop") end
 
 local input_preferences = nil
 local gameplay_preferences = nil
+local fast_note_rendering = nil
 local starting_chart, chart_catalog = nil, nil
 
 local definitions = {}
@@ -1079,6 +1080,7 @@ function trace.capture_catalog_inputs()
 end
 
 function trace.capture_inputs(game_mode_initialized)
+    fast_note_rendering = PREFSMAN:GetPreference("FastNoteRendering")
 	-- Preserve the launch selection before authored code changes charts or reloads.
 	-- Native indices include every loaded Steps type, not just playable dance charts.
 	chart_catalog = {}
@@ -1301,6 +1303,8 @@ function trace.finish(completion)
 			dropped_render_random_inputs = dropped_render_random_inputs,
 		interactive_observer_error = ITGMANIA_HARNESS_INTERACTIVE_ERROR,
         input = {native_source = ITGMANIA_HARNESS_NATIVE_SOURCE,
+            fast_note_rendering_requested = cfg.fast_note_rendering, fast_note_rendering = fast_note_rendering,
+            fast_note_rendering_at_end = PREFSMAN:GetPreference("FastNoteRendering"),
             lua_gc_mode = cfg.stop_lua_gc and "stopped" or "automatic", autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS == true,
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,
@@ -1355,6 +1359,7 @@ function trace.finish(completion)
 			native_c_method_hooks = type(native_wrap) == "function",
 			native_query_classes = hooked_classes,
 			native_machine_preferences = input_preferences ~= nil,
+            native_fast_note_rendering = type(fast_note_rendering) == "boolean",
 			native_display_preference = input_preferences ~= nil,
 			native_initial_player_options = gameplay_preferences ~= nil,
 			native_inactive_player_options = gameplay_preferences ~= nil,

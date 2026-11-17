@@ -12,6 +12,7 @@ local actor_ids,actors=setmetatable({},{__mode='k'}),{}
 local scene,frame,sampled_frame=0,0,-1
 local delta,pending,finished=0,nil,false
 local inputs={}
+local fast_note_rendering=nil
 local dropped_models,dropped_strips=0,0
 local dropped_receptors=0
 local function actor_id(actor)
@@ -81,13 +82,16 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
   title=GAMESTATE:GetCurrentSong():GetDisplayFullTitle(),style=cfg.style,difficulty=cfg.difficulty,
   display={logical_width=SCREEN_WIDTH,logical_height=SCREEN_HEIGHT,width=DISPLAY:GetDisplayWidth(),height=DISPLAY:GetDisplayHeight(),video_renderers=PREFSMAN:GetPreference('VideoRenderers')},
   input={notefield_samples=true,scene_draws=cfg.scene_draws==true,player_options=cfg.player_options,players=inputs,autoplay=cfg.autoplay,
+   fast_note_rendering_requested=cfg.fast_note_rendering,fast_note_rendering=fast_note_rendering,
+   fast_note_rendering_at_end=PREFSMAN:GetPreference('FastNoteRendering'),
    native_source=ITGMANIA_HARNESS_NATIVE_SOURCE,
    lua_gc_mode=cfg.stop_lua_gc and 'stopped' or 'automatic',
    drawable_from_beat=cfg.drawable_from_beat,observer_frame_period_seconds=cfg.capture_frame_period_seconds,
    headless_graphics=ITGMANIA_HARNESS_HEADLESS_GRAPHICS==true,
    window_visible=ITGMANIA_HARNESS_WINDOW_VISIBLE(),
    constant_update_delta_seconds=PREFSMAN:GetPreference('ConstantUpdateDeltaSeconds')},
-  capabilities={native_notefield_geometry=true,native_drawable_vertices=true,native_model_geometry_protocol=2,native_receptor_geometry_protocol=1},
+  capabilities={native_notefield_geometry=true,native_drawable_vertices=true,native_model_geometry_protocol=2,native_receptor_geometry_protocol=1,
+   native_fast_note_rendering=type(fast_note_rendering)=='boolean'},
   capture_limits={max_events=cfg.max_events},runtime_actors=actors,update_frames=frames,
   model_geometry_meshes=meshes,model_geometry_samples=models,model_geometry_frames=model_frames,
   drawable_samples=strips,drawable_frames=strip_frames,
@@ -101,6 +105,7 @@ end
 local function noop() end
 ITGMANIA_HARNESS_TRACE={capture_catalog_inputs=noop,
  capture_inputs=function()
+  fast_note_rendering=PREFSMAN:GetPreference('FastNoteRendering')
   for _,player in ipairs(GAMESTATE:GetEnabledPlayers()) do
    local opts=GAMESTATE:GetPlayerState(player):GetPlayerOptions('ModsLevel_Current')
    inputs[#inputs+1]={player=tostring(player),options_string=GAMESTATE:GetPlayerState(player):GetPlayerOptionsString('ModsLevel_Current'),mini=opts:Mini(),noteskin=opts:NoteSkin()}

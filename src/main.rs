@@ -180,6 +180,7 @@ fn parse_song_lua_trace_args(
     let mut scene_draws = false;
     let mut drawable_from_beat = None;
     let mut player_options = None;
+    let mut fast_note_rendering = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -288,6 +289,15 @@ fn parse_song_lua_trace_args(
             Some("--scene-draws") if !scene_draws => scene_draws = true,
             Some("--player-options") => set_once(&mut player_options,
                 next_utf8(&mut args, "--player-options")?, "--player-options")?,
+            Some("--fast-note-rendering") => {
+                let raw = next_utf8(&mut args, "--fast-note-rendering")?;
+                let enabled = match raw.as_str() {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err(CliError::Usage("--fast-note-rendering requires 0 or 1".into())),
+                };
+                set_once(&mut fast_note_rendering, enabled, "--fast-note-rendering")?;
+            }
             Some("--drawable-from-beat") => {
                 let raw = next_utf8(&mut args, "--drawable-from-beat")?;
                 let beat = raw.parse::<f64>().map_err(|_| CliError::Usage("drawable start beat must be a non-negative number".into()))?;
@@ -358,6 +368,7 @@ fn parse_song_lua_trace_args(
             scene_draws,
             drawable_from_beat: drawable_from_beat.unwrap_or(0.0),
             player_options,
+            fast_note_rendering,
         },
         out,
     })
@@ -1381,6 +1392,7 @@ fn print_help() {
              [--until-gameplay-end] [--max-events COUNT]\n\
              [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000] [--stop-lua-gc]\n\
              [--notefield-samples [--scene-draws]] [--drawable-from-beat BEAT] [--player-options STRING]\n\
+             [--fast-note-rendering 0|1]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
@@ -1601,6 +1613,25 @@ mod tests {
             .map(OsString::from);
         let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
         assert!(trace.options.scene_draws && trace.options.notefield_samples);
+    }
+
+    #[test]
+    fn trace_fast_note_rendering_requires_an_explicit_boolean_value() {
+        let base = ["song.ssc", "--itgmania-bin", "native.exe"];
+        let trace = parse_song_lua_trace_args(base.map(OsString::from).into_iter()).unwrap();
+        assert_eq!(trace.options.fast_note_rendering, None);
+        for (value, expected) in [("0", false), ("1", true)] {
+            let trace = parse_song_lua_trace_args(base.into_iter()
+                .chain(["--fast-note-rendering", value]).map(OsString::from)).unwrap();
+            assert_eq!(trace.options.fast_note_rendering, Some(expected));
+        }
+        for options in [vec!["--fast-note-rendering"], vec!["--fast-note-rendering", "2"],
+            vec!["--fast-note-rendering", "true"],
+            vec!["--fast-note-rendering", "0", "--fast-note-rendering", "1"]]
+        {
+            assert!(parse_song_lua_trace_args(base.into_iter().chain(options)
+                .map(OsString::from)).is_err());
+        }
     }
 
     #[test]

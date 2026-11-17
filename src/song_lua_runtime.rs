@@ -53,6 +53,7 @@ pub struct Options {
     pub scene_draws: bool,
     pub drawable_from_beat: f64,
     pub player_options: Option<String>,
+    pub fast_note_rendering: Option<bool>,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -237,6 +238,11 @@ fn capture_in(
             {
                 return Err(Error::new("native graphics capture did not remain offscreen"));
             }
+            if document["capabilities"]["native_fast_note_rendering"] != true
+                || document["input"]["fast_note_rendering_requested"].as_bool() != options.fast_note_rendering
+            {
+                return Err(Error::new("native FastNoteRendering preference request was not recorded"));
+            }
             if options.until_gameplay_end {
                 validate_script_errors(&document)?;
                 if document.pointer("/completion/reason").and_then(Value::as_str) != Some("gameplay-exit") {
@@ -383,6 +389,7 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "native_notefield_geometry":true,"native_drawable_vertices":true,
         "native_model_geometry_protocol":2,
         "native_receptor_geometry_protocol":1,
+        "native_fast_note_rendering":native["capabilities"]["native_fast_note_rendering"],
         "semantic_event_replay":false,"source_derived_transform_model":false,"raster_output":false,
     }));
     render.insert("provenance".into(), provenance);
@@ -476,6 +483,9 @@ fn prepare_install(
         // Stock GameLoop preference: keep observer overhead from amplifying
         // self-queued callbacks into an unbounded catch-up update.
         native_preferences.push_str(&format!("ConstantUpdateDeltaSeconds={:.17}\n", 1.0 / f64::from(fps)));
+    }
+    if let Some(enabled) = options.fast_note_rendering {
+        native_preferences.push_str(&format!("FastNoteRendering={}\n", u8::from(enabled)));
     }
     write(&run_dir.join("Save/Preferences.ini"), native_preferences.as_bytes())?;
     write(
@@ -1054,7 +1064,24 @@ fn validate_render_random_inputs(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_fast_note_rendering(document: &Value) -> Result<(), Error> {
+    if document["capabilities"]["native_fast_note_rendering"] != true {
+        return Ok(());
+    }
+    let input = &document["input"];
+    let requested = &input["fast_note_rendering_requested"];
+    let initial = input["fast_note_rendering"].as_bool();
+    if initial.is_none() || !input["fast_note_rendering_at_end"].is_boolean()
+        || !requested.is_null() && !requested.is_boolean()
+        || requested.as_bool().is_some_and(|value| Some(value) != initial)
+    {
+        return Err(Error::new("native FastNoteRendering preference inputs are missing or do not match the request"));
+    }
+    Ok(())
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
+    validate_fast_note_rendering(document)?;
     validate_render_random_inputs(document)?;
     if document["input"]["notefield_samples"] == true {
         validate_notefield_geometry(document)?;
@@ -1411,6 +1438,7 @@ fn config_lua(options: &Options) -> String {
          \tscene_draws = {},\n\
          \tdrawable_from_beat = {},\n\
          \tplayer_options = {},\n\
+         \tfast_note_rendering = {},\n\
          \tcapture_frame_period_seconds = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
@@ -1433,6 +1461,7 @@ fn config_lua(options: &Options) -> String {
         options.scene_draws,
         options.drawable_from_beat,
         options.player_options.as_deref().map(lua_quote).unwrap_or_else(|| "nil".into()),
+        options.fast_note_rendering.map(|value| value.to_string()).unwrap_or_else(|| "nil".into()),
         options.capture_fps.map(|fps| format!("{:.17}", 1.0 / f64::from(fps))).unwrap_or_else(|| "nil".into())
     )
 }
@@ -1789,7 +1818,7 @@ return Def.ActorFrame {
             keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: true, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         }).unwrap();
         fs::write(directory.join("native.json"), serde_json::to_vec(&trace).unwrap()).unwrap();
         validate_render_random_inputs(&trace).unwrap();
@@ -1857,7 +1886,7 @@ return Def.ActorFrame {
                 scene: 1, seconds, player: 1, button: "Left".into(), key: "left".into(), down,
             }).collect(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         };
         for with_callback in [false, true] {
             let callback = if with_callback { r#"
@@ -1957,7 +1986,7 @@ end }
             keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         };
         for extension in ["sm", "ssc"] {
             let mut source = "#VERSION:0.83;#TITLE:Chart selector;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n".to_owned();
@@ -2115,6 +2144,7 @@ end }
             scene_draws: false,
             drawable_from_beat: 1.0,
             player_options: Some("m730, 60% mini, cel".into()),
+            fast_note_rendering: Some(false),
         };
         let document = capture(&options).unwrap();
         fs::write(
@@ -2123,6 +2153,10 @@ end }
         )
         .unwrap();
         assert_eq!(document["input"]["window_visible"], false);
+        assert_eq!(document["capabilities"]["native_fast_note_rendering"], true);
+        assert_eq!(document["input"]["fast_note_rendering_requested"], false);
+        assert_eq!(document["input"]["fast_note_rendering"], false);
+        assert_eq!(document["input"]["fast_note_rendering_at_end"], false);
         assert_eq!(document["capabilities"]["native_notefield_geometry"], true);
         assert_eq!(document["capabilities"]["native_receptor_geometry_protocol"], 1);
         let visits = document["receptor_visits"].as_array().unwrap();
@@ -2205,8 +2239,12 @@ end }
         let dark = capture(&Options {
             until_beat: 2.0,
             player_options: Some("m730, 60% mini, cel, 100% dark".into()),
+            fast_note_rendering: Some(true),
             ..options
         }).unwrap();
+        assert_eq!(dark["input"]["fast_note_rendering_requested"], true);
+        assert_eq!(dark["input"]["fast_note_rendering"], true);
+        assert_eq!(dark["input"]["fast_note_rendering_at_end"], true);
         let hidden_visits = dark["receptor_visits"].as_array().unwrap();
         assert!(!hidden_visits.is_empty(), "transparent receptors must still be visited");
         assert!(hidden_visits.iter().all(|visit| visit["state"]["base_alpha"] == 0.0));
@@ -2390,6 +2428,7 @@ end }
             scene_draws: false,
             drawable_from_beat: 0.0,
             player_options: None,
+            fast_note_rendering: None,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -2400,6 +2439,11 @@ end }
         assert!(lua.contains("game = \"dance\""));
         assert!(lua.contains("chart_index = nil"));
         assert!(lua.contains("scene_draws = false"));
+        assert!(lua.contains("fast_note_rendering = nil"));
+        options.fast_note_rendering = Some(true);
+        assert!(config_lua(&options).contains("fast_note_rendering = true"));
+        options.fast_note_rendering = Some(false);
+        assert!(config_lua(&options).contains("fast_note_rendering = false"));
         options.scene_draws = true;
         assert!(validate_options(&options).is_err(), "scene draws require a geometry profile");
         options.game = "pump".into();
@@ -2807,6 +2851,34 @@ end }
     }
 
     #[test]
+    fn native_fast_note_rendering_requires_observed_boolean_preferences() {
+        let document = serde_json::json!({"capabilities":{"native_fast_note_rendering":true},
+            "input":{"fast_note_rendering_requested":true,"fast_note_rendering":true,
+                "fast_note_rendering_at_end":true}});
+        validate_fast_note_rendering(&document).unwrap();
+        let exported = notefield_render_document(document.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_fast_note_rendering"], true);
+        validate_fast_note_rendering(&exported).unwrap();
+        for (field, value) in [("fast_note_rendering", Value::Null),
+            ("fast_note_rendering_at_end", Value::Null),
+            ("fast_note_rendering_requested", serde_json::json!("1")),
+            ("fast_note_rendering_requested", serde_json::json!(false))]
+        {
+            let mut invalid = document.clone();
+            invalid["input"][field] = value;
+            assert!(validate_fast_note_rendering(&invalid).is_err(), "accepted {field}");
+        }
+        let mut native_default = document.clone();
+        native_default["input"]["fast_note_rendering_requested"] = Value::Null;
+        validate_fast_note_rendering(&native_default).unwrap();
+        // These are observed initial/final values, not a claim that authored Lua
+        // could not have changed the preference after gameplay initialization.
+        native_default["input"]["fast_note_rendering_at_end"] = Value::Bool(false);
+        validate_fast_note_rendering(&native_default).unwrap();
+        validate_fast_note_rendering(&serde_json::json!({})).unwrap();
+    }
+
+    #[test]
     fn headless_drawables_require_real_graphics_and_offscreen_adapter() {
         let preferences = preferences(Path::new("fixture"), true, true).unwrap();
         assert!(preferences.contains("VideoRenderers=opengl\n"));
@@ -2869,6 +2941,7 @@ end }
             scene_draws: false,
             drawable_from_beat: 0.0,
             player_options: None,
+            fast_note_rendering: Some(true),
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();

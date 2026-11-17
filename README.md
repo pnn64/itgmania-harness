@@ -243,6 +243,20 @@ before they can serve as accepted whole-song fixtures.
 without injecting inputs. Native `Player::HandleTapRowScore` skips scoring
 for autoplay, so autoplay does not advance current possible dance points.
 
+`--fast-note-rendering 0|1` sets the native `FastNoteRendering` preference before
+gameplay constructs the noteskin actors. Omitting it preserves the native
+configuration's default; isolated captures do not inherit the user's saved
+profile. Match this setting to the playback being compared: native
+`NoteDisplay.cpp` shares note resources when it is enabled and clears the depth
+buffer after each tap when it is disabled, changing how later foreground models
+overlap those arrows.
+Both trace profiles record `input.fast_note_rendering_requested`, the observed
+initial `input.fast_note_rendering`, and `input.fast_note_rendering_at_end`.
+The `native_fast_note_rendering` capability requires boolean observations and a
+matching initial value when an override was requested. These initial/final
+observations do not claim that authored Lua cannot change the preference during
+playback. Older traces omit this capability and do not establish the setting.
+
 `--max-events COUNT` sets the native trace recorder's event capacity and
 defaults to 250000. For songs with frequent Lua updates, increase it, for
 example with `--max-events 2000000`. The trace records the configured limit;
