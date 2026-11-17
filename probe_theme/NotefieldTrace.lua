@@ -3,14 +3,17 @@
 local cfg=ITGMANIA_HARNESS_CONFIG
 if cfg.stop_lua_gc then collectgarbage('stop') end
 assert(ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2==2,"native note geometry adapter v2 required")
-ITGMANIA_HARNESS_NOTEFIELD_ONLY=true
+assert(ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1==1,"native receptor geometry adapter v1 required")
+ITGMANIA_HARNESS_NOTEFIELD_ONLY=not cfg.scene_draws
 ITGMANIA_HARNESS_CAPTURE_FROM_BEAT=cfg.drawable_from_beat or 0
 local models,meshes,strips,model_frames,strip_frames,frames={},{},{},{},{},{}
+local receptor_visits,receptor_frames={},{}
 local actor_ids,actors=setmetatable({},{__mode='k'}),{}
 local scene,frame,sampled_frame=0,0,-1
 local delta,pending,finished=0,nil,false
 local inputs={}
 local dropped_models,dropped_strips=0,0
+local dropped_receptors=0
 local function actor_id(actor)
  local id=actor_ids[actor]
  if not id then id='native-'..tostring(#actors+1);actor_ids[actor]=id;actors[#actors+1]={id=id,name=actor:GetName()} end
@@ -45,10 +48,15 @@ ITGMANIA_HARNESS_DRAW_MODEL=function(actor,geometry,state)
   coordinate_space='native-projection-before-display-centering',state=state}
 end
 ITGMANIA_HARNESS_DRAW_VERTICES=function(actor,primitive,vertices,state)
- if not capture_now() or not state.note_context then return end
+ if not capture_now() or not cfg.scene_draws and not state.note_context then return end
  if #strips>=cfg.max_events then dropped_strips=dropped_strips+1;return end
  strips[#strips+1]={scene=scene,update_sequence=anchor(),actor=actor_id(actor),primitive=primitive,
   coordinate_space='native-projection-before-display-centering',vertices=vertices,state=state}
+end
+ITGMANIA_HARNESS_RECEPTOR_VISIT=function(actor,state)
+ if not capture_now() then return end
+ if #receptor_visits>=cfg.max_events then dropped_receptors=dropped_receptors+1;return end
+ receptor_visits[#receptor_visits+1]={scene=scene,update_sequence=anchor(),actor=actor_id(actor),state=state}
 end
 ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE=function(dt)
  frame=frame+1;delta=dt
@@ -60,29 +68,33 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
  if capture_now() then
   model_frames[#model_frames+1]={scene=scene,update_sequence=#frames,samples=#models}
   strip_frames[#strip_frames+1]={scene=scene,update_sequence=#frames,samples=#strips}
+  receptor_frames[#receptor_frames+1]={scene=scene,update_sequence=#frames,samples=#receptor_visits}
  end
  if not pending then return end
  finished=true
  local beat,seconds=position()
  local file=RageFileUtil:CreateRageFile()
+ local script_errors,dropped_script_errors=ITGMANIA_HARNESS_SCRIPT_ERRORS()
  assert(file:Open(cfg.result_path,2),'cannot open note geometry trace')
  file:Write(JsonEncode({schema_version=1,oracle='itgmania_notefield_render_trace',
   harness_version=cfg.harness_version,itgmania_version=ProductVersion(),
   title=GAMESTATE:GetCurrentSong():GetDisplayFullTitle(),style=cfg.style,difficulty=cfg.difficulty,
   display={logical_width=SCREEN_WIDTH,logical_height=SCREEN_HEIGHT,width=DISPLAY:GetDisplayWidth(),height=DISPLAY:GetDisplayHeight(),video_renderers=PREFSMAN:GetPreference('VideoRenderers')},
-  input={notefield_samples=true,player_options=cfg.player_options,players=inputs,autoplay=cfg.autoplay,
+  input={notefield_samples=true,scene_draws=cfg.scene_draws==true,player_options=cfg.player_options,players=inputs,autoplay=cfg.autoplay,
    native_source=ITGMANIA_HARNESS_NATIVE_SOURCE,
    lua_gc_mode=cfg.stop_lua_gc and 'stopped' or 'automatic',
    drawable_from_beat=cfg.drawable_from_beat,observer_frame_period_seconds=cfg.capture_frame_period_seconds,
    headless_graphics=ITGMANIA_HARNESS_HEADLESS_GRAPHICS==true,
    window_visible=ITGMANIA_HARNESS_WINDOW_VISIBLE(),
    constant_update_delta_seconds=PREFSMAN:GetPreference('ConstantUpdateDeltaSeconds')},
-  capabilities={native_notefield_geometry=true,native_drawable_vertices=true,native_model_geometry_protocol=2},
+  capabilities={native_notefield_geometry=true,native_drawable_vertices=true,native_model_geometry_protocol=2,native_receptor_geometry_protocol=1},
   capture_limits={max_events=cfg.max_events},runtime_actors=actors,update_frames=frames,
   model_geometry_meshes=meshes,model_geometry_samples=models,model_geometry_frames=model_frames,
   drawable_samples=strips,drawable_frames=strip_frames,
+  receptor_visits=receptor_visits,receptor_frames=receptor_frames,dropped_receptor_visits=dropped_receptors,
   dropped_model_geometry_samples=dropped_models,dropped_drawable_samples=dropped_strips,
   interactive_observer_error=ITGMANIA_HARNESS_INTERACTIVE_ERROR,
+  script_errors=script_errors,dropped_script_errors=dropped_script_errors,
   completion=pending,end_position={beat=beat,seconds=seconds},random_seed=cfg.random_seed}))
  file:Close();file:destroy()
 end

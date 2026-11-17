@@ -15,9 +15,19 @@ struct ItgmaniaHarnessNoteScope {
   float note_beat, draw_beat;
   bool held;
   const char* kind;
+  unsigned long long receptor_visit = 0;
   ItgmaniaHarnessNoteScope(int player, int column, float note_beat,
       float draw_beat, int part, bool held, const char* kind);
   ~ItgmaniaHarnessNoteScope();
+};
+
+// Observe the exact SetBaseAlpha assignment and each attempted receptor draw.
+// A transparent actor can submit no geometry, so geometry alone cannot prove
+// that receptors were visited by the native renderer.
+void itgmania_harness_receptor_alpha(const Actor* actor, float alpha);
+struct ItgmaniaHarnessReceptorScope {
+  ItgmaniaHarnessNoteScope note;
+  ItgmaniaHarnessReceptorScope(Actor* actor, int player, int column, float beat);
 };
 
 void itgmania_harness_before_screen_update(float delta);

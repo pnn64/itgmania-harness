@@ -62,6 +62,9 @@ const msMesh* drawing_model_mesh = nullptr;
 bool updating_screen = false;
 ItgmaniaHarnessInputScope* input_scope = nullptr;
 const ItgmaniaHarnessNoteScope* drawing_note = nullptr;
+std::map<const Actor*, float> receptor_alphas;
+unsigned long long next_receptor_visit = 0;
+unsigned long long next_geometry_draw_sequence = 0;
 struct ModelGeometry { int id = 0; std::vector<float> vertices; };
 std::map<const msMesh*,ModelGeometry> model_geometries;
 int next_model_geometry = 1;
@@ -87,6 +90,10 @@ void note_context(lua_State* L) {
   lua_pushnumber(L,note.draw_beat); lua_setfield(L,-2,"draw_beat");
   lua_pushboolean(L,note.held); lua_setfield(L,-2,"held");
   lua_pushstring(L,note.kind); lua_setfield(L,-2,"kind");
+  if (note.receptor_visit != 0) {
+    lua_pushnumber(L,static_cast<lua_Number>(note.receptor_visit));
+    lua_setfield(L,-2,"receptor_visit_sequence");
+  }
   lua_setfield(L,-2,"note_context");
 }
 float option_song_delta = 0;
@@ -220,6 +227,7 @@ void register_interactive(Lua* L) {
   lua_pushstring(L, HARNESS_NATIVE_REVISION); lua_setfield(L, -2, "revision");
   lua_pushboolean(L, HARNESS_NATIVE_DIRTY); lua_setfield(L, -2, "modified_src");
   lua_pushstring(L, HARNESS_NOTE_DISPLAY_SHA256); lua_setfield(L, -2, "note_display_sha256");
+  lua_pushstring(L, HARNESS_RECEPTOR_ARROW_ROW_SHA256); lua_setfield(L, -2, "receptor_arrow_row_sha256");
   lua_pushstring(L, HARNESS_CUBIC_SPLINE_SHA256); lua_setfield(L, -2, "cubic_spline_sha256");
   lua_pushstring(L, HARNESS_ACTOR_SHA256); lua_setfield(L, -2, "actor_sha256");
   lua_pushstring(L, HARNESS_RANDOM_NUMBERS_SHA256); lua_setfield(L, -2, "random_numbers_sha256");
@@ -242,6 +250,7 @@ void register_interactive(Lua* L) {
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_MODEL_GEOMETRY_AVAILABLE");
   lua_pushinteger(L,2); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2");
+  lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1");
   lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL");
 }
 REGISTER_WITH_LUA_FUNCTION(register_interactive)
@@ -433,6 +442,8 @@ void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVerte
   }
   lua_createtable(L, 0, 9);
   note_context(L);
+  field(L, "native_draw_sequence", static_cast<double>(++next_geometry_draw_sequence));
+  if (actor_draw_scope) field(L, "actor_draw_sequence", static_cast<double>(actor_draw_scope->draw_sequence));
   field(L, "render_target", static_cast<double>(DISPLAY->GetRenderTarget()));
   boolean(L, "z_write", state.write); boolean(L, "texture_wrapping", state.wrap);
   boolean(L, "texture_filtering", state.filter); field(L, "z_test", state.test);
@@ -490,6 +501,8 @@ void itgmania_harness_draw_model(const msMesh& mesh, int index,
   drawing->PushSelf(L); lua_pushinteger(L,geometry.id);
   lua_createtable(L,0,5);
   note_context(L); field(L,"mesh_index",index);
+  field(L,"native_draw_sequence",static_cast<double>(++next_geometry_draw_sequence));
+  if (actor_draw_scope) field(L,"actor_draw_sequence",static_cast<double>(actor_draw_scope->draw_sequence));
   field(L,"render_target",static_cast<double>(DISPLAY->GetRenderTarget()));
   lua_pushstring(L,updating_screen?"during_update":"screen_draw"); lua_setfield(L,-2,"draw_phase");
   lua_pushstring(L,mesh.sName.c_str()); lua_setfield(L,-2,"mesh_name");
@@ -520,3 +533,28 @@ ItgmaniaHarnessNoteScope::ItgmaniaHarnessNoteScope(int player_, int column_,
     : previous(drawing_note), player(player_), column(column_), part(part_),
       note_beat(note_beat_), draw_beat(draw_beat_), held(held_), kind(kind_) { drawing_note = this; }
 ItgmaniaHarnessNoteScope::~ItgmaniaHarnessNoteScope() { drawing_note = previous; }
+
+void itgmania_harness_receptor_alpha(const Actor* actor, float alpha) {
+  receptor_alphas[actor] = alpha;
+}
+
+ItgmaniaHarnessReceptorScope::ItgmaniaHarnessReceptorScope(
+    Actor* actor, int player, int column, float beat)
+    : note(player, column, beat, beat, -1, false, "receptor") {
+  note.receptor_visit = ++next_receptor_visit;
+  Lua* L = LUA->Get(); const int top = lua_gettop(L);
+  if (draw_capture_disabled(L)) { LUA->Release(L); return; }
+  lua_getglobal(L, "ITGMANIA_HARNESS_RECEPTOR_VISIT");
+  if (!lua_isfunction(L, -1)) { lua_settop(L, top); LUA->Release(L); return; }
+  actor->PushSelf(L);
+  lua_createtable(L, 0, 7);
+  note_context(L);
+  const auto alpha = receptor_alphas.find(actor);
+  if (alpha != receptor_alphas.end()) field(L, "base_alpha", alpha->second);
+  boolean(L, "visible", actor->GetVisible());
+  field(L, "render_target", static_cast<double>(DISPLAY->GetRenderTarget()));
+  lua_pushstring(L, updating_screen ? "during_update" : "screen_draw");
+  lua_setfield(L, -2, "draw_phase");
+  observe(L, 2);
+  lua_settop(L, top); LUA->Release(L);
+}

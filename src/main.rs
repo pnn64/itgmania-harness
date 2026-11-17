@@ -177,6 +177,7 @@ fn parse_song_lua_trace_args(
     let mut fixed_update_fps = None;
     let mut stop_lua_gc = false;
     let mut notefield_samples = false;
+    let mut scene_draws = false;
     let mut drawable_from_beat = None;
     let mut player_options = None;
     while let Some(arg) = args.next() {
@@ -284,6 +285,7 @@ fn parse_song_lua_trace_args(
                 PathBuf::from(next_utf8(&mut args, "--input-script")?), "--input-script")?,
             Some("--drawable-samples") if !drawable_samples => drawable_samples = true,
             Some("--notefield-samples") if !notefield_samples => notefield_samples = true,
+            Some("--scene-draws") if !scene_draws => scene_draws = true,
             Some("--player-options") => set_once(&mut player_options,
                 next_utf8(&mut args, "--player-options")?, "--player-options")?,
             Some("--drawable-from-beat") => {
@@ -353,6 +355,7 @@ fn parse_song_lua_trace_args(
             fixed_update_fps,
             stop_lua_gc,
             notefield_samples,
+            scene_draws,
             drawable_from_beat: drawable_from_beat.unwrap_or(0.0),
             player_options,
         },
@@ -1377,7 +1380,7 @@ fn print_help() {
               [--keep-run-dir] [--headless] [--autoplay 0|1] [--random-seed 1]\n\
              [--until-gameplay-end] [--max-events COUNT]\n\
              [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000] [--stop-lua-gc]\n\
-             [--notefield-samples] [--drawable-from-beat BEAT] [--player-options STRING]\n\
+             [--notefield-samples [--scene-draws]] [--drawable-from-beat BEAT] [--player-options STRING]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\
@@ -1569,6 +1572,7 @@ mod tests {
         assert!(trace.options.headless);
         assert!(trace.options.drawable_samples);
         assert!(trace.options.notefield_samples);
+        assert!(!trace.options.scene_draws);
         assert_eq!(trace.options.drawable_from_beat, 130.2);
         assert_eq!(
             trace.options.player_options.as_deref(),
@@ -1589,6 +1593,14 @@ mod tests {
             .map(OsString::from);
             assert!(parse_song_lua_trace_args(args.into_iter()).is_err());
         }
+    }
+
+    #[test]
+    fn trace_scene_draws_extend_the_notefield_profile() {
+        let args = ["song.ssc", "--itgmania-bin", "native.exe", "--notefield-samples", "--scene-draws"]
+            .map(OsString::from);
+        let trace = parse_song_lua_trace_args(args.into_iter()).unwrap();
+        assert!(trace.options.scene_draws && trace.options.notefield_samples);
     }
 
     #[test]

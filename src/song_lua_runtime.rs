@@ -50,6 +50,7 @@ pub struct Options {
     pub fixed_update_fps: Option<u32>,
     pub stop_lua_gc: bool,
     pub notefield_samples: bool,
+    pub scene_draws: bool,
     pub drawable_from_beat: f64,
     pub player_options: Option<String>,
 }
@@ -92,6 +93,9 @@ fn validate_options(options: &Options) -> Result<(), Error> {
     { return Err(Error::new("drawable start beat must be within the capture")); }
     if options.notefield_samples && !options.drawable_samples {
         return Err(Error::new("notefield samples require drawable capture"));
+    }
+    if options.scene_draws && !options.notefield_samples {
+        return Err(Error::new("scene draws require the notefield geometry capture profile"));
     }
     if options.notefield_samples && (!options.headless || !options.inputs.is_empty()) {
         return Err(Error::new("notefield geometry requires headless capture without scripted inputs"));
@@ -160,6 +164,9 @@ fn capture_in(
         if !bytes.windows(b"ITGMANIA_HARNESS_NATIVE_SOURCE".len())
             .any(|window| window == b"ITGMANIA_HARNESS_NATIVE_SOURCE")
         { return Err(Error::new("notefield capture requires native source provenance; rebuild the trace executable")); }
+        if !bytes.windows(b"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1".len())
+            .any(|window| window == b"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1")
+        { return Err(Error::new("notefield capture requires the native receptor observer; rebuild the trace executable")); }
     }
     let mut command = Command::new(&staged_binary);
     // Unix crash reporting writes $HOME/crashinfo.txt. Keep it with this run's
@@ -358,10 +365,15 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "model_geometry_meshes",
         "model_geometry_samples",
         "model_geometry_frames",
+        "receptor_visits",
+        "receptor_frames",
+        "dropped_receptor_visits",
         "drawable_samples",
         "drawable_frames",
         "dropped_drawable_samples",
         "dropped_model_geometry_samples",
+        "script_errors",
+        "dropped_script_errors",
     ] {
         if let Some(value) = native.as_object_mut().unwrap().remove(key) {
             render.insert(key.into(), value);
@@ -370,6 +382,7 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
     render.insert("capabilities".into(),serde_json::json!({
         "native_notefield_geometry":true,"native_drawable_vertices":true,
         "native_model_geometry_protocol":2,
+        "native_receptor_geometry_protocol":1,
         "semantic_event_replay":false,"source_derived_transform_model":false,"raster_output":false,
     }));
     render.insert("provenance".into(), provenance);
@@ -754,6 +767,7 @@ fn validate_native_source(document: &Value) -> Result<(), Error> {
 }
 
 fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
+    validate_script_errors(document)?;
     validate_native_source(document)?;
     if document["capabilities"]["native_notefield_geometry"] != true
         || document["capabilities"]["native_model_geometry_protocol"] != 2
@@ -853,6 +867,75 @@ fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
         return Err(Error::new("native model geometry tail was not drawn"));
     }
 
+    validate_receptor_geometry(document)?;
+    Ok(())
+}
+
+fn validate_receptor_geometry(document: &Value) -> Result<(), Error> {
+    let invalid = || Error::new("native receptor visits or draw associations are incomplete");
+    if document["capabilities"]["native_receptor_geometry_protocol"] != 1
+        || document["dropped_receptor_visits"] != 0
+        || !document["input"]["native_source"]["receptor_arrow_row_sha256"]
+            .as_str().is_some_and(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+    { return Err(invalid()); }
+    let visits = document["receptor_visits"].as_array().ok_or_else(invalid)?;
+    let frames = document["receptor_frames"].as_array().ok_or_else(invalid)?;
+    let draw_frames = document["model_geometry_frames"].as_array().ok_or_else(invalid)?;
+    let updates = document["update_frames"].as_array().ok_or_else(invalid)?;
+    if frames.len() != draw_frames.len() || frames.is_empty() { return Err(invalid()); }
+    let mut by_sequence = std::collections::BTreeMap::new();
+    let mut consumed = 0;
+    let mut previous_sequence = 0;
+    for (frame, draw_frame) in frames.iter().zip(draw_frames) {
+        let at = frame["update_sequence"].as_u64().unwrap_or(0);
+        let count = frame["samples"].as_u64().unwrap_or(u64::MAX);
+        if at == 0 || at > updates.len() as u64 || frame["update_sequence"] != draw_frame["update_sequence"]
+            || count < consumed || count > visits.len() as u64
+        { return Err(invalid()); }
+        for visit in &visits[consumed as usize..count as usize] {
+            let state = &visit["state"];
+            let context = &state["note_context"];
+            let sequence = context["receptor_visit_sequence"].as_u64().unwrap_or(0);
+            if visit["update_sequence"] != at || visit["scene"] != updates[at as usize - 1]["scene"]
+                || visit["actor"].as_str().is_none_or(str::is_empty)
+                || sequence <= previous_sequence || context["kind"] != "receptor"
+                || context["player"].as_u64().is_none_or(|player| player > 1)
+                || context["column"].as_u64().is_none()
+                || context["draw_beat"].as_f64().is_none_or(|beat| !beat.is_finite())
+                || state["base_alpha"].as_f64().is_none_or(|alpha| !(0.0..=1.0).contains(&alpha))
+                || state["visible"].as_bool().is_none() || state["render_target"].as_u64().is_none()
+                || !matches!(state["draw_phase"].as_str(), Some("during_update" | "screen_draw"))
+            { return Err(invalid()); }
+            previous_sequence = sequence;
+            by_sequence.insert(sequence, visit);
+        }
+        consumed = count;
+    }
+    if consumed != visits.len() as u64 { return Err(invalid()); }
+    for key in ["drawable_samples", "model_geometry_samples"] {
+        for sample in document[key].as_array().ok_or_else(invalid)? {
+            let state = &sample["state"];
+            let context = &state["note_context"];
+            if context["kind"] != "receptor" { continue; }
+            let sequence = context["receptor_visit_sequence"].as_u64().ok_or_else(invalid)?;
+            let visit = by_sequence.get(&sequence).ok_or_else(invalid)?;
+            if sample["scene"] != visit["scene"] || sample["update_sequence"] != visit["update_sequence"]
+                || state["render_target"] != visit["state"]["render_target"]
+                || context != &visit["state"]["note_context"]
+            { return Err(invalid()); }
+        }
+    }
+    if document["input"]["scene_draws"] == true {
+        let mut seen = std::collections::BTreeSet::new();
+        for key in ["drawable_samples", "model_geometry_samples"] {
+            let mut previous = 0;
+            for sample in document[key].as_array().ok_or_else(invalid)? {
+                let sequence = sample["state"]["native_draw_sequence"].as_u64().unwrap_or(0);
+                if sequence <= previous || !seen.insert(sequence) { return Err(invalid()); }
+                previous = sequence;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1325,6 +1408,7 @@ fn config_lua(options: &Options) -> String {
          \tinput_script = {{{}}},\n\
          \tdrawable_samples = {},\n\
          \tnotefield_samples = {},\n\
+         \tscene_draws = {},\n\
          \tdrawable_from_beat = {},\n\
          \tplayer_options = {},\n\
          \tcapture_frame_period_seconds = {},\n\
@@ -1346,6 +1430,7 @@ fn config_lua(options: &Options) -> String {
         inputs,
         options.drawable_samples,
         options.notefield_samples,
+        options.scene_draws,
         options.drawable_from_beat,
         options.player_options.as_deref().map(lua_quote).unwrap_or_else(|| "nil".into()),
         options.capture_fps.map(|fps| format!("{:.17}", 1.0 / f64::from(fps))).unwrap_or_else(|| "nil".into())
@@ -1704,7 +1789,7 @@ return Def.ActorFrame {
             keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: true, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, drawable_from_beat: 0.0, player_options: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None,
         }).unwrap();
         fs::write(directory.join("native.json"), serde_json::to_vec(&trace).unwrap()).unwrap();
         validate_render_random_inputs(&trace).unwrap();
@@ -1772,7 +1857,7 @@ return Def.ActorFrame {
                 scene: 1, seconds, player: 1, button: "Left".into(), key: "left".into(), down,
             }).collect(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, drawable_from_beat: 0.0, player_options: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None,
         };
         for with_callback in [false, true] {
             let callback = if with_callback { r#"
@@ -1872,7 +1957,7 @@ end }
             keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, drawable_from_beat: 0.0, player_options: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None,
         };
         for extension in ["sm", "ssc"] {
             let mut source = "#VERSION:0.83;#TITLE:Chart selector;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n".to_owned();
@@ -2027,6 +2112,7 @@ end }
             fixed_update_fps: Some(60),
             stop_lua_gc: false,
             notefield_samples: true,
+            scene_draws: false,
             drawable_from_beat: 1.0,
             player_options: Some("m730, 60% mini, cel".into()),
         };
@@ -2038,6 +2124,20 @@ end }
         .unwrap();
         assert_eq!(document["input"]["window_visible"], false);
         assert_eq!(document["capabilities"]["native_notefield_geometry"], true);
+        assert_eq!(document["capabilities"]["native_receptor_geometry_protocol"], 1);
+        let visits = document["receptor_visits"].as_array().unwrap();
+        assert!(visits.iter().any(|visit| visit["state"]["base_alpha"] == 1.0),
+            "visible receptors must have native draw visits");
+        let receptors: Vec<_> = document["drawable_samples"].as_array().unwrap().iter()
+            .filter(|sample| sample["state"]["note_context"]["kind"] == "receptor").collect();
+        assert!(!receptors.is_empty(), "native receptor sprite geometry must be observed");
+        for sample in receptors {
+            let sequence = &sample["state"]["note_context"]["receptor_visit_sequence"];
+            let visit = visits.iter().find(|visit|
+                visit["state"]["note_context"]["receptor_visit_sequence"] == *sequence).unwrap();
+            assert_ne!(visit["state"]["base_alpha"], 0.0,
+                "native fully transparent receptors must not submit sprites");
+        }
         let models = document["model_geometry_samples"].as_array().unwrap();
         assert!(
             !models.is_empty(),
@@ -2102,6 +2202,17 @@ end }
             [true, true],
             "normal and reversed native caps"
         );
+        let dark = capture(&Options {
+            until_beat: 2.0,
+            player_options: Some("m730, 60% mini, cel, 100% dark".into()),
+            ..options
+        }).unwrap();
+        let hidden_visits = dark["receptor_visits"].as_array().unwrap();
+        assert!(!hidden_visits.is_empty(), "transparent receptors must still be visited");
+        assert!(hidden_visits.iter().all(|visit| visit["state"]["base_alpha"] == 0.0));
+        assert!(dark["drawable_samples"].as_array().unwrap().iter().all(|sample|
+            sample["state"]["note_context"]["kind"] != "receptor"),
+            "fully dark native receptors must submit no sprite geometry");
     }
 
     #[test]
@@ -2124,9 +2235,13 @@ end }
         let native = serde_json::json!({
             "input":{"notefield_samples":true,"native_source":{
                 "revision":"a".repeat(40),"modified_src":false,
-                "note_display_sha256":"b".repeat(64),"cubic_spline_sha256":"c".repeat(64)}},
-            "capabilities":{"native_notefield_geometry":true,"native_model_geometry_protocol":2},
+                "note_display_sha256":"b".repeat(64),"cubic_spline_sha256":"c".repeat(64),
+                "receptor_arrow_row_sha256":"d".repeat(64)}},
+            "capabilities":{"native_notefield_geometry":true,"native_model_geometry_protocol":2,"native_receptor_geometry_protocol":1},
             "update_frames":[{"scene":1}],
+            "receptor_visits":[],"receptor_frames":[{"update_sequence":1,"samples":0}],
+            "dropped_receptor_visits":0,"drawable_samples":[],
+            "script_errors":[],"dropped_script_errors":0,
             "dropped_model_geometry_samples":0,
             "model_geometry_frames":[{"update_sequence":1,"samples":1}],
             "model_geometry_meshes":[{"id":1,"vertices":[vertex,vertex,vertex]}],
@@ -2138,6 +2253,8 @@ end }
         validate_interactive_inputs(&native).unwrap();
         for (pointer, value) in [
             ("/input/native_source/revision", serde_json::json!("unknown")),
+            ("/script_errors", serde_json::json!([{"message":"authored Lua callback failed"}])),
+            ("/dropped_script_errors", serde_json::json!(1)),
             ("/input/native_source/note_display_sha256", serde_json::Value::Null),
             ("/input/native_source/cubic_spline_sha256", serde_json::json!("x".repeat(64))),
             ("/input/native_source/modified_src", serde_json::Value::Null),
@@ -2169,6 +2286,61 @@ end }
                 "accepted {pointer}"
             );
         }
+    }
+
+    #[test]
+    fn native_receptor_capture_requires_visits_even_when_no_sprites_are_drawn() {
+        let context = serde_json::json!({"kind":"receptor","player":0,"column":0,
+            "draw_beat":1.5,"note_beat":1.5,"part":-1,"held":false,"receptor_visit_sequence":7});
+        let mut native = serde_json::json!({
+            "input":{"native_source":{"receptor_arrow_row_sha256":"a".repeat(64)}},
+            "capabilities":{"native_receptor_geometry_protocol":1},
+            "update_frames":[{"scene":1}],"model_geometry_frames":[{"update_sequence":1,"samples":0}],
+            "model_geometry_samples":[],"drawable_samples":[],"dropped_receptor_visits":0,
+            "receptor_frames":[{"update_sequence":1,"samples":1}],
+            "receptor_visits":[{"scene":1,"update_sequence":1,"actor":"native-receptor-row",
+                "state":{"base_alpha":0.0,"visible":true,"render_target":0,"draw_phase":"screen_draw","note_context":context}}]
+        });
+        validate_receptor_geometry(&native).unwrap();
+        for (pointer, value) in [
+            ("/capabilities/native_receptor_geometry_protocol", serde_json::json!(0)),
+            ("/input/native_source/receptor_arrow_row_sha256", Value::Null),
+            ("/dropped_receptor_visits", serde_json::json!(1)),
+            ("/receptor_frames/0/samples", serde_json::json!(0)),
+            ("/receptor_visits/0/update_sequence", serde_json::json!(2)),
+            ("/receptor_visits/0/state/base_alpha", Value::Null),
+            ("/receptor_visits/0/state/visible", Value::Null),
+        ] {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_receptor_geometry(&invalid).is_err(), "accepted {pointer}");
+        }
+        native["receptor_visits"][0]["state"]["base_alpha"] = serde_json::json!(1.0);
+        native["drawable_samples"] = serde_json::json!([{"scene":1,"update_sequence":1,
+            "state":{"render_target":0,"note_context":context}}]);
+        validate_receptor_geometry(&native).unwrap();
+        native["drawable_samples"][0]["state"]["note_context"]["receptor_visit_sequence"] = serde_json::json!(8);
+        assert!(validate_receptor_geometry(&native).is_err(), "unobserved receptor draw was accepted");
+    }
+
+    #[test]
+    fn native_scene_geometry_requires_one_submission_order_across_channels() {
+        let mut native = serde_json::json!({
+            "input":{"scene_draws":true,"native_source":{"receptor_arrow_row_sha256":"a".repeat(64)}},
+            "capabilities":{"native_receptor_geometry_protocol":1},
+            "update_frames":[{"scene":1}],"model_geometry_frames":[{"update_sequence":1,"samples":1}],
+            "model_geometry_samples":[{"state":{"native_draw_sequence":2}}],
+            "drawable_samples":[{"state":{"native_draw_sequence":1}},{"state":{"native_draw_sequence":3}}],
+            "dropped_receptor_visits":0,"receptor_frames":[{"update_sequence":1,"samples":0}],"receptor_visits":[]
+        });
+        validate_receptor_geometry(&native).unwrap();
+        for bad in [Value::Null, serde_json::json!(0), serde_json::json!(1), serde_json::json!(3)] {
+            native["model_geometry_samples"][0]["state"]["native_draw_sequence"] = bad;
+            assert!(validate_receptor_geometry(&native).is_err(), "missing or reused geometry order accepted");
+        }
+        native["model_geometry_samples"][0]["state"]["native_draw_sequence"] = serde_json::json!(2);
+        native["drawable_samples"][1]["state"]["native_draw_sequence"] = serde_json::json!(0);
+        assert!(validate_receptor_geometry(&native).is_err(), "reordered channel accepted");
     }
 
     #[test]
@@ -2215,6 +2387,7 @@ end }
             fixed_update_fps: None,
             stop_lua_gc: false,
             notefield_samples: false,
+            scene_draws: false,
             drawable_from_beat: 0.0,
             player_options: None,
         };
@@ -2226,6 +2399,9 @@ end }
         assert!(lua.contains("random_seed = 73"));
         assert!(lua.contains("game = \"dance\""));
         assert!(lua.contains("chart_index = nil"));
+        assert!(lua.contains("scene_draws = false"));
+        options.scene_draws = true;
+        assert!(validate_options(&options).is_err(), "scene draws require a geometry profile");
         options.game = "pump".into();
         options.chart_index = Some(7);
         assert!(config_lua(&options).contains("game = \"pump\""));
@@ -2241,6 +2417,7 @@ end }
         options.player_options=Some("m730, 60% mini, cel".into());
         let profiled = config_lua(&options);
         assert!(profiled.contains("notefield_samples = true"));
+        assert!(profiled.contains("scene_draws = true"));
         assert!(profiled.contains("drawable_from_beat = 2"));
         assert!(profiled.contains("player_options = \"m730, 60% mini, cel\""));
         for seed in [0, u32::MAX] {
@@ -2689,6 +2866,7 @@ end }
             fixed_update_fps: Some(60),
             stop_lua_gc: false,
             notefield_samples: false,
+            scene_draws: false,
             drawable_from_beat: 0.0,
             player_options: None,
         };

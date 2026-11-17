@@ -1309,6 +1309,29 @@ The result is an `itgmania_notefield_render_trace`, with
 `semantic_event_replay=false` and `raster_output=false`; it is not a replacement
 for semantic replay or a claim of pixel identity.
 
+Harness 0.1.106 adds `native_receptor_geometry_protocol=1`. It observes
+`ReceptorArrowRow` draws as well as notes, tagging submitted receptor sprites
+and models with `note_context.kind="receptor"`. Each draw points to an explicit
+`receptor_visits` entry containing its player, column, render target, visibility
+and the exact native `SetBaseAlpha` result. Transparent receptors still have
+visits even when they submit no geometry. This distinguishes an invisible
+receptor from a capture that never observed receptors. `receptor_frames` and
+the dropped-visit counter make completeness checkable; draw associations and
+the native `ReceptorArrowRow.cpp` hash are validated. The same native script-error
+channel used by semantic captures is retained, and errors or dropped diagnostics
+reject the geometry capture. Old notefield captures
+without this protocol do not establish receptor parity. Receptor opacity does
+not by itself establish final visibility: later actors can cover it, so draw
+order and occlusion still require comparison.
+
+Add `--scene-draws` to `--notefield-samples` to retain all scene sprite and
+Model submissions in the same geometry capture. The default remains limited
+to notes and receptors. `state.native_draw_sequence` orders actual geometry
+submissions across the sprite and model channels; `actor_draw_sequence` is the
+separate enclosing `Actor::Draw` entry. The input records the selected scope.
+This makes foreground overlap testable without filtering by a particular song
+or actor name. It still does not capture raster output or Model material colors.
+
 Use `--player-options` to apply native modifiers at every ModsLevel before song
 construction, and `--drawable-from-beat` to bound the rendered observations.
 For example, capture only 7th Gear's first right arrow approach:
