@@ -199,6 +199,17 @@ local function position()
 	return beat, seconds
 end
 
+-- Read explicit native SongPosition fields without entering authored/query hooks.
+-- GetSongBeat still includes native timing offsets; it is not an offset-free beat.
+local function native_song_position_clocks()
+    local game = original_methods.GameState or {}
+    local methods = original_methods.SongPosition or {}
+    local p = (game.GetSongPosition or GAMESTATE.GetSongPosition)(GAMESTATE)
+    return (methods.GetSongBeat or p.GetSongBeat)(p),
+        (methods.GetMusicSecondsVisible or p.GetMusicSecondsVisible)(p),
+        (methods.GetSongBeatVisible or p.GetSongBeatVisible)(p)
+end
+
 local function function_source(fn)
 	local info = debug.getinfo(fn, "Sl") or {}
 	return {
@@ -1099,6 +1110,7 @@ function trace.capture_inputs(game_mode_initialized)
 		global_offset_seconds = PREFSMAN:GetPreference("GlobalOffsetSeconds"),
 		default_sync_offset = tostring(PREFSMAN:GetPreference("DefaultSyncOffset")),
 		visual_delay_seconds = PREFSMAN:GetPreference("VisualDelaySeconds"),
+		music_rate = GAMESTATE:GetSongOptionsObject("ModsLevel_Current"):MusicRate(),
 		display_aspect_ratio = PREFSMAN:GetPreference("DisplayAspectRatio"),
         constant_update_delta_seconds = PREFSMAN:GetPreference("ConstantUpdateDeltaSeconds"),
 	}
@@ -1117,6 +1129,7 @@ function trace.capture_inputs(game_mode_initialized)
 			player = tostring(player), fail_setting = tostring(options:FailSetting()),
 			enabled = GAMESTATE:IsPlayerEnabled(player),
 			options_string = GAMESTATE:GetPlayerState(player):GetPlayerOptionsString("ModsLevel_Preferred"),
+			preferred_visual_delay_seconds = options:VisualDelay(),
 			min_tns_to_hide_notes = tostring(options:MinTNSToHideNotes()),
 			disabled_timing_windows = disabled,
 			theme_modifiers = theme_player and type(theme_player.ActiveModifiers) == "table"
@@ -1148,9 +1161,11 @@ function trace.sample_update(delta, origin)
 	end
 	local beat, seconds = position()
 	sampled_scene, sampled_scene_frame = scene_count, scene_frame
+	local song_beat, visible_seconds, visible_beat = native_song_position_clocks()
 	update_frames[#update_frames + 1] = {
 		sequence = #update_frames + 1, scene = scene_count,
 		delta = delta, seconds = seconds, beat = beat,
+		song_beat = song_beat, visible_seconds = visible_seconds, visible_beat = visible_beat,
 		wall_seconds = raw_process_clock(),
 		option_deltas = ITGMANIA_HARNESS_OPTION_DELTAS and ITGMANIA_HARNESS_OPTION_DELTAS() or nil,
 		native_update_frame = scene_frame,
@@ -1237,6 +1252,7 @@ function trace.finish(completion)
 	local song = GAMESTATE:GetCurrentSong()
 	local steps = GAMESTATE:GetCurrentSteps(PLAYER_1)
 	local beat, seconds = position()
+	local song_beat, visible_seconds, visible_beat = native_song_position_clocks()
 	local weights = {}
 	local script_errors, transition_script_errors, dropped_script_errors
 	if type(ITGMANIA_HARNESS_SCRIPT_ERRORS) == "function" then
@@ -1318,7 +1334,8 @@ function trace.finish(completion)
 					generator = "std::mt19937", distribution = "uniform_real_distribution<double>(-1,1)-to-f32",
 					seed_source = "native-default-time", association = "active-Actor-Draw-PreDraw-scopes",
 				} or nil},
-		end_position = {beat = beat, seconds = seconds},
+		end_position = {beat = beat, seconds = seconds, song_beat = song_beat,
+			visible_seconds = visible_seconds, visible_beat = visible_beat},
 		capabilities = {
             native_source_provenance = type(ITGMANIA_HARNESS_NATIVE_SOURCE) == "table",
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE == true,
@@ -1349,6 +1366,7 @@ function trace.finish(completion)
 			native_screen_lifecycle = true,
 			native_stage_statistics = true,
 			native_update_frames = true,
+			native_song_position_clocks = true,
 			native_callback_frame_inputs = ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_option_clock_deltas = type(ITGMANIA_HARNESS_OPTION_DELTAS) == "function",
 			native_event_scenes = true,

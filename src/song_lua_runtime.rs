@@ -243,6 +243,9 @@ fn capture_in(
             {
                 return Err(Error::new("native FastNoteRendering preference request was not recorded"));
             }
+            if document["capabilities"]["native_song_position_clocks"] != true {
+                return Err(Error::new("native raw and visible song-position clocks were not recorded"));
+            }
             if options.until_gameplay_end {
                 validate_script_errors(&document)?;
                 if document.pointer("/completion/reason").and_then(Value::as_str) != Some("gameplay-exit") {
@@ -390,6 +393,8 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "native_model_geometry_protocol":2,
         "native_receptor_geometry_protocol":1,
         "native_fast_note_rendering":native["capabilities"]["native_fast_note_rendering"],
+        "native_song_position_clocks":native["capabilities"]["native_song_position_clocks"],
+        "native_pre_theme_preferences":native["capabilities"]["native_pre_theme_preferences"],
         "semantic_event_replay":false,"source_derived_transform_model":false,"raster_output":false,
     }));
     render.insert("provenance".into(), provenance);
@@ -1080,8 +1085,52 @@ fn validate_fast_note_rendering(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_song_position_clocks(document: &Value) -> Result<(), Error> {
+    if document["capabilities"]["native_song_position_clocks"] != true {
+        return Ok(());
+    }
+    let geometry = document["input"]["notefield_samples"] == true;
+    let alias = if geometry { "visible_beat" } else { "song_beat" };
+    let valid_clock = |clock: &Value| {
+        ["seconds", "beat", "song_beat", "visible_seconds", "visible_beat"].into_iter()
+            .all(|key| clock[key].as_f64().is_some_and(f64::is_finite))
+            && clock["beat"].as_f64() == clock[alias].as_f64()
+    };
+    let frames = document["update_frames"].as_array();
+    if !frames.is_some_and(|frames| !frames.is_empty() && frames.iter().all(valid_clock))
+        || !valid_clock(&document["end_position"])
+    {
+        return Err(Error::new("native song-position clocks are missing, non-finite, or use the wrong legacy beat alias"));
+    }
+    let preferences = &document["input"]["preferences"];
+    if !["global_offset_seconds", "visual_delay_seconds", "music_rate"].into_iter()
+        .all(|key| preferences[key].as_f64().is_some_and(f64::is_finite))
+        || !matches!(preferences["default_sync_offset"].as_str(), Some("SyncOffset_NULL" | "SyncOffset_ITG"))
+    {
+        return Err(Error::new("native timing preference inputs are missing or invalid"));
+    }
+    let players = if geometry { &document["input"]["players"] }
+        else { &document["input"]["gameplay_preferences"]["players"] };
+    if !players.as_array().is_some_and(|players| !players.is_empty() && players.iter().all(|player|
+        player["preferred_visual_delay_seconds"].as_f64().is_some_and(f64::is_finite)))
+    {
+        return Err(Error::new("native preferred player visual delays are missing or invalid"));
+    }
+    if document["capabilities"]["native_pre_theme_preferences"] == true {
+        let catalog = &document["input"]["catalog_preferences"];
+        if catalog["initialization"] != "native-catalog-note-time-calculation"
+            || !["global_offset_seconds", "music_rate"].into_iter()
+                .all(|key| catalog[key].as_f64().is_some_and(f64::is_finite))
+        {
+            return Err(Error::new("native catalog timing preference inputs are missing or invalid"));
+        }
+    }
+    Ok(())
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
     validate_fast_note_rendering(document)?;
+    validate_song_position_clocks(document)?;
     validate_render_random_inputs(document)?;
     if document["input"]["notefield_samples"] == true {
         validate_notefield_geometry(document)?;
@@ -2095,6 +2144,9 @@ end }
             directory.join("default.lua"),
             r#"
     return Def.ActorFrame{OnCommand=function(self)
+     -- Change only this isolated native control's visual clock. The observer
+     -- must read both fields, rather than reconstruct one from initial inputs.
+     PREFSMAN:SetPreference('VisualDelaySeconds',0.125)
      self:SetUpdateFunction(function()
       local player=SCREENMAN:GetTopScreen():GetChild('PlayerP1')
       if not player then return end
@@ -2114,7 +2166,7 @@ end }
     "#,
         )
         .unwrap();
-        let options = Options {
+        let mut options = Options {
             simfile: directory.join("control.ssc"),
             itgmania_bin: std::env::var_os("ITGMANIA_HARNESS_TRACE_BIN")
                 .map(PathBuf::from)
@@ -2154,6 +2206,12 @@ end }
         .unwrap();
         assert_eq!(document["input"]["window_visible"], false);
         assert_eq!(document["capabilities"]["native_fast_note_rendering"], true);
+        assert_eq!(document["capabilities"]["native_song_position_clocks"], true);
+        let clock = document["update_frames"].as_array().unwrap().iter()
+            .find(|frame| frame["seconds"].as_f64().unwrap() > 1.0).unwrap();
+        assert!((clock["seconds"].as_f64().unwrap() - clock["visible_seconds"].as_f64().unwrap() - 0.125).abs() < 1e-6);
+        assert!((clock["song_beat"].as_f64().unwrap() - clock["visible_beat"].as_f64().unwrap() - 0.25).abs() < 1e-5);
+        assert_eq!(clock["beat"], clock["visible_beat"]);
         assert_eq!(document["input"]["fast_note_rendering_requested"], false);
         assert_eq!(document["input"]["fast_note_rendering"], false);
         assert_eq!(document["input"]["fast_note_rendering_at_end"], false);
@@ -2236,12 +2294,21 @@ end }
             [true, true],
             "normal and reversed native caps"
         );
-        let dark = capture(&Options {
-            until_beat: 2.0,
-            player_options: Some("m730, 60% mini, cel, 100% dark".into()),
-            fast_note_rendering: Some(true),
-            ..options
-        }).unwrap();
+        options.until_beat = 2.0;
+        options.notefield_samples = false;
+        options.drawable_samples = false;
+        let semantic = capture(&options).unwrap();
+        assert_eq!(semantic["capabilities"]["native_song_position_clocks"], true);
+        let semantic_clock = semantic["update_frames"].as_array().unwrap().iter()
+            .find(|frame| frame["seconds"].as_f64().unwrap() > 1.0).unwrap();
+        assert_eq!(semantic_clock["beat"], semantic_clock["song_beat"]);
+        assert!((semantic_clock["seconds"].as_f64().unwrap() - semantic_clock["visible_seconds"].as_f64().unwrap() - 0.125).abs() < 1e-6);
+        assert!((semantic_clock["song_beat"].as_f64().unwrap() - semantic_clock["visible_beat"].as_f64().unwrap() - 0.25).abs() < 1e-5);
+        options.notefield_samples = true;
+        options.drawable_samples = true;
+        options.player_options = Some("m730, 60% mini, cel, 100% dark".into());
+        options.fast_note_rendering = Some(true);
+        let dark = capture(&options).unwrap();
         assert_eq!(dark["input"]["fast_note_rendering_requested"], true);
         assert_eq!(dark["input"]["fast_note_rendering"], true);
         assert_eq!(dark["input"]["fast_note_rendering_at_end"], true);
@@ -2876,6 +2943,48 @@ end }
         native_default["input"]["fast_note_rendering_at_end"] = Value::Bool(false);
         validate_fast_note_rendering(&native_default).unwrap();
         validate_fast_note_rendering(&serde_json::json!({})).unwrap();
+    }
+
+    #[test]
+    fn song_position_clocks_keep_raw_and_visible_values_and_profile_aliases() {
+        let clock = serde_json::json!({"seconds":2.0,"song_beat":4.0,
+            "visible_seconds":1.875,"visible_beat":3.75,"beat":3.75});
+        let native = serde_json::json!({"capabilities":{"native_song_position_clocks":true,
+            "native_pre_theme_preferences":true},
+            "input":{"notefield_samples":true,
+                "preferences":{"global_offset_seconds":-0.008,"visual_delay_seconds":0.125,
+                    "music_rate":1,"default_sync_offset":"SyncOffset_ITG"},
+                "catalog_preferences":{"initialization":"native-catalog-note-time-calculation",
+                    "global_offset_seconds":-0.008,"music_rate":1},
+                "players":[{"player":"PlayerNumber_P1","preferred_visual_delay_seconds":0}]},
+            "update_frames":[clock.clone()],"end_position":clock});
+        validate_song_position_clocks(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_song_position_clocks"], true);
+        assert_eq!(exported["capabilities"]["native_pre_theme_preferences"], true);
+        validate_song_position_clocks(&exported).unwrap();
+        for pointer in ["/update_frames/0/song_beat", "/update_frames/0/visible_seconds",
+            "/update_frames/0/visible_beat", "/end_position/song_beat",
+            "/input/preferences/global_offset_seconds", "/input/preferences/visual_delay_seconds",
+            "/input/preferences/default_sync_offset", "/input/preferences/music_rate",
+            "/input/players/0/preferred_visual_delay_seconds", "/input/catalog_preferences/music_rate"]
+        {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = Value::Null;
+            assert!(validate_song_position_clocks(&invalid).is_err(), "accepted missing {pointer}");
+        }
+        let mut wrong_alias = native.clone();
+        wrong_alias["update_frames"][0]["beat"] = serde_json::json!(4.0);
+        assert!(validate_song_position_clocks(&wrong_alias).is_err());
+        let mut semantic = native.clone();
+        semantic["input"]["notefield_samples"] = Value::Bool(false);
+        semantic["input"]["gameplay_preferences"] = serde_json::json!({"players":native["input"]["players"]});
+        semantic["update_frames"][0]["beat"] = serde_json::json!(4.0);
+        semantic["end_position"]["beat"] = serde_json::json!(4.0);
+        validate_song_position_clocks(&semantic).unwrap();
+        semantic["update_frames"][0]["beat"] = serde_json::json!(3.75);
+        assert!(validate_song_position_clocks(&semantic).is_err());
+        validate_song_position_clocks(&serde_json::json!({})).unwrap();
     }
 
     #[test]

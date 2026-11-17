@@ -12,6 +12,7 @@ local actor_ids,actors=setmetatable({},{__mode='k'}),{}
 local scene,frame,sampled_frame=0,0,-1
 local delta,pending,finished=0,nil,false
 local inputs={}
+local input_preferences,catalog_preferences=nil,nil
 local fast_note_rendering=nil
 local dropped_models,dropped_strips=0,0
 local dropped_receptors=0
@@ -22,7 +23,7 @@ local function actor_id(actor)
 end
 local function position()
  local p=GAMESTATE:GetSongPosition()
- return p:GetSongBeatVisible(),p:GetMusicSeconds()
+ return p:GetSongBeatVisible(),p:GetMusicSeconds(),p:GetSongBeat(),p:GetMusicSecondsVisible()
 end
 local function capture_now()
  return not finished and scene>0 and GAMESTATE:GetSongPosition():GetSongBeatVisible()>=(cfg.drawable_from_beat or 0)
@@ -33,9 +34,10 @@ end
 local function sample_update()
  if finished or sampled_frame==frame then return end
  sampled_frame=frame
- local beat,seconds=position()
+ local beat,seconds,song_beat,visible_seconds=position()
  frames[#frames+1]={sequence=#frames+1,scene=scene,native_update_frame=frame,
-  delta=delta,beat=beat,seconds=seconds,wall_seconds=GetTimeSinceStart()}
+  delta=delta,beat=beat,seconds=seconds,song_beat=song_beat,
+  visible_beat=beat,visible_seconds=visible_seconds,wall_seconds=GetTimeSinceStart()}
 end
 ITGMANIA_HARNESS_MODEL_MESH=function(id,vertices)
  meshes[#meshes+1]={id=id,primitive='triangles',vertices=vertices}
@@ -43,7 +45,7 @@ end
 ITGMANIA_HARNESS_DRAW_MODEL=function(actor,geometry,state)
  if not capture_now() then return end
  if #models>=cfg.max_events then dropped_models=dropped_models+1;return end
- local beat=position()
+ local beat=GAMESTATE:GetSongPosition():GetSongBeatVisible()
  models[#models+1]={scene=scene,update_sequence=anchor(),beat=beat,
   actor=actor_id(actor),geometry=geometry,primitive='ModelTriangles',draw_phase=state.draw_phase,
   coordinate_space='native-projection-before-display-centering',state=state}
@@ -73,7 +75,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
  end
  if not pending then return end
  finished=true
- local beat,seconds=position()
+ local beat,seconds,song_beat,visible_seconds=position()
  local file=RageFileUtil:CreateRageFile()
  local script_errors,dropped_script_errors=ITGMANIA_HARNESS_SCRIPT_ERRORS()
  assert(file:Open(cfg.result_path,2),'cannot open note geometry trace')
@@ -82,6 +84,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
   title=GAMESTATE:GetCurrentSong():GetDisplayFullTitle(),style=cfg.style,difficulty=cfg.difficulty,
   display={logical_width=SCREEN_WIDTH,logical_height=SCREEN_HEIGHT,width=DISPLAY:GetDisplayWidth(),height=DISPLAY:GetDisplayHeight(),video_renderers=PREFSMAN:GetPreference('VideoRenderers')},
   input={notefield_samples=true,scene_draws=cfg.scene_draws==true,player_options=cfg.player_options,players=inputs,autoplay=cfg.autoplay,
+   preferences=input_preferences,catalog_preferences=catalog_preferences,
    fast_note_rendering_requested=cfg.fast_note_rendering,fast_note_rendering=fast_note_rendering,
    fast_note_rendering_at_end=PREFSMAN:GetPreference('FastNoteRendering'),
    native_source=ITGMANIA_HARNESS_NATIVE_SOURCE,
@@ -91,6 +94,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
    window_visible=ITGMANIA_HARNESS_WINDOW_VISIBLE(),
    constant_update_delta_seconds=PREFSMAN:GetPreference('ConstantUpdateDeltaSeconds')},
   capabilities={native_notefield_geometry=true,native_drawable_vertices=true,native_model_geometry_protocol=2,native_receptor_geometry_protocol=1,
+   native_song_position_clocks=true,native_pre_theme_preferences=catalog_preferences~=nil,
    native_fast_note_rendering=type(fast_note_rendering)=='boolean'},
   capture_limits={max_events=cfg.max_events},runtime_actors=actors,update_frames=frames,
   model_geometry_meshes=meshes,model_geometry_samples=models,model_geometry_frames=model_frames,
@@ -99,16 +103,27 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
   dropped_model_geometry_samples=dropped_models,dropped_drawable_samples=dropped_strips,
   interactive_observer_error=ITGMANIA_HARNESS_INTERACTIVE_ERROR,
   script_errors=script_errors,dropped_script_errors=dropped_script_errors,
-  completion=pending,end_position={beat=beat,seconds=seconds},random_seed=cfg.random_seed}))
+  completion=pending,end_position={beat=beat,seconds=seconds,song_beat=song_beat,
+   visible_beat=beat,visible_seconds=visible_seconds},random_seed=cfg.random_seed}))
  file:Close();file:destroy()
 end
 local function noop() end
-ITGMANIA_HARNESS_TRACE={capture_catalog_inputs=noop,
+ITGMANIA_HARNESS_TRACE={capture_catalog_inputs=function()
+  if not catalog_preferences and type(ITGMANIA_HARNESS_CATALOG_INPUTS)=='function' then
+   catalog_preferences=ITGMANIA_HARNESS_CATALOG_INPUTS()
+  end
+ end,
  capture_inputs=function()
   fast_note_rendering=PREFSMAN:GetPreference('FastNoteRendering')
+  input_preferences={global_offset_seconds=PREFSMAN:GetPreference('GlobalOffsetSeconds'),
+   default_sync_offset=tostring(PREFSMAN:GetPreference('DefaultSyncOffset')),
+   visual_delay_seconds=PREFSMAN:GetPreference('VisualDelaySeconds'),
+   music_rate=GAMESTATE:GetSongOptionsObject('ModsLevel_Current'):MusicRate()}
   for _,player in ipairs(GAMESTATE:GetEnabledPlayers()) do
-   local opts=GAMESTATE:GetPlayerState(player):GetPlayerOptions('ModsLevel_Current')
-   inputs[#inputs+1]={player=tostring(player),options_string=GAMESTATE:GetPlayerState(player):GetPlayerOptionsString('ModsLevel_Current'),mini=opts:Mini(),noteskin=opts:NoteSkin()}
+   local state=GAMESTATE:GetPlayerState(player)
+   local opts=state:GetPlayerOptions('ModsLevel_Current')
+   inputs[#inputs+1]={player=tostring(player),options_string=state:GetPlayerOptionsString('ModsLevel_Current'),mini=opts:Mini(),noteskin=opts:NoteSkin(),
+    preferred_visual_delay_seconds=state:GetPlayerOptions('ModsLevel_Preferred'):VisualDelay()}
   end
  end,
  seed_random=function() MersenneTwister.Seed(cfg.random_seed) end,

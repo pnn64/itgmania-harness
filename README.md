@@ -215,6 +215,23 @@ preferred `options_string` before gameplay loads song Lua. The
 `native_display_preference` and `native_initial_player_options` capabilities
 require these inputs to be present and valid. They describe initial settings;
 replayers must not initialize Lua from later query results.
+
+The `native_song_position_clocks` capability records separate native
+`SongPosition` getter results in every update frame and the end position:
+`seconds` is `GetMusicSeconds()`, `song_beat` is `GetSongBeat()`,
+`visible_seconds` is `GetMusicSecondsVisible()`, and `visible_beat` is
+`GetSongBeatVisible()`. The legacy `beat` field keeps its existing meaning:
+`song_beat` in semantic traces, `visible_beat` in notefield geometry traces.
+Validation requires finite values and the matching alias. `GetSongBeat()`
+already includes native global and group timing offsets; converting raw music
+seconds using only the simfile's offset can therefore produce a different beat.
+Geometry traces also record initialized `input.preferences` for global offset,
+default sync offset, visual delay and current music rate, each player's
+`preferred_visual_delay_seconds`, and available native `catalog_preferences`
+from note-time calculation. These are inputs observed at initialization; the
+per-frame visible clocks remain direct getter observations if authored Lua later
+changes a preference. Legacy traces do not establish the omitted clock fields.
+
 `player_tween_children_per_frame` records the native child tree on the first
 positive player tween observation in each captured frame. This extends the
 older one-time owner observation so later differences can be traced to the
