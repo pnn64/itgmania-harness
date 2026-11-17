@@ -43,6 +43,8 @@ local input_events = {}
 local injected_commands = {}
 local drawable_samples = {}
 local drawable_frames = {}
+local render_random_inputs, render_random_sequence_by_scope = {}, {}
+local dropped_render_random_inputs = 0
 local dropped_input_events, dropped_drawable_samples = 0, 0
 local scene_frame, next_input = 0, 1
 local native_frame_delta, sampled_scene, sampled_scene_frame = nil, nil, nil
@@ -1295,6 +1297,8 @@ function trace.finish(completion)
 		drawable_samples = drawable_samples,
 		drawable_frames = drawable_frames,
 		dropped_drawable_samples = dropped_drawable_samples,
+			render_random_inputs = render_random_inputs,
+			dropped_render_random_inputs = dropped_render_random_inputs,
 		interactive_observer_error = ITGMANIA_HARNESS_INTERACTIVE_ERROR,
         input = {native_source = ITGMANIA_HARNESS_NATIVE_SOURCE,
             lua_gc_mode = cfg.stop_lua_gc and "stopped" or "automatic", autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
@@ -1304,7 +1308,12 @@ function trace.finish(completion)
 			requested_difficulty = cfg.difficulty, requested_chart_index = cfg.chart_index,
 			game = cfg.game, style = cfg.style, starting_chart = starting_chart, chart_catalog = chart_catalog,
 			preferences = input_preferences, gameplay_preferences = gameplay_preferences,
-            catalog_preferences = catalog_preferences},
+            catalog_preferences = catalog_preferences,
+				render_random = cfg.drawable_samples and ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL == 1 and {
+					protocol = 1, observation = "native-Actor-PreDraw-vibrate-randomf",
+					generator = "std::mt19937", distribution = "uniform_real_distribution<double>(-1,1)-to-f32",
+					seed_source = "native-default-time", association = "active-Actor-Draw-PreDraw-scopes",
+				} or nil},
 		end_position = {beat = beat, seconds = seconds},
 		capabilities = {
             native_source_provenance = type(ITGMANIA_HARNESS_NATIVE_SOURCE) == "table",
@@ -1312,6 +1321,7 @@ function trace.finish(completion)
 			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_input_step_clocks = ITGMANIA_HARNESS_INPUT_CLOCKS_AVAILABLE == true,
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
+				native_render_random_inputs = cfg.drawable_samples and ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL == 1,
             native_notefield_geometry = false,
 			native_random_seed = true,
             native_host_clock_inputs = type(native_wrap) == "function",
@@ -1408,9 +1418,14 @@ ITGMANIA_HARNESS_TRACE = trace
 if #(cfg.input_script or {}) > 0 or cfg.drawable_samples or cfg.capture_frame_period_seconds then
 	assert(ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE, "native interactive trace adapter is required")
 end
+if cfg.drawable_samples then
+	assert(ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL == 1,
+		"native render random inputs are unavailable; rebuild the trace executable")
+end
 if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 	ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE = function(delta)
 		if finished or scene_count == 0 then return end
+            render_random_sequence_by_scope = {}
         -- No authored command or native method is in flight at this boundary;
         -- nested calls have finished filling their parent event details.
         if #events >= 4096 then flush_events() end
@@ -1438,7 +1453,7 @@ if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 		if finished or scene_count == 0 or #update_frames == 0 then return end
 		if cfg.drawable_samples then
 			drawable_frames[#drawable_frames+1] = {scene=scene_count,update_sequence=#update_frames,
-				samples=#drawable_samples}
+					samples=#drawable_samples,render_random_inputs=#render_random_inputs}
 		end
 		if pending_finish then
 			finishing_after_draw = true
@@ -1446,17 +1461,56 @@ if ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE then
 		end
 	end
 	if cfg.drawable_samples then
-		ITGMANIA_HARNESS_DRAW_VERTICES = function(actor, primitive, vertices, state)
+			local function retain_render_random_inputs(scopes)
+				assert(type(scopes) == "table", "native draw has no render random scope observation")
+				local sequences = {}
+				for index, scope in ipairs(scopes) do
+					local record = actor_records[scope.actor]
+					assert(record, "captured draw has an unidentified vibrating ancestor")
+					local source = actor_records[scope.source_actor]
+					assert(scope.wrapper_index > 0 or source,
+						"captured draw has an unidentified vibrating self or fake parent")
+					assert(scope.wrapper_index ~= 0 or scope.actor == scope.source_actor,
+						"native self PreDraw source does not match its owner")
+					local sequence = render_random_sequence_by_scope[scope.native_scope_sequence]
+					if not sequence then
+						if #render_random_inputs >= cfg.max_events then
+							dropped_render_random_inputs = dropped_render_random_inputs + 1
+							error("native render random input capture limit exceeded")
+						end
+						sequence = #render_random_inputs + 1
+						render_random_sequence_by_scope[scope.native_scope_sequence] = sequence
+						render_random_inputs[sequence] = {
+							sequence=sequence,scene=scene_count,update_sequence=#update_frames,
+							actor=record.id,definition_id=record.definition_id,path=record.path,
+							source_actor=source and source.id or nil,
+							source_definition_id=source and source.definition_id or nil,
+							source_path=source and source.path or nil,
+							wrapper_index=scope.wrapper_index,draw_ordinal=scope.draw_ordinal,
+							predraw_ordinal=scope.predraw_ordinal,
+							native_scope_sequence=scope.native_scope_sequence,
+							native_draw_sequence=scope.native_draw_sequence,
+							native_update_sequence=scope.native_update_sequence,
+							values=scope.values,
+						}
+					end
+					sequences[index] = sequence
+				end
+				return sequences
+			end
+			ITGMANIA_HARNESS_DRAW_VERTICES = function(actor, primitive, vertices, state, random_scopes)
 			if finished or scene_count == 0 or #update_frames == 0 then return end
 			if (cfg.drawable_from_beat or 0)>0 and GAMESTATE:GetSongPosition():GetSongBeatVisible() < cfg.drawable_from_beat then return end
 			local record = actor_records[actor]
 			if not record or not record.definition_id then return end
 			if #drawable_samples >= cfg.max_events then dropped_drawable_samples=dropped_drawable_samples+1; return end
+				local random_sequences = retain_render_random_inputs(random_scopes)
 			local rows = {}
 			for index=1,#vertices do rows[index]=safe_value(vertices[index],0,{}) end
 			state.texture = state.texture and normalize_path(state.texture) or nil
 			drawable_samples[#drawable_samples+1] = {scene=scene_count,update_sequence=#update_frames,
 				actor=record.id,definition_id=record.definition_id,primitive=primitive,
+					render_random_sequences=random_sequences,
 				coordinate_space="native-projection-before-display-centering",vertices=rows,state=state}
 		end
 	end

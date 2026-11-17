@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <string>
 #include <vector>
 class Actor;
@@ -59,6 +60,28 @@ void itgmania_harness_input_clock(int player, int column, float music_seconds,
     float music_rate, float last_beat_update_ago, float step_ago, float search_seconds);
 void itgmania_harness_observe_screen_input(const InputEventPlus& input, Screen* screen);
 Actor* itgmania_harness_draw_actor(Actor* actor);
+// These scopes retain raw inputs and their native call occurrences only. They
+// neither consume randomness nor supply any transform to the engine.
+struct ItgmaniaHarnessActorDrawScope {
+  ItgmaniaHarnessActorDrawScope* previous;
+  Actor* owner;
+  std::size_t active_begin;
+  unsigned long long draw_ordinal, draw_sequence, update_sequence;
+  unsigned int next_predraw_ordinal = 0;
+  explicit ItgmaniaHarnessActorDrawScope(Actor* owner);
+  ~ItgmaniaHarnessActorDrawScope();
+};
+struct ItgmaniaHarnessPreDrawScope {
+  ItgmaniaHarnessPreDrawScope* previous;
+  ItgmaniaHarnessActorDrawScope* draw_scope;
+  Actor* source;
+  int wrapper_index;
+  unsigned int predraw_ordinal, count = 0;
+  float values[3] = {};
+  ItgmaniaHarnessPreDrawScope(Actor* owner, Actor* source, int wrapper_index);
+  ~ItgmaniaHarnessPreDrawScope();
+};
+float itgmania_harness_vibration_random(Actor* source, int axis, float value);
 void itgmania_harness_render_state(Actor* actor, bool write, int test, bool wrap,
     bool filter, int blend, float bias, int cull);
 void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVertex* vertices,

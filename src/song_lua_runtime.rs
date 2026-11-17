@@ -856,7 +856,123 @@ fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_render_random_inputs(document: &Value) -> Result<(), Error> {
+    let advertised = document["capabilities"]["native_render_random_inputs"] == true;
+    let invalid = || Error::new("native render random inputs or scope associations are incomplete");
+    if !advertised {
+        if !document["input"]["render_random"].is_null()
+            || document["render_random_inputs"].as_array().is_some_and(|inputs| !inputs.is_empty())
+            || document["drawable_samples"].as_array().is_some_and(|samples| samples.iter()
+                .any(|sample| sample.get("render_random_sequences").is_some()))
+        { return Err(invalid()); }
+        return Ok(());
+    }
+    let provenance = &document["input"]["render_random"];
+    if document["capabilities"]["native_drawable_vertices"] != true
+        || document["dropped_render_random_inputs"] != 0
+        || provenance["protocol"] != 1
+        || provenance["observation"] != "native-Actor-PreDraw-vibrate-randomf"
+        || provenance["generator"] != "std::mt19937"
+        || provenance["distribution"] != "uniform_real_distribution<double>(-1,1)-to-f32"
+        || provenance["seed_source"] != "native-default-time"
+        || provenance["association"] != "active-Actor-Draw-PreDraw-scopes"
+    { return Err(invalid()); }
+    for key in ["actor_sha256", "random_numbers_sha256", "random_numbers_header_sha256"] {
+        if !document["input"]["native_source"][key].as_str().is_some_and(|hash|
+            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        { return Err(Error::new("native render random source provenance is missing")); }
+    }
+    let inputs = document["render_random_inputs"].as_array().ok_or_else(invalid)?;
+    let frames = document["update_frames"].as_array().ok_or_else(invalid)?;
+    let samples = document["drawable_samples"].as_array().ok_or_else(invalid)?;
+    let actors = document["runtime_actors"].as_array().ok_or_else(invalid)?;
+    let mut actor_by_id = std::collections::HashMap::new();
+    for actor in actors {
+        let id = actor["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+        if actor_by_id.insert(id, actor).is_some() { return Err(invalid()); }
+    }
+    let identity_matches = |input: &Value, id_key: &str, definition_key: &str, path_key: &str| {
+        input[id_key].as_str().and_then(|id| actor_by_id.get(id)).is_some_and(|actor| {
+            input[definition_key] == actor["definition_id"]
+                && input[path_key] == actor["path"]
+                && input[path_key].as_str().is_some_and(|path| !path.is_empty())
+        })
+    };
+    let mut native_scopes = std::collections::HashSet::new();
+    let mut predraw_occurrences = std::collections::HashSet::new();
+    let mut draw_roles = std::collections::HashSet::new();
+    let mut draw_owners = std::collections::HashMap::new();
+    let mut draw_occurrences = std::collections::HashMap::new();
+    let mut previous_update = 0;
+    for (index, input) in inputs.iter().enumerate() {
+        let at = input["update_sequence"].as_u64().unwrap_or(0);
+        let native_draw = input["native_draw_sequence"].as_u64().unwrap_or(0);
+        let native_update = input["native_update_sequence"].as_u64().unwrap_or(0);
+        let draw_ordinal = input["draw_ordinal"].as_u64().unwrap_or(0);
+        let predraw_ordinal = input["predraw_ordinal"].as_u64().unwrap_or(0);
+        let wrapper = input["wrapper_index"].as_i64().unwrap_or(i64::MIN);
+        let owner = input["actor"].as_str().unwrap_or("");
+        let scope = input["native_scope_sequence"].as_u64().unwrap_or(0);
+        if input["sequence"].as_u64() != Some(index as u64 + 1)
+            || at == 0 || at < previous_update || at > frames.len() as u64
+            || input["scene"] != frames[at.saturating_sub(1) as usize]["scene"]
+            || native_draw == 0 || native_update == 0 || draw_ordinal == 0 || predraw_ordinal == 0
+            || scope == 0 || !native_scopes.insert(scope) || wrapper < -1
+            || !predraw_occurrences.insert((native_draw, predraw_ordinal))
+            || !draw_roles.insert((native_draw, wrapper))
+            || !identity_matches(input, "actor", "definition_id", "path")
+            || !input["values"].as_array().is_some_and(|values| values.len() == 3
+                && values.iter().all(|value| value.as_f64().is_some_and(|value|
+                    value.is_finite() && (-1.0..=1.0).contains(&value)
+                        && f64::from(value as f32) == value)))
+        { return Err(invalid()); }
+        let draw_owner = (owner, native_update, draw_ordinal);
+        if draw_owners.insert(native_draw, draw_owner).is_some_and(|previous| previous != draw_owner) {
+            return Err(invalid());
+        }
+        if draw_occurrences.insert(draw_owner, native_draw).is_some_and(|previous| previous != native_draw) {
+            return Err(invalid());
+        }
+        if input["source_actor"].is_null() {
+            if wrapper <= 0 || !input["source_definition_id"].is_null() || !input["source_path"].is_null() {
+                return Err(invalid());
+            }
+        } else if !identity_matches(input, "source_actor", "source_definition_id", "source_path")
+            || wrapper == 0 && input["source_actor"] != input["actor"]
+        { return Err(invalid()); }
+        previous_update = at;
+    }
+    let mut used = vec![false; inputs.len()];
+    for sample in samples {
+        let sequences = sample["render_random_sequences"].as_array().ok_or_else(invalid)?;
+        let mut previous = 0;
+        for sequence in sequences {
+            let sequence = sequence.as_u64().unwrap_or(0);
+            if sequence <= previous || sequence > inputs.len() as u64 { return Err(invalid()); }
+            let input = &inputs[sequence as usize - 1];
+            if input["scene"] != sample["scene"] || input["update_sequence"] != sample["update_sequence"] {
+                return Err(invalid());
+            }
+            used[sequence as usize - 1] = true;
+            previous = sequence;
+        }
+    }
+    if used.iter().any(|used| !used) { return Err(invalid()); }
+    let mut consumed = 0;
+    for frame in document["drawable_frames"].as_array().ok_or_else(invalid)? {
+        let count = frame["render_random_inputs"].as_u64().ok_or_else(invalid)?;
+        if count < consumed || count > inputs.len() as u64
+            || inputs[consumed as usize..count as usize].iter().any(|input|
+                input["update_sequence"] != frame["update_sequence"] || input["scene"] != frame["scene"])
+        { return Err(invalid()); }
+        consumed = count;
+    }
+    if consumed != inputs.len() as u64 { return Err(invalid()); }
+    Ok(())
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
+    validate_render_random_inputs(document)?;
     if document["input"]["notefield_samples"] == true {
         validate_notefield_geometry(document)?;
     }
@@ -1402,6 +1518,109 @@ mod tests {
     }
     use super::*;
 
+    fn render_random_fixture() -> Value {
+        let mut native = serde_json::json!({
+            "capabilities":{"native_render_random_inputs":true,"native_drawable_vertices":true},
+            "input":{"native_source":{"actor_sha256":"a".repeat(64),
+                "random_numbers_sha256":"b".repeat(64),"random_numbers_header_sha256":"c".repeat(64)},
+                "render_random":{"protocol":1,"observation":"native-Actor-PreDraw-vibrate-randomf",
+                    "generator":"std::mt19937","distribution":"uniform_real_distribution<double>(-1,1)-to-f32",
+                    "seed_source":"native-default-time","association":"active-Actor-Draw-PreDraw-scopes"}},
+            "runtime_actors":[{"id":"external-screen","path":"ScreenGameplay"},
+                {"id":"def-0001","definition_id":"def-0001","path":"def-0001"}],
+            "update_frames":[{"sequence":1,"scene":1}],
+            "dropped_render_random_inputs":0,
+            "render_random_inputs":[],
+            "drawable_samples":[{"scene":1,"update_sequence":1,"render_random_sequences":[1,2,3]},
+                {"scene":1,"update_sequence":1,"render_random_sequences":[1,2,4]}],
+            "drawable_frames":[{"scene":1,"update_sequence":1,"render_random_inputs":4}]
+        });
+        for (sequence, owner, native_draw, draw_ordinal, predraw, wrapper) in [
+            (1,"external-screen",11,1,1,1), (2,"external-screen",11,1,2,0),
+            (3,"def-0001",12,1,1,0), (4,"def-0001",13,2,1,0),
+        ] {
+            let mut input = serde_json::json!({"sequence":sequence,"scene":1,"update_sequence":1,
+                "actor":owner,"path":if owner=="external-screen" {"ScreenGameplay"} else {owner},
+                "native_scope_sequence":sequence+20,"native_update_sequence":8,"native_draw_sequence":native_draw,
+                "draw_ordinal":draw_ordinal,"predraw_ordinal":predraw,"wrapper_index":wrapper,
+                "values":[-0.75,0.25,0.0]});
+            if owner == "def-0001" { input["definition_id"] = serde_json::json!(owner); }
+            if wrapper == 0 {
+                input["source_actor"] = input["actor"].clone();
+                input["source_path"] = input["path"].clone();
+                if !input["definition_id"].is_null() { input["source_definition_id"] = input["definition_id"].clone(); }
+            }
+            native["render_random_inputs"].as_array_mut().unwrap().push(input);
+        }
+        native
+    }
+
+    #[test]
+    fn render_random_capture_shares_ancestor_scopes_and_distinguishes_repeated_draws() {
+        let mut native = render_random_fixture();
+        validate_render_random_inputs(&native).unwrap();
+        // A repeated owner can have the same ordinal in a later native update
+        // before the probe has recorded a new captured frame (immediate Draw).
+        native["render_random_inputs"][3]["native_update_sequence"] = serde_json::json!(9);
+        native["render_random_inputs"][3]["draw_ordinal"] = serde_json::json!(1);
+        validate_render_random_inputs(&native).unwrap();
+        // Empty captures still prove that every submitted draw was observed.
+        native["render_random_inputs"] = serde_json::json!([]);
+        for sample in native["drawable_samples"].as_array_mut().unwrap() {
+            sample["render_random_sequences"] = serde_json::json!([]);
+        }
+        native["drawable_frames"][0]["render_random_inputs"] = serde_json::json!(0);
+        validate_render_random_inputs(&native).unwrap();
+        validate_render_random_inputs(&serde_json::json!({})).unwrap();
+    }
+
+    #[test]
+    fn render_random_capture_rejects_missing_or_corrupt_inputs_and_provenance() {
+        let native = render_random_fixture();
+        for (pointer, value) in [
+            ("/capabilities/native_render_random_inputs", serde_json::json!(false)),
+            ("/dropped_render_random_inputs", serde_json::json!(1)),
+            ("/input/render_random/protocol", serde_json::json!(2)),
+            ("/input/render_random/observation", serde_json::json!("derived-from-native-matrix")),
+            ("/input/render_random/seed_source", serde_json::json!("lua-random-seed")),
+            ("/input/native_source/actor_sha256", Value::Null),
+            ("/render_random_inputs/0/sequence", serde_json::json!(2)),
+            ("/render_random_inputs/0/actor", serde_json::json!("unknown")),
+            ("/render_random_inputs/0/path", serde_json::json!("WrongScreen")),
+            ("/render_random_inputs/0/scene", serde_json::json!(2)),
+            ("/render_random_inputs/0/update_sequence", serde_json::json!(0)),
+            ("/render_random_inputs/0/native_draw_sequence", serde_json::json!(0)),
+            ("/render_random_inputs/0/native_update_sequence", serde_json::json!(0)),
+            ("/render_random_inputs/0/draw_ordinal", serde_json::json!(0)),
+            ("/render_random_inputs/0/predraw_ordinal", serde_json::json!(0)),
+            ("/render_random_inputs/0/wrapper_index", serde_json::json!(-2)),
+            ("/render_random_inputs/0/values", serde_json::json!([0.25,0.5])),
+            ("/render_random_inputs/0/values/1", serde_json::json!(1.25)),
+            ("/render_random_inputs/0/values/1", serde_json::json!(0.1)),
+            ("/render_random_inputs/1/source_actor", Value::Null),
+            ("/render_random_inputs/1/source_actor", serde_json::json!("def-0001")),
+            ("/render_random_inputs/1/native_scope_sequence", serde_json::json!(21)),
+            ("/render_random_inputs/1/predraw_ordinal", serde_json::json!(1)),
+            ("/render_random_inputs/1/wrapper_index", serde_json::json!(1)),
+            ("/render_random_inputs/3/draw_ordinal", serde_json::json!(1)),
+            ("/drawable_samples/0/render_random_sequences", Value::Null),
+            ("/drawable_samples/0/render_random_sequences", serde_json::json!([2,1,3])),
+            ("/drawable_samples/0/render_random_sequences", serde_json::json!([1,1,3])),
+            ("/drawable_samples/0/render_random_sequences", serde_json::json!([1,2,5])),
+            ("/drawable_samples/0/render_random_sequences", serde_json::json!([1,2])),
+            ("/drawable_samples/0/scene", serde_json::json!(2)),
+            ("/drawable_samples/0/update_sequence", serde_json::json!(2)),
+            ("/drawable_frames/0/render_random_inputs", serde_json::json!(3)),
+        ] {
+            let mut bad = native.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_render_random_inputs(&bad).is_err(), "accepted {pointer}");
+        }
+        let mut missing_fake_parent = native.clone();
+        missing_fake_parent["render_random_inputs"][0]["wrapper_index"] = serde_json::json!(-1);
+        assert!(validate_render_random_inputs(&missing_fake_parent).is_err());
+    }
+
     #[test]
     fn interactive_capture_requires_delivered_input_and_complete_draws() {
         let command=serde_json::json!({"scene":1,"seconds":1.0,"player":1,"button":"Right","key":"right","down":true});
@@ -1427,6 +1646,94 @@ mod tests {
             let mut bad=native.clone(); *bad.pointer_mut(pointer).unwrap()=value;
             assert!(validate_interactive_inputs(&bad).is_err(),"accepted {pointer}");
         }
+    }
+
+    #[test]
+    #[ignore = "requires the native trace executable (ITGMANIA_HARNESS_TRACE_BIN)"]
+    fn native_render_random_scopes_preserve_parent_wrapper_and_repeated_draw_inputs() {
+        let directory = std::env::temp_dir().join(format!("itgmania-render-random-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let length = 8_000u32 * 4;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + length).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&length.to_le_bytes());
+        wav.resize(44 + length as usize, 128);
+        fs::write(directory.join("silence.wav"), wav).unwrap();
+        fs::write(directory.join("control.sm"), "#TITLE:Render random inputs;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n#NOTES:dance-single:Render random inputs:Challenge:1:0,0,0,0,0:\n0000\n1000\n0000\n0000\n;\n").unwrap();
+        fs::write(directory.join("default.lua"), r#"
+return Def.ActorFrame {
+    Name='VibratingParent',
+    OnCommand=function(self)
+        self:sleep(30)
+        SCREENMAN:GetTopScreen():vibrate():effectmagnitude(2,1,0)
+        self:vibrate():effectmagnitude(4,3,0)
+        self:SetDrawFunction(function(parent)
+            parent:GetChild('Repeat'):Draw()
+            parent:GetChild('Repeat'):Draw()
+            parent:GetChild('FakeChild'):Draw()
+        end)
+    end,
+    Def.Quad { Name='Repeat', InitCommand=function(self)
+        self:zoomto(16,16):xy(32,32):vibrate():effectmagnitude(1,2,0)
+        self:AddWrapperState():vibrate():effectmagnitude(3,5,0)
+    end },
+    Def.ActorFrame { Name='Fake', InitCommand=function(self) self:vibrate():effectmagnitude(1,1,0) end },
+    Def.Quad { Name='FakeChild', InitCommand=function(self)
+        self:zoomto(16,16):xy(80,80):vibrate():effectmagnitude(0,0,0)
+    end, OnCommand=function(self) self:SetFakeParent(self:GetParent():GetChild('Fake')) end },
+}
+"#).unwrap();
+        let trace = capture(&Options {
+            simfile: directory.join("control.sm"),
+            itgmania_bin: std::env::var_os("ITGMANIA_HARNESS_TRACE_BIN").map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target/native-pinned-source/Program/ITGmania-harness-trace.exe")),
+            until_beat: 2.0, game: "dance".into(), style: "single".into(),
+            difficulty: Some("Challenge".into()), chart_index: None,
+            fallback_theme: "Harness Simply Love".into(), timeout: Duration::from_secs(60),
+            keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
+            max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
+            drawable_samples: true, capture_fps: Some(60), fixed_update_fps: None,
+            stop_lua_gc: false, notefield_samples: false, drawable_from_beat: 0.0, player_options: None,
+        }).unwrap();
+        fs::write(directory.join("native.json"), serde_json::to_vec(&trace).unwrap()).unwrap();
+        validate_render_random_inputs(&trace).unwrap();
+        let repeat = trace["actor_definitions"].as_array().unwrap().iter()
+            .find(|actor| actor["name"] == "Repeat").unwrap()["runtime_actors"][0].as_str().unwrap();
+        let draws: Vec<_> = trace["drawable_samples"].as_array().unwrap().iter()
+            .filter(|draw| draw["actor"] == repeat).take(2).collect();
+        assert_eq!(draws.len(), 2);
+        assert_eq!(draws[0]["update_sequence"], draws[1]["update_sequence"]);
+        let inputs = trace["render_random_inputs"].as_array().unwrap();
+        let scopes = |draw: &Value| -> Vec<&Value> {
+            draw["render_random_sequences"].as_array().unwrap().iter()
+                .map(|id| &inputs[id.as_u64().unwrap() as usize - 1]).collect()
+        };
+        let first = scopes(draws[0]);
+        let second = scopes(draws[1]);
+        assert!(first.len() >= 4, "screen, parent, wrapper and self scopes must be retained");
+        for parent in first.iter().filter(|input| input["actor"] != repeat) {
+            assert!(second.iter().any(|input| input["sequence"] == parent["sequence"]));
+        }
+        let first_self = first.iter().copied()
+            .find(|input| input["actor"] == repeat && input["wrapper_index"] == 0).unwrap();
+        let second_self = second.iter().copied()
+            .find(|input| input["actor"] == repeat && input["wrapper_index"] == 0).unwrap();
+        assert_ne!(first_self["native_draw_sequence"], second_self["native_draw_sequence"]);
+        assert_ne!(first_self["values"], second_self["values"]);
+        assert!(first.iter().any(|input| input["actor"] == repeat && input["wrapper_index"] == 1));
+        assert!(inputs.iter().any(|input| input["wrapper_index"] == -1
+            && input["source_actor"] != input["actor"] && input["source_path"].is_string()));
     }
 
     #[test]

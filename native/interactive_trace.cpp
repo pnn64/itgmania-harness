@@ -44,6 +44,20 @@ int read_script_errors(lua_State* L) {
   return 2;
 }
 Actor* drawing = nullptr;
+ItgmaniaHarnessActorDrawScope* actor_draw_scope = nullptr;
+ItgmaniaHarnessPreDrawScope* predraw_scope = nullptr;
+struct RenderRandomInput {
+  Actor *owner, *source;
+  unsigned long long scope_sequence, draw_ordinal, draw_sequence, update_sequence;
+  unsigned int predraw_ordinal;
+  int wrapper_index;
+  float values[3];
+};
+std::vector<RenderRandomInput> active_render_random_inputs;
+std::map<Actor*, unsigned long long> render_draw_ordinals;
+unsigned long long next_render_random_scope = 0;
+unsigned long long next_actor_draw_sequence = 0, native_update_sequence = 0;
+bool render_random_observer_failed = false;
 const msMesh* drawing_model_mesh = nullptr;
 bool updating_screen = false;
 ItgmaniaHarnessInputScope* input_scope = nullptr;
@@ -147,6 +161,31 @@ void field(lua_State* L, const char* name, double value) {
 void boolean(lua_State* L, const char* name, bool value) {
   lua_pushboolean(L, value); lua_setfield(L, -2, name);
 }
+void render_random_inputs(lua_State* L) {
+  if (render_random_observer_failed) {
+    lua_pushstring(L, "native vibrate input observation lost its PreDraw scope");
+    lua_setglobal(L, "ITGMANIA_HARNESS_INTERACTIVE_ERROR");
+  }
+  lua_createtable(L, static_cast<int>(active_render_random_inputs.size()), 0);
+  for (size_t i = 0; i < active_render_random_inputs.size(); ++i) {
+    const auto& input = active_render_random_inputs[i];
+    lua_createtable(L, 0, 7);
+    input.owner->PushSelf(L); lua_setfield(L, -2, "actor");
+    input.source->PushSelf(L); lua_setfield(L, -2, "source_actor");
+    field(L, "native_scope_sequence", static_cast<double>(input.scope_sequence));
+    field(L, "draw_ordinal", static_cast<double>(input.draw_ordinal));
+    field(L, "native_draw_sequence", static_cast<double>(input.draw_sequence));
+    field(L, "native_update_sequence", static_cast<double>(input.update_sequence));
+    field(L, "predraw_ordinal", input.predraw_ordinal);
+    field(L, "wrapper_index", input.wrapper_index);
+    lua_createtable(L, 3, 0);
+    for (int axis = 0; axis < 3; ++axis) {
+      lua_pushnumber(L, input.values[axis]); lua_rawseti(L, -2, axis + 1);
+    }
+    lua_setfield(L, -2, "values");
+    lua_rawseti(L, -2, static_cast<int>(i + 1));
+  }
+}
 int inject_input(lua_State* L) {
   const int player = luaL_checkinteger(L, 1);
   const char* name = luaL_checkstring(L, 2);
@@ -182,6 +221,9 @@ void register_interactive(Lua* L) {
   lua_pushboolean(L, HARNESS_NATIVE_DIRTY); lua_setfield(L, -2, "modified_src");
   lua_pushstring(L, HARNESS_NOTE_DISPLAY_SHA256); lua_setfield(L, -2, "note_display_sha256");
   lua_pushstring(L, HARNESS_CUBIC_SPLINE_SHA256); lua_setfield(L, -2, "cubic_spline_sha256");
+  lua_pushstring(L, HARNESS_ACTOR_SHA256); lua_setfield(L, -2, "actor_sha256");
+  lua_pushstring(L, HARNESS_RANDOM_NUMBERS_SHA256); lua_setfield(L, -2, "random_numbers_sha256");
+  lua_pushstring(L, HARNESS_RANDOM_NUMBERS_HEADER_SHA256); lua_setfield(L, -2, "random_numbers_header_sha256");
   lua_setglobal(L, "ITGMANIA_HARNESS_NATIVE_SOURCE");
   lua_pushcfunction(L, arrow_clock_scope);
   lua_setglobal(L, "ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE");
@@ -200,6 +242,7 @@ void register_interactive(Lua* L) {
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_MODEL_GEOMETRY_AVAILABLE");
   lua_pushinteger(L,2); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2");
+  lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL");
 }
 REGISTER_WITH_LUA_FUNCTION(register_interactive)
 }
@@ -268,6 +311,8 @@ void itgmania_harness_before_screen_update(float delta) {
   lua_settop(L, top); LUA->Release(L);
 }
 ItgmaniaHarnessUpdateFrame::ItgmaniaHarnessUpdateFrame(float delta) {
+  ++native_update_sequence;
+  render_draw_ordinals.clear();
   itgmania_harness_before_screen_update(delta); updating_screen = true;
 }
 ItgmaniaHarnessUpdateFrame::~ItgmaniaHarnessUpdateFrame() { updating_screen = false; }
@@ -312,6 +357,46 @@ void itgmania_harness_observe_input(lua_State* L, Screen* screen) {
 
 Actor* itgmania_harness_draw_actor(Actor* actor) {
   Actor* previous = drawing; drawing = actor; return previous;
+}
+
+ItgmaniaHarnessActorDrawScope::ItgmaniaHarnessActorDrawScope(Actor* owner_)
+    : previous(actor_draw_scope), owner(owner_),
+      active_begin(active_render_random_inputs.size()),
+      draw_ordinal(++render_draw_ordinals[owner_]),
+      draw_sequence(++next_actor_draw_sequence), update_sequence(native_update_sequence) {
+  actor_draw_scope = this;
+}
+ItgmaniaHarnessActorDrawScope::~ItgmaniaHarnessActorDrawScope() {
+  active_render_random_inputs.resize(active_begin);
+  actor_draw_scope = previous;
+}
+ItgmaniaHarnessPreDrawScope::ItgmaniaHarnessPreDrawScope(Actor* owner, Actor* source_, int wrapper_index_)
+    : previous(predraw_scope), draw_scope(actor_draw_scope), source(source_),
+      wrapper_index(wrapper_index_),
+      predraw_ordinal(draw_scope ? ++draw_scope->next_predraw_ordinal : 0) {
+  if (!draw_scope || draw_scope->owner != owner) render_random_observer_failed = true;
+  predraw_scope = this;
+}
+ItgmaniaHarnessPreDrawScope::~ItgmaniaHarnessPreDrawScope() {
+  predraw_scope = previous;
+  if (count == 0) return;
+  if (!draw_scope || count != 3) { render_random_observer_failed = true; return; }
+  active_render_random_inputs.push_back({draw_scope->owner, source,
+      ++next_render_random_scope, draw_scope->draw_ordinal,
+      draw_scope->draw_sequence, draw_scope->update_sequence, predraw_ordinal,
+      wrapper_index, {values[0], values[1], values[2]}});
+}
+float itgmania_harness_vibration_random(Actor* source, int axis, float value) {
+  // Return the same f32 from the original randomf expression. In particular,
+  // zero magnitudes still consume all three native random draws.
+  if (!predraw_scope || predraw_scope->source != source || axis < 0 || axis >= 3
+      || predraw_scope->count != static_cast<unsigned int>(axis)) {
+    render_random_observer_failed = true;
+  } else {
+    predraw_scope->values[axis] = value;
+    ++predraw_scope->count;
+  }
+  return value;
 }
 
 void itgmania_harness_render_state(Actor*, bool write, int test, bool wrap,
@@ -363,7 +448,8 @@ void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVerte
   if (auto* text = dynamic_cast<BitmapText*>(drawing)) {
     lua_pushstring(L, text->GetText().c_str()); lua_setfield(L, -2, "text");
   }
-  observe(L, 4);
+  render_random_inputs(L);
+  observe(L, 5);
   lua_settop(L, top); LUA->Release(L);
 }
 

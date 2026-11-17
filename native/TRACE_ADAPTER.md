@@ -23,7 +23,8 @@ target dependency; building only `ITGmania` can otherwise fail at the link step.
 
 Reconfigure after changing the private source revision. The adapter stamps its
 own Git revision, tracked source modification state, and SHA-256 hashes of
-`NoteDisplay.cpp` and `CubicSpline.cpp` into the executable. Semantic gameplay
+`NoteDisplay.cpp`, `CubicSpline.cpp`, `Actor.cpp`, and the `RandomNumbers` header
+and implementation into the executable. Semantic gameplay
 and notefield traces retain these in `input.native_source`; the collector rejects
 missing provenance. Native archive manifests use this stamp when available.
 The CLI's pinned oracle revision does not identify an external trace executable.
@@ -74,3 +75,55 @@ Declaration trees with no observed descendants remain excluded. Paths do not est
 complete physical ownership: foreground root names are overwritten by
 `Foreground::LoadFromSong`, and reused definitions still require instance
 ownership evidence before replay mapping.
+
+Drawable semantic captures from 0.1.105 require `native_render_random_inputs`.
+The observer retains the three original f32 `randomf(-1, 1)` returns in
+`Actor::PreDraw`'s vibrate branch, before multiplication by effect magnitude
+and zoom. It returns those same values to the native expression and does not
+seed, replace, or consume the engine PRNG. That global `std::mt19937` is seeded
+from native startup time, independently of the Lua PRNG controlled by
+`random_seed`. Its seed cannot be reconstructed from the Lua seed. Exact
+replay therefore uses these observed external random inputs.
+
+`input.render_random` identifies protocol 1, the observation site, the native
+generator/distribution, the default time seed source, and the association
+`active-Actor-Draw-PreDraw-scopes`. The matching `input.native_source` hashes
+are `actor_sha256`, `random_numbers_sha256`, and `random_numbers_header_sha256`.
+`render_random_inputs` records contiguous `sequence`, captured `scene` and
+`update_sequence`, owner `actor`/`definition_id`/`path`, optional source identity
+`source_actor`/`source_definition_id`/`source_path`, and raw XYZ `values`.
+`wrapper_index` is 0 for the owner's own PreDraw, positive for its native
+one-based wrapper slot, and -1 for its fake parent. A wrapper can be identified
+by its independently bound owner and slot even if it has no runtime actor
+record; self and fake-parent scopes require a source actor identity.
+
+Each input retains `native_scope_sequence`, `native_draw_sequence`,
+`native_update_sequence`, `draw_ordinal` (per owner per native screen update),
+and `predraw_ordinal` (within that actual Draw). Native update counters are
+separate from probe frames: an immediate Draw can occur before the gameplay
+probe records the next captured frame. RAII scopes keep ancestor inputs alive
+through descendants and remove them when their Draw returns. The recorder
+assigns input sequences on first use by a declared drawable; it excludes
+unrelated theme draws and inputs from scopes that submit no captured geometry.
+Every drawable carries ordered `render_random_sequences`, sharing ancestor
+IDs while distinguishing wrappers and repeated Draw calls. These are input
+occurrences, not transform output. ActorFrameTexture's matrix reset does not
+end native Draw lifetimes; consumers must apply their own render-target and
+ancestry rules when computing geometry.
+
+The validator requires finite exact f32 triples in [-1, 1], matching runtime
+identities and scene/frame anchors, unique draw roles, complete scope lists,
+zero `dropped_render_random_inputs`, and no unused inputs. Each drawable frame
+also carries a cumulative `render_random_inputs` count. Unknown vibrating
+ancestors of captured song draws fail observation instead of being omitted.
+
+Reconfigure and rebuild the executable and Windows crash-symbol target, then
+rebuild the Rust collector. Run the focused validator tests with
+`cargo test --release render_random_capture`. The native regression
+`native_render_random_scopes_preserve_parent_wrapper_and_repeated_draw_inputs`
+requires `ITGMANIA_HARNESS_TRACE_BIN` and runs with `--ignored --nocapture`;
+it covers shared screen/parent jitter, repeated draws, wrappers, fake parents,
+and zero effect magnitude. Existing traces without raw inputs cannot acquire
+this capability by conversion. Recapture with the original song, chart, theme,
+player options, timing and drawable settings, retaining the old trace and its
+archive separately until the new capture has passed replay.
