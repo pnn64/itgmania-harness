@@ -3,6 +3,7 @@
 local cfg=ITGMANIA_HARNESS_CONFIG
 if cfg.stop_lua_gc then collectgarbage('stop') end
 assert(ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2==2,"native note geometry adapter v2 required")
+assert(ITGMANIA_HARNESS_MODEL_RENDER_STATE_PROTOCOL_V1==1,"native Model render-state adapter v1 required")
 assert(ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1==1,"native receptor geometry adapter v1 required")
 ITGMANIA_HARNESS_NOTEFIELD_ONLY=not cfg.scene_draws
 ITGMANIA_HARNESS_CAPTURE_FROM_BEAT=cfg.drawable_from_beat or 0
@@ -94,6 +95,8 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
    window_visible=ITGMANIA_HARNESS_WINDOW_VISIBLE(),
    constant_update_delta_seconds=PREFSMAN:GetPreference('ConstantUpdateDeltaSeconds')},
   capabilities={native_notefield_geometry=true,native_drawable_vertices=true,native_model_geometry_protocol=2,native_receptor_geometry_protocol=1,
+   native_model_render_state_protocol=ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND()=='opengl' and 1 or nil,
+   native_model_render_state_backend=ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND(),
    native_song_position_clocks=true,native_pre_theme_preferences=catalog_preferences~=nil,
    native_fast_note_rendering=type(fast_note_rendering)=='boolean'},
   capture_limits={max_events=cfg.max_events},runtime_actors=actors,update_frames=frames,

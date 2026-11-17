@@ -68,6 +68,19 @@ unsigned long long next_geometry_draw_sequence = 0;
 struct ModelGeometry { int id = 0; std::vector<float> vertices; };
 std::map<const msMesh*,ModelGeometry> model_geometries;
 int next_model_geometry = 1;
+const ItgmaniaHarnessModelGlState* model_gl_state = nullptr;
+struct ModelMaterial {
+  RageColor emissive, ambient, diffuse, specular;
+  float shininess = 0;
+  bool observed = false;
+} model_material;
+int model_texture_modes[4] = {-1, -1, -1, -1};
+std::map<uint32_t, std::string> model_texture_names;
+int model_render_backend(lua_State* L) {
+  if (DISPLAY && DISPLAY->GetApiDescription() == "OpenGL") lua_pushstring(L, "opengl");
+  else lua_pushnil(L);
+  return 1;
+}
 bool notefield_only(lua_State* L) {
   lua_getglobal(L,"ITGMANIA_HARNESS_NOTEFIELD_ONLY");
   const bool only=lua_toboolean(L,-1); lua_pop(L,1); return only;
@@ -168,6 +181,61 @@ void field(lua_State* L, const char* name, double value) {
 void boolean(lua_State* L, const char* name, bool value) {
   lua_pushboolean(L, value); lua_setfield(L, -2, name);
 }
+void color(lua_State* L, const char* name, const float* values) {
+  lua_createtable(L, 4, 0);
+  for (int axis = 0; axis < 4; ++axis) { lua_pushnumber(L, values[axis]); lua_rawseti(L, -2, axis + 1); }
+  lua_setfield(L, -2, name);
+}
+void model_render_state(lua_State* L) {
+  if (!model_gl_state) return;
+  const auto& gl = *model_gl_state;
+  lua_createtable(L, 0, 9);
+  lua_pushstring(L, "opengl"); lua_setfield(L, -2, "backend");
+  boolean(L, "lighting", gl.lighting);
+  color(L, "current_color", gl.current_color);
+  if (model_material.observed) {
+    lua_createtable(L, 0, 5);
+    color(L, "emissive", model_material.emissive);
+    color(L, "ambient", model_material.ambient);
+    color(L, "diffuse", model_material.diffuse);
+    color(L, "specular", model_material.specular);
+    field(L, "shininess", model_material.shininess);
+    lua_setfield(L, -2, "material");
+  }
+  lua_createtable(L, 0, 7);
+  boolean(L, "enabled", gl.blend);
+  field(L, "src_rgb", gl.blend_src_rgb); field(L, "dst_rgb", gl.blend_dst_rgb);
+  field(L, "src_alpha", gl.blend_src_alpha); field(L, "dst_alpha", gl.blend_dst_alpha);
+  field(L, "equation_rgb", gl.blend_equation_rgb); field(L, "equation_alpha", gl.blend_equation_alpha);
+  lua_setfield(L, -2, "blend");
+  lua_createtable(L, 0, 4);
+  boolean(L, "test_enabled", gl.depth_test); boolean(L, "write", gl.depth_write);
+  field(L, "function", gl.depth_function);
+  lua_createtable(L, 2, 0);
+  for (int axis = 0; axis < 2; ++axis) { lua_pushnumber(L, gl.depth_range[axis]); lua_rawseti(L, -2, axis + 1); }
+  lua_setfield(L, -2, "range"); lua_setfield(L, -2, "depth");
+  lua_createtable(L, 0, 2);
+  boolean(L, "enabled", gl.cull); field(L, "face", gl.cull_face);
+  lua_setfield(L, -2, "cull");
+  lua_createtable(L, 0, 3);
+  boolean(L, "enabled", gl.alpha_test); field(L, "function", gl.alpha_function);
+  field(L, "reference", gl.alpha_reference); lua_setfield(L, -2, "alpha_test");
+  lua_createtable(L, gl.texture_units, 0);
+  for (int unit = 0; unit < gl.texture_units; ++unit) {
+    const auto& texture = gl.textures[unit];
+    lua_createtable(L, 0, 6);
+    field(L, "unit", unit); boolean(L, "enabled", texture.enabled);
+    field(L, "handle", static_cast<uint32_t>(texture.handle)); field(L, "mode", model_texture_modes[unit]);
+    field(L, "environment_mode", texture.environment_mode);
+    const auto found = model_texture_names.find(static_cast<uint32_t>(texture.handle));
+    if (texture.enabled && found != model_texture_names.end()) {
+      lua_pushstring(L, found->second.c_str()); lua_setfield(L, -2, "texture");
+    }
+    lua_rawseti(L, -2, unit + 1);
+  }
+  lua_setfield(L, -2, "textures");
+  lua_setfield(L, -2, "render_state");
+}
 void render_random_inputs(lua_State* L) {
   if (render_random_observer_failed) {
     lua_pushstring(L, "native vibrate input observation lost its PreDraw scope");
@@ -250,6 +318,8 @@ void register_interactive(Lua* L) {
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_MODEL_GEOMETRY_AVAILABLE");
   lua_pushinteger(L,2); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2");
+  lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_RENDER_STATE_PROTOCOL_V1");
+  lua_pushcfunction(L,model_render_backend); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND");
   lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1");
   lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL");
 }
@@ -465,8 +535,8 @@ void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVerte
 }
 
 // Observe actual submitted positions, including CPU-skinned vertices and the
-// mesh's bone matrix. This channel deliberately does not invent material colors
-// or claim pixel parity; it retains local and projected triangle positions.
+// mesh's bone matrix. The OpenGL backend also supplies directly observed draw
+// state. Neither geometry nor material state claims final rasterized visibility.
 void itgmania_harness_draw_model(const msMesh& mesh, int index,
     const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection) {
   if (!drawing || mesh.Triangles.empty()) return;
@@ -501,6 +571,8 @@ void itgmania_harness_draw_model(const msMesh& mesh, int index,
   drawing->PushSelf(L); lua_pushinteger(L,geometry.id);
   lua_createtable(L,0,5);
   note_context(L); field(L,"mesh_index",index);
+  field(L,"material_index",mesh.nMaterialIndex);
+  model_render_state(L);
   field(L,"native_draw_sequence",static_cast<double>(++next_geometry_draw_sequence));
   if (actor_draw_scope) field(L,"actor_draw_sequence",static_cast<double>(actor_draw_scope->draw_sequence));
   field(L,"render_target",static_cast<double>(DISPLAY->GetRenderTarget()));
@@ -525,7 +597,40 @@ ItgmaniaHarnessModelMeshScope::ItgmaniaHarnessModelMeshScope(const msMesh* mesh)
 ItgmaniaHarnessModelMeshScope::~ItgmaniaHarnessModelMeshScope() { drawing_model_mesh = previous; }
 void itgmania_harness_draw_model_current(int index,
     const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection) {
+  // OpenGL records later, inside its backend, with the active renderer state.
+  if (DISPLAY->GetApiDescription() == "OpenGL") return;
   if (drawing_model_mesh) itgmania_harness_draw_model(*drawing_model_mesh, index, world, view, projection);
+}
+
+bool itgmania_harness_model_capture_enabled() {
+  if (!drawing || !drawing_model_mesh) return false;
+  Lua* L = LUA->Get(); const int top = lua_gettop(L);
+  const bool disabled = draw_capture_disabled(L) || (notefield_only(L) && !drawing_note);
+  lua_getglobal(L, "ITGMANIA_HARNESS_DRAW_MODEL");
+  const bool enabled = !disabled && lua_isfunction(L, -1);
+  lua_settop(L, top); LUA->Release(L); return enabled;
+}
+void itgmania_harness_model_material(const RageColor& emissive, const RageColor& ambient,
+    const RageColor& diffuse, const RageColor& specular, float shininess) {
+  model_material = {emissive, ambient, diffuse, specular, shininess, true};
+}
+void itgmania_harness_model_texture_mode(int unit, int mode) {
+  if (unit >= 0 && unit < 4) model_texture_modes[unit] = mode;
+}
+uintptr_t itgmania_harness_model_texture_handle(RageTexture* texture) {
+  const auto handle = texture->GetTexHandle();
+  // RageDisplay_Legacy::SetTexture casts the opaque uintptr_t to GLuint.
+  // Keep that exact GL-name conversion for identity, without changing the
+  // original argument delivered to the native renderer.
+  model_texture_names[static_cast<uint32_t>(handle)] = texture->GetID().filename;
+  return handle;
+}
+void itgmania_harness_draw_model_gl(const ItgmaniaHarnessModelGlState& render, int index,
+    const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection) {
+  const auto* previous = model_gl_state;
+  model_gl_state = &render;
+  if (drawing_model_mesh) itgmania_harness_draw_model(*drawing_model_mesh, index, world, view, projection);
+  model_gl_state = previous;
 }
 
 ItgmaniaHarnessNoteScope::ItgmaniaHarnessNoteScope(int player_, int column_,

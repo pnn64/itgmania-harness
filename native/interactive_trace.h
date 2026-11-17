@@ -1,12 +1,15 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 class Actor;
 class Screen;
+class RageTexture;
 class InputEventPlus;
 struct RageMatrix;
 struct RageSpriteVertex;
+struct RageColor;
 struct lua_State;
 struct msMesh;
 struct ItgmaniaHarnessNoteScope {
@@ -105,4 +108,28 @@ struct ItgmaniaHarnessModelMeshScope {
   ~ItgmaniaHarnessModelMeshScope();
 };
 void itgmania_harness_draw_model_current(int index,
+    const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection);
+
+// This channel observes the OpenGL backend at its compiled-mesh submission.
+// Material and texture-mode arguments are retained at the actual native setter;
+// all other fields are queried from the active GL context, not Actor defaults.
+struct ItgmaniaHarnessModelGlState {
+  bool lighting, blend, depth_test, depth_write, cull, alpha_test;
+  int blend_src_rgb, blend_dst_rgb, blend_src_alpha, blend_dst_alpha;
+  int blend_equation_rgb, blend_equation_alpha, depth_function, cull_face, alpha_function;
+  float current_color[4], depth_range[2], alpha_reference;
+  struct Texture {
+    bool enabled;
+    int handle, environment_mode;
+  } textures[4];
+  int texture_units;
+};
+bool itgmania_harness_model_capture_enabled();
+void itgmania_harness_model_material(const RageColor& emissive, const RageColor& ambient,
+    const RageColor& diffuse, const RageColor& specular, float shininess);
+void itgmania_harness_model_texture_mode(int unit, int mode);
+uintptr_t itgmania_harness_model_texture_handle(RageTexture* texture);
+void itgmania_harness_draw_model_gl(const ItgmaniaHarnessModelGlState& state, int index,
+    const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection);
+void itgmania_harness_draw_model_gl_current(int index,
     const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection);

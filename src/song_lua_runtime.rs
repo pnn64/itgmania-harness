@@ -168,6 +168,9 @@ fn capture_in(
         if !bytes.windows(b"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1".len())
             .any(|window| window == b"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1")
         { return Err(Error::new("notefield capture requires the native receptor observer; rebuild the trace executable")); }
+        if !bytes.windows(b"ITGMANIA_HARNESS_MODEL_RENDER_STATE_PROTOCOL_V1".len())
+            .any(|window| window == b"ITGMANIA_HARNESS_MODEL_RENDER_STATE_PROTOCOL_V1")
+        { return Err(Error::new("notefield capture requires the native Model render-state observer; rebuild the trace executable")); }
     }
     let mut command = Command::new(&staged_binary);
     // Unix crash reporting writes $HOME/crashinfo.txt. Keep it with this run's
@@ -261,6 +264,9 @@ fn capture_in(
                 }
             }
             if options.notefield_samples {
+                if document["capabilities"]["native_model_render_state_protocol"] != 1
+                    || document["capabilities"]["native_model_render_state_backend"] != "opengl"
+                { return Err(Error::new("native Model render-state capture requires the observed OpenGL backend")); }
                 validate_interactive_inputs(&document)?;
             } else {
                 validate_runtime_inputs(&document)?;
@@ -391,6 +397,8 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
     render.insert("capabilities".into(),serde_json::json!({
         "native_notefield_geometry":true,"native_drawable_vertices":true,
         "native_model_geometry_protocol":2,
+        "native_model_render_state_protocol":native["capabilities"]["native_model_render_state_protocol"],
+        "native_model_render_state_backend":native["capabilities"]["native_model_render_state_backend"],
         "native_receptor_geometry_protocol":1,
         "native_fast_note_rendering":native["capabilities"]["native_fast_note_rendering"],
         "native_song_position_clocks":native["capabilities"]["native_song_position_clocks"],
@@ -882,7 +890,56 @@ fn validate_notefield_geometry(document: &Value) -> Result<(), Error> {
         return Err(Error::new("native model geometry tail was not drawn"));
     }
 
+    validate_model_render_state(document)?;
     validate_receptor_geometry(document)?;
+    Ok(())
+}
+
+fn validate_model_render_state(document: &Value) -> Result<(), Error> {
+    let capability = &document["capabilities"]["native_model_render_state_protocol"];
+    // Retained geometry-only documents do not acquire rendering evidence.
+    // Fresh captures require the protocol separately before this validator.
+    if capability.is_null() { return Ok(()); }
+    let invalid = || Error::new("native Model render state is missing or invalid");
+    if capability != 1 || document["capabilities"]["native_model_render_state_backend"] != "opengl" {
+        return Err(invalid());
+    }
+    let finite = |value: &Value| value.as_f64().is_some_and(f64::is_finite);
+    let vector = |value: &Value, length| value.as_array().is_some_and(|values|
+        values.len() == length && values.iter().all(&finite));
+    for sample in document["model_geometry_samples"].as_array().ok_or_else(invalid)? {
+        let state = &sample["state"]["render_state"];
+        if state["backend"] != "opengl" || state["lighting"].as_bool().is_none()
+            || !vector(&state["current_color"], 4)
+            || ["emissive", "ambient", "diffuse", "specular"].iter()
+                .any(|name| !vector(&state["material"][name], 4))
+            || !finite(&state["material"]["shininess"])
+            || state["blend"]["enabled"].as_bool().is_none()
+            || ["src_rgb", "dst_rgb", "src_alpha", "dst_alpha", "equation_rgb", "equation_alpha"].iter()
+                .any(|name| state["blend"][name].as_u64().is_none())
+            || state["depth"]["test_enabled"].as_bool().is_none()
+            || state["depth"]["write"].as_bool().is_none()
+            || state["depth"]["function"].as_u64().is_none()
+            || !vector(&state["depth"]["range"], 2)
+            || state["cull"]["enabled"].as_bool().is_none()
+            || state["cull"]["face"].as_u64().is_none()
+            || state["alpha_test"]["enabled"].as_bool().is_none()
+            || state["alpha_test"]["function"].as_u64().is_none()
+            || !finite(&state["alpha_test"]["reference"])
+        { return Err(invalid()); }
+        let textures = state["textures"].as_array().filter(|textures| (1..=4).contains(&textures.len()))
+            .ok_or_else(invalid)?;
+        for (unit, texture) in textures.iter().enumerate() {
+            let enabled = texture["enabled"].as_bool().ok_or_else(invalid)?;
+            if texture["unit"] != unit || texture["handle"].as_u64().is_none()
+                || texture["environment_mode"].as_u64().is_none()
+                || texture["mode"].as_i64().is_none()
+                || enabled && (texture["handle"] == 0
+                    || texture["mode"].as_i64().is_none_or(|mode| !(0..=2).contains(&mode))
+                    || texture["texture"].as_str().is_none_or(str::is_empty))
+            { return Err(invalid()); }
+        }
+    }
     Ok(())
 }
 
@@ -2104,6 +2161,35 @@ end }
         wav.extend_from_slice(&length.to_le_bytes());
         wav.resize(44 + length as usize, 128);
         fs::write(directory.join("silence.wav"), wav).unwrap();
+        // Equal geometry can be fully invisible because the material, rather
+        // than the Actor, has zero alpha. Keep that submission as a control.
+        for (name, alpha) in [("material", 0.6), ("transparent", 0.0)] {
+            fs::write(directory.join(format!("{name}.txt")), format!(r#"// MilkShape 3D ASCII
+Frames: 1
+Frame: 1
+Meshes: 1
+"material-control" 0 0
+3
+0 -16 -16 0 0 0 -1
+0 16 -16 0 1 0 -1
+0 0 16 0 0.5 1 -1
+1
+0 0 1
+1
+0 0 1 2 0 0 0 0
+Materials: 1
+"control"
+0 0 0 1
+1 1 1 {alpha}
+0 0 0 0
+0 0 0 0
+0
+1
+""
+""
+Bones: 0
+"#)).unwrap();
+        }
         fs::write(
             directory.join("control.ssc"),
             r#"
@@ -2162,7 +2248,16 @@ end }
        spline:Solve()
       end
      end)
-    end}
+    end,
+    Def.Model{Name='DiffuseGlowControl',Meshes='material.txt',Materials='material.txt',Bones='material.txt',
+     InitCommand=function(self)
+      self:xy(240,240):diffuse({1,0.5,0.25,0.5}):glow({0.2,0.4,0.6,0.25})
+       :blend('BlendMode_Add'):zwrite(false):ztestmode('ZTestMode_Off'):cullmode('CullMode_None')
+     end},
+    Def.Model{Name='FadingMaterialControl',Meshes='material.txt',Materials='material.txt',Bones='material.txt',
+     InitCommand=function(self) self:xy(320,240):diffusealpha(0.9):linear(3):diffusealpha(0.3) end},
+    Def.Model{Name='TransparentMaterialControl',Meshes='transparent.txt',Materials='transparent.txt',Bones='transparent.txt',
+     InitCommand=function(self) self:xy(400,240) end}}
     "#,
         )
         .unwrap();
@@ -2193,7 +2288,7 @@ end }
             fixed_update_fps: Some(60),
             stop_lua_gc: false,
             notefield_samples: true,
-            scene_draws: false,
+            scene_draws: true,
             drawable_from_beat: 1.0,
             player_options: Some("m730, 60% mini, cel".into()),
             fast_note_rendering: Some(false),
@@ -2216,6 +2311,8 @@ end }
         assert_eq!(document["input"]["fast_note_rendering"], false);
         assert_eq!(document["input"]["fast_note_rendering_at_end"], false);
         assert_eq!(document["capabilities"]["native_notefield_geometry"], true);
+        assert_eq!(document["capabilities"]["native_model_render_state_protocol"], 1);
+        assert_eq!(document["capabilities"]["native_model_render_state_backend"], "opengl");
         assert_eq!(document["capabilities"]["native_receptor_geometry_protocol"], 1);
         let visits = document["receptor_visits"].as_array().unwrap();
         assert!(visits.iter().any(|visit| visit["state"]["base_alpha"] == 1.0),
@@ -2231,6 +2328,39 @@ end }
                 "native fully transparent receptors must not submit sprites");
         }
         let models = document["model_geometry_samples"].as_array().unwrap();
+        let named_model_states = |name: &str| {
+            let actor = &document["runtime_actors"].as_array().unwrap().iter()
+                .find(|actor| actor["name"] == name).expect("control model is drawn")["id"];
+            models.iter().filter(|sample| &sample["actor"] == actor)
+                .map(|sample| &sample["state"]["render_state"]).collect::<Vec<_>>()
+        };
+        let diffuse_glow = named_model_states("DiffuseGlowControl");
+        let mut passes = [0; 2];
+        for render in diffuse_glow {
+            let mode = render["textures"][0]["mode"].as_u64().unwrap() as usize;
+            assert!(mode < 2, "native Modulate or Glow pass");
+            let expected_alpha = [0.3, 0.25][mode];
+            assert!((render["material"]["diffuse"][3].as_f64().unwrap() - expected_alpha).abs() < 1e-6);
+            assert!((render["current_color"][3].as_f64().unwrap() - expected_alpha).abs() < 1e-6);
+            assert_eq!(render["lighting"], false);
+            assert_eq!(render["depth"]["write"], false);
+            assert_eq!(render["depth"]["function"], 519); // GL_ALWAYS
+            assert_eq!(render["cull"]["enabled"], false);
+            assert_eq!(render["blend"]["src_rgb"], 770); // GL_SRC_ALPHA
+            // Model resets BLEND_NORMAL after its diffuse mesh loop, before glow.
+            assert_eq!(render["blend"]["dst_rgb"], [1, 771][mode]);
+            passes[mode] += 1;
+        }
+        assert!(passes.into_iter().all(|count| count > 20), "diffuse/glow observations: {passes:?}");
+        let fading = named_model_states("FadingMaterialControl");
+        let alphas: Vec<_> = fading.iter().map(|render| render["material"]["diffuse"][3].as_f64().unwrap()).collect();
+        assert!(alphas.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - alphas.iter().copied().fold(f64::INFINITY, f64::min) > 0.1,
+            "native tween must change the submitted material alpha");
+        let transparent = named_model_states("TransparentMaterialControl");
+        assert!(transparent.len() > 20, "zero-alpha material still submits Model geometry");
+        assert!(transparent.iter().all(|render| render["material"]["diffuse"][3] == 0.0
+            && render["current_color"][3] == 0.0), "geometry alone cannot establish visibility");
         assert!(
             !models.is_empty(),
             "native Cel note models must reach the recorder"
@@ -2296,6 +2426,7 @@ end }
         );
         options.until_beat = 2.0;
         options.notefield_samples = false;
+        options.scene_draws = false;
         options.drawable_samples = false;
         let semantic = capture(&options).unwrap();
         assert_eq!(semantic["capabilities"]["native_song_position_clocks"], true);
@@ -2391,6 +2522,53 @@ end }
                 "accepted {pointer}"
             );
         }
+    }
+
+    #[test]
+    fn native_model_render_state_requires_material_and_actual_renderer_fields() {
+        let native = serde_json::json!({
+            "capabilities":{"native_model_render_state_protocol":1,"native_model_render_state_backend":"opengl"},
+            "model_geometry_samples":[{"state":{"render_state":{
+                "backend":"opengl","lighting":false,"current_color":[1,1,1,0.3],
+                "material":{"emissive":[0,0,0,0],"ambient":[0.2,0.2,0.2,0.3],
+                    "diffuse":[0.8,0.8,0.8,0.3],"specular":[0,0,0,1],"shininess":0},
+                "blend":{"enabled":true,"src_rgb":770,"dst_rgb":771,"src_alpha":1,
+                    "dst_alpha":771,"equation_rgb":32774,"equation_alpha":32774},
+                "depth":{"test_enabled":true,"write":true,"function":515,"range":[0.05,1]},
+                "cull":{"enabled":true,"face":1029},
+                "alpha_test":{"enabled":true,"function":516,"reference":0},
+                "textures":[{"unit":0,"enabled":true,"handle":12,"mode":0,
+                    "environment_mode":8448,"texture":"/NoteSkins/dance/cel/parts.png"}]
+            }}}]
+        });
+        validate_model_render_state(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_model_render_state_protocol"], 1);
+        assert_eq!(exported["capabilities"]["native_model_render_state_backend"], "opengl");
+        assert_eq!(exported["model_geometry_samples"], native["model_geometry_samples"]);
+        for path in [
+            "/capabilities/native_model_render_state_backend",
+            "/model_geometry_samples/0/state/render_state",
+            "/model_geometry_samples/0/state/render_state/material/diffuse/3",
+            "/model_geometry_samples/0/state/render_state/current_color/3",
+            "/model_geometry_samples/0/state/render_state/lighting",
+            "/model_geometry_samples/0/state/render_state/blend/src_rgb",
+            "/model_geometry_samples/0/state/render_state/depth/write",
+            "/model_geometry_samples/0/state/render_state/cull/enabled",
+            "/model_geometry_samples/0/state/render_state/alpha_test/reference",
+            "/model_geometry_samples/0/state/render_state/textures/0/mode",
+            "/model_geometry_samples/0/state/render_state/textures/0/texture",
+        ] {
+            let mut missing = native.clone();
+            *missing.pointer_mut(path).unwrap() = Value::Null;
+            assert!(validate_model_render_state(&missing).is_err(), "accepted missing {path}");
+        }
+        let mut transparent = native.clone();
+        transparent["model_geometry_samples"][0]["state"]["render_state"]["material"]["diffuse"][3] = 0.into();
+        transparent["model_geometry_samples"][0]["state"]["render_state"]["current_color"][3] = 0.into();
+        validate_model_render_state(&transparent).unwrap();
+        assert_ne!(transparent, native, "transparent submission must retain distinct observed alpha");
+        validate_model_render_state(&serde_json::json!({})).unwrap();
     }
 
     #[test]

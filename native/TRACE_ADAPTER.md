@@ -127,3 +127,24 @@ and zero effect magnitude. Existing traces without raw inputs cannot acquire
 this capability by conversion. Recapture with the original song, chart, theme,
 player options, timing and drawable settings, retaining the old trace and its
 archive separately until the new capture has passed replay.
+
+Notefield captures from 0.1.109 require OpenGL Model render-state protocol 1.
+The generated `RageDisplay_OGL.cpp` reads the active context immediately before
+`RageCompiledGeometry::Draw`, after the native Model has selected its material
+and texture pass. `state.render_state` retains the native `SetMaterial` RGBA
+arguments, current GL color, lighting, blend factors/equations, depth function,
+write mask and range, culling, alpha test, and each texture unit's binding and
+environment mode. `textures[].mode` is the actual native `SetTextureMode`
+argument: 0 is Modulate, 1 is Glow, and 2 is Add. Other numeric renderer enums
+are OpenGL constants. A disabled unit may retain an earlier binding/mode; it
+does not claim an active texture. Active resource filenames come from the
+Model's actual texture-handle lookup, including animated texture frames.
+
+The capability explicitly names `opengl`; Actor render-state defaults are not
+substituted for the final backend state. Current color is meaningful for these
+unlit Models; a lit Model instead uses the submitted material and lights.
+Material and current-color components retain the native floating-point values,
+including values above one. Alpha can be zero even when geometry is submitted.
+This observation describes draw inputs, not final pixel coverage or occlusion.
+The native model control exercises separate diffuse/glow passes, a fading
+material, a zero-alpha material, and Model's blend override before glow.

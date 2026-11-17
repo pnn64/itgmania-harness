@@ -1361,7 +1361,19 @@ to notes and receptors. `state.native_draw_sequence` orders actual geometry
 submissions across the sprite and model channels; `actor_draw_sequence` is the
 separate enclosing `Actor::Draw` entry. The input records the selected scope.
 This makes foreground overlap testable without filtering by a particular song
-or actor name. It still does not capture raster output or Model material colors.
+or actor name. It does not capture raster output.
+
+Harness 0.1.109 also records `native_model_render_state_protocol=1`, explicitly
+scoped to the OpenGL backend. Each Model submission's `state.render_state`
+contains native material RGBA, the current unlit color, lighting, actual blend,
+depth, cull and alpha-test state, and bound texture identities. Texture modes
+retain the native enum (0 Modulate, 1 Glow, 2 Add); backend state enums are OpenGL
+constants. The observer reads the backend at the draw, so it includes changes
+made after Actor defaults, such as Model's blend reset before its glow pass.
+These values let a consumer distinguish an opaque draw from the same geometry
+submitted with a transparent material. They do not establish whether a later
+draw occludes it. Older geometry-only traces cannot recover this evidence
+without a fresh capture.
 
 Use `--player-options` to apply native modifiers at every ModsLevel before song
 construction, and `--drawable-from-beat` to bound the rendered observations.
@@ -1376,13 +1388,15 @@ target/debug/itgmania-harness-rs.exe song-lua-trace '7th Gear/7th Gear.ssc' `
   --out target/seventh-notefield-native.json
 ```
 
-This mode requires the v2 geometry adapter and refuses older executables before
-launching them. Headless captures also require the offscreen graphics adapter
+This mode requires the v2 geometry adapter, Model render-state adapter and
+OpenGL backend, and refuses older executables before launching them. Headless
+captures also require the offscreen graphics adapter
 and verify that the window remained hidden. The output retains source,
 executable, observer and raw-trace hashes. Validators reject missing mesh
 references, truncated triangle lists, incomplete draw boundaries and dropped
-observations. A small ignored headless control exercises Cel notes and normal
-and reversed Position-spline holds:
+observations. A small ignored headless control exercises Cel notes, normal
+and reversed Position-spline holds, diffuse/glow passes, a material fading over
+time and a zero-alpha material that still submits geometry:
 
 ```powershell
 cargo test --locked --bin itgmania-harness-rs native_notefield_capture_includes_models_and_position_caps -- --ignored
