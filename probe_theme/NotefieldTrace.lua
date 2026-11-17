@@ -5,6 +5,7 @@ if cfg.stop_lua_gc then collectgarbage('stop') end
 assert(ITGMANIA_HARNESS_MODEL_GEOMETRY_PROTOCOL_V2==2,"native note geometry adapter v2 required")
 assert(ITGMANIA_HARNESS_MODEL_RENDER_STATE_PROTOCOL_V1==1,"native Model render-state adapter v1 required")
 assert(ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1==1,"native receptor geometry adapter v1 required")
+assert(type(ITGMANIA_HARNESS_OPTION_DELTAS)=='function',"native option clock adapter required")
 ITGMANIA_HARNESS_NOTEFIELD_ONLY=not cfg.scene_draws
 ITGMANIA_HARNESS_CAPTURE_FROM_BEAT=cfg.drawable_from_beat or 0
 local models,meshes,strips,model_frames,strip_frames,frames={},{},{},{},{},{}
@@ -36,9 +37,12 @@ local function sample_update()
  if finished or sampled_frame==frame then return end
  sampled_frame=frame
  local beat,seconds,song_beat,visible_seconds=position()
+ -- GameState advances SongOptions and both PlayerOptions before Screen::Update.
+ -- These are the actual ModsGroup timer inputs used by this frame's draws.
  frames[#frames+1]={sequence=#frames+1,scene=scene,native_update_frame=frame,
   delta=delta,beat=beat,seconds=seconds,song_beat=song_beat,
-  visible_beat=beat,visible_seconds=visible_seconds,wall_seconds=GetTimeSinceStart()}
+  visible_beat=beat,visible_seconds=visible_seconds,wall_seconds=GetTimeSinceStart(),
+  option_deltas=ITGMANIA_HARNESS_OPTION_DELTAS()}
 end
 ITGMANIA_HARNESS_MODEL_MESH=function(id,vertices)
  meshes[#meshes+1]={id=id,primitive='triangles',vertices=vertices}
@@ -98,6 +102,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
    native_model_render_state_protocol=ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND()=='opengl' and 1 or nil,
    native_model_render_state_backend=ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND(),
    native_song_position_clocks=true,native_pre_theme_preferences=catalog_preferences~=nil,
+   native_option_clock_deltas=true,
    native_fast_note_rendering=type(fast_note_rendering)=='boolean'},
   capture_limits={max_events=cfg.max_events},runtime_actors=actors,update_frames=frames,
   model_geometry_meshes=meshes,model_geometry_samples=models,model_geometry_frames=model_frames,

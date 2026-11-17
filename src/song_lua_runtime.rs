@@ -264,6 +264,9 @@ fn capture_in(
                 }
             }
             if options.notefield_samples {
+                if document["capabilities"]["native_option_clock_deltas"] != true {
+                    return Err(Error::new("native option approach clock deltas were not recorded"));
+                }
                 if document["capabilities"]["native_model_render_state_protocol"] != 1
                     || document["capabilities"]["native_model_render_state_backend"] != "opengl"
                 { return Err(Error::new("native Model render-state capture requires the observed OpenGL backend")); }
@@ -402,6 +405,7 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "native_receptor_geometry_protocol":1,
         "native_fast_note_rendering":native["capabilities"]["native_fast_note_rendering"],
         "native_song_position_clocks":native["capabilities"]["native_song_position_clocks"],
+        "native_option_clock_deltas":native["capabilities"]["native_option_clock_deltas"],
         "native_pre_theme_preferences":native["capabilities"]["native_pre_theme_preferences"],
         "semantic_event_replay":false,"source_derived_transform_model":false,"raster_output":false,
     }));
@@ -1185,9 +1189,32 @@ fn validate_song_position_clocks(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_option_clock_deltas(document: &Value) -> Result<(), Error> {
+    let capability = &document["capabilities"]["native_option_clock_deltas"];
+    // Retained traces without this capability cannot acquire timer evidence.
+    if capability.is_null() {
+        return Ok(());
+    }
+    let valid_delta = |value: &Value| value.as_f64().is_some_and(|delta|
+        delta.is_finite() && delta >= 0.0 && f64::from(delta as f32) == delta);
+    let frames = document["update_frames"].as_array();
+    if capability != true || !frames.is_some_and(|frames| !frames.is_empty()
+        && frames.iter().all(|frame| {
+            let deltas = &frame["option_deltas"];
+            valid_delta(&deltas["song"])
+                && deltas["players"].as_array().is_some_and(|players|
+                    players.len() == 2 && players.iter().all(valid_delta))
+        }))
+    {
+        return Err(Error::new("native option approach clocks require a finite nonnegative f32 delta for song and both players on every frame"));
+    }
+    Ok(())
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
     validate_fast_note_rendering(document)?;
     validate_song_position_clocks(document)?;
+    validate_option_clock_deltas(document)?;
     validate_render_random_inputs(document)?;
     if document["input"]["notefield_samples"] == true {
         validate_notefield_geometry(document)?;
@@ -2302,6 +2329,8 @@ Bones: 0
         assert_eq!(document["input"]["window_visible"], false);
         assert_eq!(document["capabilities"]["native_fast_note_rendering"], true);
         assert_eq!(document["capabilities"]["native_song_position_clocks"], true);
+        assert_eq!(document["capabilities"]["native_option_clock_deltas"], true);
+        validate_option_clock_deltas(&document).unwrap();
         let clock = document["update_frames"].as_array().unwrap().iter()
             .find(|frame| frame["seconds"].as_f64().unwrap() > 1.0).unwrap();
         assert!((clock["seconds"].as_f64().unwrap() - clock["visible_seconds"].as_f64().unwrap() - 0.125).abs() < 1e-6);
@@ -3121,6 +3150,42 @@ Bones: 0
         native_default["input"]["fast_note_rendering_at_end"] = Value::Bool(false);
         validate_fast_note_rendering(&native_default).unwrap();
         validate_fast_note_rendering(&serde_json::json!({})).unwrap();
+    }
+
+    #[test]
+    fn native_option_clock_deltas_survive_export_without_screen_delta_substitution() {
+        let frames = serde_json::json!([
+            {"sequence":1,"delta":0.125,"option_deltas":{"song":0.008_f32,
+                "players":[0.009_f32,0.010_f32]}},
+            {"sequence":2,"delta":0.25,"option_deltas":{"song":0.0,
+                "players":[0.011_f32,0.012_f32]}}
+        ]);
+        let native = serde_json::json!({"capabilities":{"native_option_clock_deltas":true},
+            "update_frames":frames});
+        validate_option_clock_deltas(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_option_clock_deltas"], true);
+        assert_eq!(exported["update_frames"], native["update_frames"]);
+        validate_option_clock_deltas(&exported).unwrap();
+
+        for (pointer, value) in [
+            ("/update_frames", serde_json::json!([])),
+            ("/update_frames/0/option_deltas", Value::Null),
+            ("/update_frames/1/option_deltas/song", Value::Null),
+            ("/update_frames/1/option_deltas/song", serde_json::json!(-0.1_f32)),
+            ("/update_frames/1/option_deltas/song", serde_json::json!(0.1_f64)),
+            ("/update_frames/1/option_deltas/players", serde_json::json!([0.01_f32])),
+            ("/update_frames/1/option_deltas/players", serde_json::json!([0.01_f32,0.01_f32,0.01_f32])),
+            ("/update_frames/1/option_deltas/players/0", serde_json::json!("0.01")),
+            ("/update_frames/1/option_deltas/players/1", serde_json::json!(-0.01_f32)),
+        ] {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_option_clock_deltas(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
+        assert!(legacy["capabilities"]["native_option_clock_deltas"].is_null());
+        validate_option_clock_deltas(&legacy).unwrap();
     }
 
     #[test]

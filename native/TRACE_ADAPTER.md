@@ -148,3 +148,15 @@ including values above one. Alpha can be zero even when geometry is submitted.
 This observation describes draw inputs, not final pixel coverage or occlusion.
 The native model control exercises separate diffuse/glow passes, a fading
 material, a zero-alpha material, and Model's blend override before glow.
+
+Notefield captures from 0.1.110 also require `native_option_clock_deltas`.
+Every `update_frames` entry retains `option_deltas = {song, players: [P1, P2]}`
+from the existing native `SongOptions::Approach` and `PlayerOptions::Approach`
+observer. These are the exact nonnegative f32 inputs supplied by each
+`ModsGroup`'s own `RageTimer`, not the Screen update delta or a music-clock
+difference. `GameState::Update` advances SongOptions and both PlayerStates
+before Screen updates, so the gameplay overlay samples the values already
+used by that frame's geometry. The observer does not read or reset those
+timers. Export preserves all three inputs independently and rejects missing,
+malformed, or non-f32 tuples when the capability is claimed. Retained older
+traces keep their absent capability and must be recaptured for this evidence.
