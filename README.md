@@ -327,6 +327,19 @@ compiled `Actor`, `ActorFrame`, `Sprite`, tween, effect, matrix, and display
 base code. It is entirely in-process and headless: it does not launch an
 ITGmania executable, create a window, or modify the ITGmania source tree.
 
+`fixtures/actors/sprite-movie-clock.json` also exercises the compiled native
+`Sprite::Update` with a recording `RageTexture`. It retains every movie-update
+delta and seek call across animation pause/resume, queued commands, decode
+gating, visibility, music effect clocks, parent update rates and hibernation.
+The output preserves the input schedule and native source provenance. It
+observes the clock passed to a movie decoder; it does not decode video or
+establish frame timestamp or pixel equality. In particular, the native
+Sprite's own hibernation retains its prior effect delta, whereas hibernating
+its parent prevents the child update altogether. Seek records are requested
+`RageTexture::SetPosition` calls; the actual `MovieTexture_Generic` decoder
+accepts only zero (rewind) and ignores nonzero positions. Consumers that derive
+an effective playback clock must preserve that distinction.
+
 ```powershell
 .\target\debug\itgmania-harness-rs.exe actor-conformance `
   fixtures\actors\transform-projection.json `

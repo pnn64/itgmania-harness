@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "name": "sprite-movie-clock",
+  "movie_clock": true,
+  "cases": [
+    {
+      "name": "pause-resume-decode-and-seek",
+      "animate": false,
+      "updates": [
+        {"delta": 1},
+        {"delta": 1, "animate": true},
+        {"delta": 0.25},
+        {"delta": 5, "animate": false},
+        {"delta": 2, "animate": true},
+        {"delta": 0.5},
+        {"delta": 0.25, "decode": false},
+        {"delta": 0.5, "decode": true},
+        {"delta": 0.25, "visible": false},
+        {"delta": 0.25, "visible": true},
+        {"delta": 0, "seek": 2},
+        {"delta": 0, "texture_seek": 3},
+        {"delta": 0.25, "texture_rate": 0.5},
+        {"delta": 0.25, "texture_looping": false},
+        {"delta": 0, "seek": 0},
+        {"delta": 0.25},
+        {"delta": 0, "texture_seek": 0},
+        {"delta": 0.25}
+      ]
+    },
+    {
+      "name": "music-clock-and-negative-delta",
+      "clock": "bgm_time",
+      "updates": [
+        {"delta": 0.25, "music_seconds": 3},
+        {"delta": 0.25, "music_seconds": 3.5},
+        {"delta": 0.25, "music_seconds": 3.25},
+        {"delta": 0.25, "music_seconds": 3.25},
+        {"delta": 0.25, "music_seconds": 3.75}
+      ]
+    },
+    {
+      "name": "parent-rate-and-hibernation",
+      "updates": [
+        {"delta": 0, "parent_rate": 2},
+        {"delta": 0.125},
+        {"delta": 1, "parent_hibernate": 2},
+        {"delta": 0.5},
+        {"delta": 0.75},
+        {"delta": 0.125}
+      ]
+    },
+    {
+      "name": "sprite-hibernation",
+      "updates": [
+        {"delta": 0},
+        {"delta": 0.25},
+        {"delta": 0.5, "hibernate": 2},
+        {"delta": 0.5},
+        {"delta": 1.25},
+        {"delta": 0.125}
+      ]
+    },
+    {
+      "name": "queued-animation-command",
+      "animate": false,
+      "updates": [
+        {"delta": 0, "queued_animate": {"after": 0.5, "value": true}},
+        {"delta": 0.25},
+        {"delta": 0.5},
+        {"delta": 0.25},
+        {"delta": 0.25, "queued_animate": {"value": false}},
+        {"delta": 0.25},
+        {"delta": 0.25, "queued_animate": {"value": true}},
+        {"delta": 0.125}
+      ]
+    }
+  ]
+}

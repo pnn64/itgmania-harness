@@ -70,6 +70,13 @@ fn executes_native_actor_commands() {
 }
 
 #[test]
+fn approaches_speed_mode_fields_independently() {
+    let output = run_fixture("speed-mode-approach.json");
+    assert_eq!(output["script_errors"], serde_json::json!([]));
+    assert_eq!(output["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
 fn recovers_after_native_command_errors() {
     let output = run_fixture("native-command-error.json");
     let errors = output["script_errors"].as_array().expect("native command errors");
@@ -132,6 +139,62 @@ fn model_uvs_honor_native_vertex_texture_flags() {
             }
         }
     }
+}
+
+#[test]
+fn captures_native_sprite_movie_clock() {
+    let output = run_fixture("sprite-movie-clock.json");
+    assert_eq!(output["oracle"], "itgmania_native_sprite_movie_clock");
+    let cases = output["cases"].as_array().unwrap();
+    let case = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+    let updates = |name: &str| {
+        case(name)["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|sample| {
+                sample["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| event["method"] == "update")
+                    .map(|event| event["value"].as_f64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        updates("pause-resume-decode-and-seek"),
+        vec![vec![], vec![], vec![0.25], vec![], vec![], vec![0.5],
+             vec![], vec![0.5], vec![0.25], vec![0.25], vec![0.0],
+             vec![0.0], vec![0.25], vec![0.25], vec![0.0],
+             vec![0.25], vec![0.0], vec![0.25]],
+        "resume discards the elapsed interval, decoding can pause independently, visibility does not pause"
+    );
+    let samples = case("pause-resume-decode-and-seek")["updates"].as_array().unwrap();
+    for (index, seconds) in [(10, 2.0), (11, 3.0), (14, 0.0), (16, 0.0)] {
+        assert_eq!(samples[index]["events"][0], serde_json::json!({"method":"seek", "value":seconds}));
+    }
+    assert_eq!(
+        updates("music-clock-and-negative-delta"),
+        vec![vec![], vec![0.5], vec![0.0], vec![0.0], vec![0.5]],
+        "movie updates follow the effect clock and clamp negative deltas"
+    );
+    assert_eq!(
+        updates("parent-rate-and-hibernation"),
+        vec![vec![], vec![0.25], vec![], vec![], vec![0.5], vec![0.25]],
+        "parent hibernation prevents child updates; parent rate scales the remaining delta"
+    );
+    assert_eq!(
+        updates("sprite-hibernation"),
+        vec![vec![], vec![0.25], vec![0.25], vec![0.25], vec![0.25], vec![0.125]],
+        "Sprite::Update continues after its Actor base hibernates and retains the prior effect delta"
+    );
+    assert_eq!(
+        updates("queued-animation-command"),
+        vec![vec![], vec![], vec![], vec![0.25], vec![], vec![], vec![], vec![0.125]],
+        "animation changes during native UpdateTweening apply to that frame's movie update"
+    );
 }
 
 #[test]

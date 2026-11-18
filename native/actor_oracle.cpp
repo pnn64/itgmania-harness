@@ -1528,6 +1528,128 @@ Json::Value evaluate_texture(const Json::Value& request) {
   return result;
 }
 
+// Observe the calls made by the unmodified native Sprite, independently of a
+// decoder and its frame scheduling. This records the movie clock contract; it
+// does not claim video decoding, presentation timestamps or pixel conformance.
+class RecordingMovieTexture final : public RageTexture {
+ public:
+  RecordingMovieTexture() : RageTexture(RageTextureID("__harness_movie__.mpg")) {
+    m_iSourceWidth = m_iSourceHeight = 64;
+    m_iImageWidth = m_iImageHeight = 64;
+    m_iTextureWidth = m_iTextureHeight = 64;
+    CreateFrameRects();
+  }
+  uintptr_t GetTexHandle() const override { return 0; }
+  bool IsAMovie() const override { return true; }
+  void UpdateMovie(float seconds) override { record("update", seconds); }
+  void SetPosition(float seconds) override { record("seek", seconds); }
+  void SetPlaybackRate(float rate) override { record("rate", rate); }
+  void SetLooping(bool looping) override { record("loop", looping); }
+  Json::Value take_events() {
+    Json::Value events(Json::arrayValue);
+    events.swap(events_);
+    return events;
+  }
+ private:
+  void record(const char* method, Json::Value value) {
+    Json::Value event(Json::objectValue);
+    event["method"] = method;
+    event["value"] = std::move(value);
+    events_.append(std::move(event));
+  }
+  Json::Value events_{Json::arrayValue};
+};
+
+class MovieClockSprite final : public Sprite {
+ public:
+  float effect_delta() const { return GetEffectDeltaTime(); }
+  void HandleMessage(const Message& message) override {
+    if (message.GetName() == "HarnessResumeMovie") EnableAnimation(true);
+    else if (message.GetName() == "HarnessPauseMovie") EnableAnimation(false);
+    else Sprite::HandleMessage(message);
+  }
+};
+
+Json::Value evaluate_movie_clock(const Json::Value& request) {
+  if (request["movie_clock"] != true)
+    throw std::runtime_error("movie_clock must be true");
+  const auto& cases = request["cases"];
+  if (!cases.isArray() || cases.empty())
+    throw std::runtime_error("movie clock cases must be a non-empty array");
+  Json::Value result(Json::objectValue);
+  result["schema_version"] = 1;
+  result["oracle"] = "itgmania_native_sprite_movie_clock";
+  result["fixture"] = request["name"];
+  result["observation"] = "native Sprite calls into a recording RageTexture; no decoder";
+  result["cases"] = Json::Value(Json::arrayValue);
+  for (const auto& spec : cases) {
+    if (!spec.isObject() || !spec["updates"].isArray() || spec["updates"].empty())
+      throw std::runtime_error("movie clock case requires a non-empty updates array");
+    ActorFrame parent;
+    parent.DeleteChildrenWhenDone(true);
+    auto* sprite = new MovieClockSprite;
+    parent.AddChild(sprite);
+    auto texture_owner = std::make_unique<RecordingMovieTexture>();
+    auto* texture = texture_owner.get();
+    sprite->SetTexture(texture);
+    texture_owner.release(); // Sprite::UnloadTexture owns the initial reference.
+    sprite->m_DecodeMovie = true;
+    sprite->EnableAnimation(field_bool(spec, "animate", true, "case"));
+    sprite->SetEffectClock(parse_clock(field_string(spec, "clock", "timer", "case"), "case"));
+    Json::Value output = spec;
+    output["name"] = field_string(spec, "name", "", "case");
+    output["updates"] = Json::Value(Json::arrayValue);
+    float elapsed = 0;
+    for (const auto& update : spec["updates"]) {
+      if (!update.isObject()) throw std::runtime_error("movie clock update must be an object");
+      const float delta = number(update["delta"], "update.delta");
+      if (delta < 0) throw std::runtime_error("update.delta must be non-negative");
+      elapsed += delta;
+      const float music = field_number(update, "music_seconds", elapsed, "update");
+      const float beat = field_number(update, "beat", music * 2, "update");
+      Actor::SetBGMTime(music, beat, music, beat);
+      Actor::SetPlayerBGMBeat(PLAYER_1, beat, beat);
+      Actor::SetPlayerBGMBeat(PLAYER_2, beat, beat);
+      if (update.isMember("animate"))
+        sprite->EnableAnimation(field_bool(update, "animate", true, "update"));
+      if (update.isMember("decode"))
+        sprite->m_DecodeMovie = field_bool(update, "decode", true, "update");
+      if (update.isMember("visible"))
+        sprite->SetVisible(field_bool(update, "visible", true, "update"));
+      if (update.isMember("seek"))
+        sprite->SetSecondsIntoAnimation(number(update["seek"], "update.seek"));
+      if (update.isMember("texture_seek"))
+        sprite->GetTexture()->SetPosition(number(update["texture_seek"], "update.texture_seek"));
+      if (update.isMember("texture_rate"))
+        sprite->GetTexture()->SetPlaybackRate(number(update["texture_rate"], "update.texture_rate"));
+      if (update.isMember("texture_looping"))
+        sprite->GetTexture()->SetLooping(field_bool(update, "texture_looping", true, "update"));
+      if (update.isMember("hibernate"))
+        sprite->SetHibernate(number(update["hibernate"], "update.hibernate"));
+      if (update.isMember("parent_hibernate"))
+        parent.SetHibernate(number(update["parent_hibernate"], "update.parent_hibernate"));
+      if (update.isMember("parent_rate"))
+        parent.SetUpdateRate(number(update["parent_rate"], "update.parent_rate"));
+      if (update.isMember("queued_animate")) {
+        const auto& command = update["queued_animate"];
+        const float delay = field_number(command, "after", 0, "queued_animate");
+        if (delay < 0) throw std::runtime_error("queued_animate.after must be non-negative");
+        sprite->BeginTweening(delay, TWEEN_LINEAR);
+        sprite->QueueCommand(field_bool(command, "value", true, "queued_animate")
+            ? "HarnessResumeMovie" : "HarnessPauseMovie");
+      }
+      parent.Update(delta);
+      Json::Value sample = update;
+      sample["elapsed"] = elapsed;
+      sample["effect_delta"] = sprite->effect_delta();
+      sample["events"] = texture->take_events();
+      output["updates"].append(std::move(sample));
+    }
+    result["cases"].append(std::move(output));
+  }
+  return result;
+}
+
 Json::Value spline_samples(const Json::Value& fixtures) {
   Json::Value out(Json::arrayValue);
   for (const auto& fixture : fixtures) {
@@ -1648,6 +1770,7 @@ Json::Value evaluate(const Json::Value& request) {
   if (request.isMember("aft_creation") || request.isMember("lua_assertions"))
     return evaluate_lua_assertions(request);
   if (request.isMember("animated_texture")) return evaluate_texture(request);
+  if (request.isMember("movie_clock")) return evaluate_movie_clock(request);
   if (request.isMember("texture_surface")) return evaluate_surface(request);
   if (request.isMember("texture_files")) return evaluate_bitmap(request);
   if (request.isMember("texture_headers")) return evaluate_headers(request);
