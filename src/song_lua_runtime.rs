@@ -380,6 +380,7 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "runtime_actors",
         "actor_definitions",
         "update_frames",
+        "player_actor_position_samples",
         "model_geometry_meshes",
         "model_geometry_samples",
         "model_geometry_frames",
@@ -406,6 +407,9 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "native_fast_note_rendering":native["capabilities"]["native_fast_note_rendering"],
         "native_song_position_clocks":native["capabilities"]["native_song_position_clocks"],
         "native_option_clock_deltas":native["capabilities"]["native_option_clock_deltas"],
+        "native_arrow_update_clocks":native["capabilities"]["native_arrow_update_clocks"],
+        "native_player_actor_positions":native["capabilities"]["native_player_actor_positions"],
+        "native_player_current_options":native["capabilities"]["native_player_current_options"],
         "native_pre_theme_preferences":native["capabilities"]["native_pre_theme_preferences"],
         "semantic_event_replay":false,"source_derived_transform_model":false,"raster_output":false,
     }));
@@ -1211,10 +1215,124 @@ fn validate_option_clock_deltas(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_arrow_update_clocks(document: &Value) -> Result<(), Error> {
+    let capability = &document["capabilities"]["native_arrow_update_clocks"];
+    if capability.is_null() { return Ok(()); }
+    let invalid = || Error::new("native ArrowEffects cache clocks are missing or malformed");
+    let frames = document["update_frames"].as_array().ok_or_else(invalid)?;
+    if capability != true || frames.is_empty() { return Err(invalid()); }
+    let valid_time = |value: &Value| value.as_f64()
+        .is_some_and(|time| time.is_finite() && time >= 0.0);
+    for frame in frames {
+        let clocks = &frame["arrow_clock_inputs"];
+        // Screen construction may produce a preroll sample before its first
+        // ArrowEffects::Update. Active frames must have their own cache input.
+        if clocks.is_null() && frame["song_beat"].as_f64().is_some_and(|beat| beat < 0.0) {
+            continue;
+        }
+        if !valid_time(&clocks["update_seconds"])
+            || !clocks["players"].as_array().is_some_and(|players| players.len() == 2
+                && players.iter().all(|player| {
+                    // JsonEncode may encode a native empty Lua table as [].
+                    (player.is_object() || player.as_array().is_some_and(Vec::is_empty))
+                        && ["tipsy_seconds", "tan_tipsy_seconds"].into_iter()
+                            .all(|key| player[key].is_null() || valid_time(&player[key]))
+                }))
+        { return Err(invalid()); }
+    }
+    Ok(())
+}
+
+fn validate_player_actor_positions(document: &Value) -> Result<(), Error> {
+    let capability = &document["capabilities"]["native_player_actor_positions"];
+    if capability.is_null() { return Ok(()); }
+    let invalid = || Error::new("native Player current positions or their frame associations are incomplete");
+    if capability != true { return Err(invalid()); }
+    let updates = document["update_frames"].as_array().ok_or_else(invalid)?;
+    let draws = document["model_geometry_frames"].as_array().ok_or_else(invalid)?;
+    let samples = document["player_actor_position_samples"].as_array().ok_or_else(invalid)?;
+    let enabled = document["input"]["players"].as_array().ok_or_else(invalid)?;
+    let mut expected = enabled.iter().map(|player| match player["player"].as_str() {
+        Some("PlayerNumber_P1") => Ok(0u64),
+        Some("PlayerNumber_P2") => Ok(1u64),
+        _ => Err(invalid()),
+    }).collect::<Result<Vec<_>, _>>()?;
+    expected.sort_unstable();
+    if expected.is_empty() || expected.len() > 2
+        || expected.windows(2).any(|pair| pair[0] == pair[1])
+        || samples.is_empty() || samples.len() != draws.len()
+    { return Err(invalid()); }
+    for (sample, draw) in samples.iter().zip(draws) {
+        let at = sample["update_sequence"].as_u64().unwrap_or(0);
+        if at == 0 || at > updates.len() as u64 || sample["update_sequence"] != draw["update_sequence"] {
+            return Err(invalid());
+        }
+        let update = &updates[at as usize - 1];
+        if sample["scene"] != update["scene"]
+            || sample["native_update_frame"] != update["native_update_frame"]
+            || sample["native_update_frame"].as_u64().is_none()
+        { return Err(invalid()); }
+        let players = sample["players"].as_array().ok_or_else(invalid)?;
+        let mut observed = Vec::with_capacity(players.len());
+        for player in players {
+            let index = player["player"].as_u64().ok_or_else(invalid)?;
+            if index > 1 || player["name"].as_str() != Some(format!("PlayerP{}", index + 1).as_str())
+                || !["x", "y", "z"].into_iter().all(|key| player[key].as_f64()
+                    .is_some_and(|value| value.is_finite() && f64::from(value as f32) == value))
+            { return Err(invalid()); }
+            observed.push(index);
+        }
+        observed.sort_unstable();
+        if observed != expected { return Err(invalid()); }
+    }
+    Ok(())
+}
+
+fn validate_player_current_options(document: &Value) -> Result<(), Error> {
+    let capability = &document["capabilities"]["native_player_current_options"];
+    if capability.is_null() {
+        return Ok(());
+    }
+    let invalid = || Error::new("native Player Current options or raw perspective getters are incomplete");
+    if capability != true || document["capabilities"]["native_player_actor_positions"] != true {
+        return Err(invalid());
+    }
+    validate_player_actor_positions(document)?;
+    let native_float = |value: &Value| value.as_f64()
+        .is_some_and(|value| value.is_finite() && f64::from(value as f32) == value);
+    let approach_speed = |value: &Value| native_float(value)
+        && value.as_f64().is_some_and(|speed| speed >= 0.0);
+    for sample in document["player_actor_position_samples"].as_array().ok_or_else(invalid)? {
+        for player in sample["players"].as_array().ok_or_else(invalid)? {
+            let options = &player["current_options"];
+            for key in ["perspective_tilt", "skew", "mini", "brake", "drunk", "tipsy"] {
+                if !native_float(&options[key]) || !approach_speed(&options["approach_speeds"][key]) {
+                    return Err(invalid());
+                }
+            }
+            for method in ["Hallway", "Distant", "Incoming", "Space"] {
+                let getter = &options["perspective_getters"][method];
+                let valid = match getter["present"].as_bool() {
+                    Some(true) => native_float(&getter["value"]) && approach_speed(&getter["approach_speed"]),
+                    Some(false) => getter["value"].is_null() && getter["approach_speed"].is_null(),
+                    None => false,
+                };
+                if !valid {
+                    return Err(invalid());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
     validate_fast_note_rendering(document)?;
     validate_song_position_clocks(document)?;
     validate_option_clock_deltas(document)?;
+    validate_arrow_update_clocks(document)?;
+    validate_player_actor_positions(document)?;
+    validate_player_current_options(document)?;
     validate_render_random_inputs(document)?;
     if document["input"]["notefield_samples"] == true {
         validate_notefield_geometry(document)?;
@@ -3186,6 +3304,127 @@ Bones: 0
         let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
         assert!(legacy["capabilities"]["native_option_clock_deltas"].is_null());
         validate_option_clock_deltas(&legacy).unwrap();
+    }
+
+    #[test]
+    fn native_arrow_cache_clocks_preserve_independent_double_inputs() {
+        let native = serde_json::json!({
+            "capabilities":{"native_arrow_update_clocks":true},
+            "update_frames":[
+                {"sequence":1,"native_update_frame":2,"song_beat":-1.0},
+                {"sequence":2,"native_update_frame":3,"song_beat":0.0,
+                 "wall_seconds":17.0,"delta":0.5,
+                 "arrow_clock_inputs":{"update_seconds":17.125000001,
+                    "players":[{"tipsy_seconds":17.125000002,"tan_tipsy_seconds":17.125000003},
+                        {"tipsy_seconds":17.125000004,"tan_tipsy_seconds":17.125000005}]}}
+            ]
+        });
+        validate_arrow_update_clocks(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_arrow_update_clocks"], true);
+        assert_eq!(exported["update_frames"], native["update_frames"]);
+        validate_arrow_update_clocks(&exported).unwrap();
+        for (pointer, value) in [
+            ("/update_frames", serde_json::json!([])),
+            ("/update_frames/1/arrow_clock_inputs", Value::Null),
+            ("/update_frames/1/arrow_clock_inputs/update_seconds", serde_json::json!(-1.0)),
+            ("/update_frames/1/arrow_clock_inputs/players", serde_json::json!([{}])),
+            ("/update_frames/1/arrow_clock_inputs/players/0", serde_json::json!(7)),
+            ("/update_frames/1/arrow_clock_inputs/players/1/tipsy_seconds", serde_json::json!("17")),
+            ("/update_frames/1/arrow_clock_inputs/players/1/tan_tipsy_seconds", serde_json::json!(-1.0)),
+        ] {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_arrow_update_clocks(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let mut inactive = native.clone();
+        inactive["update_frames"][1]["arrow_clock_inputs"]["players"] = serde_json::json!([{}, []]);
+        validate_arrow_update_clocks(&inactive).unwrap();
+        let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
+        assert!(legacy["capabilities"]["native_arrow_update_clocks"].is_null());
+        validate_arrow_update_clocks(&legacy).unwrap();
+    }
+
+    #[test]
+    fn native_player_current_positions_keep_player_and_draw_frame_identity() {
+        let native = serde_json::json!({
+            "capabilities":{"native_player_actor_positions":true},
+            "input":{"players":[{"player":"PlayerNumber_P1"},{"player":"PlayerNumber_P2"}]},
+            "update_frames":[{"sequence":1,"scene":1,"native_update_frame":7}],
+            "model_geometry_frames":[{"scene":1,"update_sequence":1,"samples":0}],
+            "player_actor_position_samples":[{"scene":1,"update_sequence":1,"native_update_frame":7,
+                "players":[{"player":0,"name":"PlayerP1","x":107.0,"y":240.0,"z":0.0},
+                    {"player":1,"name":"PlayerP2","x":747.0,"y":240.0,"z":0.0}]}]
+        });
+        validate_player_actor_positions(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_player_actor_positions"], true);
+        assert_eq!(exported["player_actor_position_samples"], native["player_actor_position_samples"]);
+        validate_player_actor_positions(&exported).unwrap();
+        for (pointer, value) in [
+            ("/player_actor_position_samples", serde_json::json!([])),
+            ("/player_actor_position_samples/0/update_sequence", serde_json::json!(2)),
+            ("/player_actor_position_samples/0/native_update_frame", serde_json::json!(6)),
+            ("/player_actor_position_samples/0/players/1/player", serde_json::json!(0)),
+            ("/player_actor_position_samples/0/players/1/name", serde_json::json!("PlayerP1")),
+            ("/player_actor_position_samples/0/players/1/x", serde_json::json!(0.1_f64)),
+            ("/player_actor_position_samples/0/players/1/y", Value::Null),
+        ] {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_player_actor_positions(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
+        assert!(legacy["capabilities"]["native_player_actor_positions"].is_null());
+        validate_player_actor_positions(&legacy).unwrap();
+    }
+
+    #[test]
+    fn native_player_current_options_keep_canonical_values_and_nullable_getters() {
+        let options = serde_json::json!({
+            "perspective_tilt":-2.0,"skew":0.0,"mini":-0.125,"brake":1.0,"drunk":0.0,"tipsy":0.0,
+            "approach_speeds":{"perspective_tilt":20.0,"skew":20.0,"mini":4.0,
+                "brake":1.0,"drunk":1.0,"tipsy":1.0},
+            "perspective_getters":{
+                "Hallway":{"present":true,"value":2.0,"approach_speed":20.0},
+                "Distant":{"present":false},"Incoming":{"present":false},"Space":{"present":false}}
+        });
+        let mut other = options.clone();
+        other["perspective_tilt"] = serde_json::json!(-0.5);
+        other["skew"] = serde_json::json!(-0.5);
+        other["perspective_getters"]["Hallway"] = serde_json::json!({"present":false});
+        other["perspective_getters"]["Space"] = serde_json::json!({"present":true,"value":-0.5,"approach_speed":20.0});
+        let native = serde_json::json!({
+            "capabilities":{"native_player_actor_positions":true,"native_player_current_options":true},
+            "input":{"players":[{"player":"PlayerNumber_P1"},{"player":"PlayerNumber_P2"}]},
+            "update_frames":[{"sequence":1,"scene":1,"native_update_frame":7}],
+            "model_geometry_frames":[{"scene":1,"update_sequence":1,"samples":0}],
+            "player_actor_position_samples":[{"scene":1,"update_sequence":1,"native_update_frame":7,
+                "players":[{"player":0,"name":"PlayerP1","x":107.0,"y":240.0,"z":0.0,"current_options":options},
+                    {"player":1,"name":"PlayerP2","x":747.0,"y":240.0,"z":0.0,"current_options":other}]}]
+        });
+        validate_player_current_options(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_player_current_options"], true);
+        assert_eq!(exported["player_actor_position_samples"], native["player_actor_position_samples"]);
+        validate_player_current_options(&exported).unwrap();
+        for (pointer, value) in [
+            ("/capabilities/native_player_actor_positions", serde_json::json!(false)),
+            ("/player_actor_position_samples/0/native_update_frame", serde_json::json!(6)),
+            ("/player_actor_position_samples/0/players/0/current_options/perspective_tilt", Value::Null),
+            ("/player_actor_position_samples/0/players/0/current_options/mini", serde_json::json!(0.1_f64)),
+            ("/player_actor_position_samples/0/players/0/current_options/approach_speeds/skew", serde_json::json!(-1)),
+            ("/player_actor_position_samples/0/players/0/current_options/perspective_getters/Hallway/present", serde_json::json!(false)),
+            ("/player_actor_position_samples/0/players/0/current_options/perspective_getters/Hallway/approach_speed", Value::Null),
+            ("/player_actor_position_samples/0/players/0/current_options/perspective_getters/Distant/present", Value::Null),
+        ] {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_player_current_options(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
+        assert!(legacy["capabilities"]["native_player_current_options"].is_null());
+        validate_player_current_options(&legacy).unwrap();
     }
 
     #[test]

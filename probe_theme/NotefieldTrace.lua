@@ -10,14 +10,32 @@ ITGMANIA_HARNESS_NOTEFIELD_ONLY=not cfg.scene_draws
 ITGMANIA_HARNESS_CAPTURE_FROM_BEAT=cfg.drawable_from_beat or 0
 local models,meshes,strips,model_frames,strip_frames,frames={},{},{},{},{},{}
 local receptor_visits,receptor_frames={},{}
+local player_positions={}
 local actor_ids,actors=setmetatable({},{__mode='k'}),{}
 local scene,frame,sampled_frame=0,0,-1
+local arrow_frame,arrow_inputs=-1,nil
 local delta,pending,finished=0,nil,false
 local inputs={}
 local input_preferences,catalog_preferences=nil,nil
 local fast_note_rendering=nil
 local dropped_models,dropped_strips=0,0
 local dropped_receptors=0
+local current_option_methods={perspective_tilt='Tilt',skew='Skew',mini='Mini',brake='Brake',drunk='Drunk',tipsy='Tipsy'}
+local function current_options(player)
+ local options=GAMESTATE:GetPlayerState(player):GetPlayerOptions('ModsLevel_Current')
+ local result={approach_speeds={},perspective_getters={}}
+ for key,method in pairs(current_option_methods) do
+  -- No arguments: FLOAT_INTERFACE returns its current value and approach speed.
+  local value,speed=options[method](options)
+  result[key]=value;result.approach_speeds[key]=speed
+ end
+ for _,method in ipairs({'Hallway','Distant','Incoming','Space'}) do
+  -- These aliases may return nil,nil even for a nonzero canonical Tilt/Skew.
+  local value,speed=options[method](options)
+  result.perspective_getters[method]={present=value~=nil,value=value,approach_speed=speed}
+ end
+ return result
+end
 local function actor_id(actor)
  local id=actor_ids[actor]
  if not id then id='native-'..tostring(#actors+1);actor_ids[actor]=id;actors[#actors+1]={id=id,name=actor:GetName()} end
@@ -42,7 +60,16 @@ local function sample_update()
  frames[#frames+1]={sequence=#frames+1,scene=scene,native_update_frame=frame,
   delta=delta,beat=beat,seconds=seconds,song_beat=song_beat,
   visible_beat=beat,visible_seconds=visible_seconds,wall_seconds=GetTimeSinceStart(),
-  option_deltas=ITGMANIA_HARNESS_OPTION_DELTAS()}
+  option_deltas=ITGMANIA_HARNESS_OPTION_DELTAS(),
+  arrow_clock_inputs=arrow_frame==frame and arrow_inputs or nil}
+end
+-- The overlay normally samples before ScreenGameplay's final ArrowEffects
+-- update; after-draw sampling is also supported. Never attach a prior frame's
+-- cache inputs or replace the observed clocks with an observer timer read.
+ITGMANIA_HARNESS_AFTER_ARROW_UPDATE=function(inputs)
+ if finished or scene==0 then return end
+ arrow_frame,arrow_inputs=frame,inputs
+ if sampled_frame==frame then frames[#frames].arrow_clock_inputs=inputs end
 end
 ITGMANIA_HARNESS_MODEL_MESH=function(id,vertices)
  meshes[#meshes+1]={id=id,primitive='triangles',vertices=vertices}
@@ -68,12 +95,26 @@ ITGMANIA_HARNESS_RECEPTOR_VISIT=function(actor,state)
 end
 ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE=function(dt)
  frame=frame+1;delta=dt
+ arrow_frame,arrow_inputs=-1,nil
  if scene>0 and cfg.capture_frame_period_seconds then ITGMANIA_HARNESS_PACE_CAPTURE(cfg.capture_frame_period_seconds) end
 end
 ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
  if finished or scene==0 then return end
  sample_update()
  if capture_now() then
+  local screen=SCREENMAN:GetTopScreen()
+  local positions={}
+  for _,player in ipairs(GAMESTATE:GetEnabledPlayers()) do
+   local index=player==PLAYER_1 and 0 or 1
+   local name='PlayerP'..tostring(index+1)
+   local actor=assert(screen:GetChild(name),'native Player actor missing')
+   -- GetX/Y/Z read Actor::m_current.pos. GetZoom reads DestTweenState and is
+   -- deliberately excluded from this current-position observation.
+   positions[#positions+1]={player=index,name=name,x=actor:GetX(),y=actor:GetY(),z=actor:GetZ(),
+    current_options=current_options(player)}
+  end
+  player_positions[#player_positions+1]={scene=scene,update_sequence=#frames,
+   native_update_frame=frame,players=positions}
   model_frames[#model_frames+1]={scene=scene,update_sequence=#frames,samples=#models}
   strip_frames[#strip_frames+1]={scene=scene,update_sequence=#frames,samples=#strips}
   receptor_frames[#receptor_frames+1]={scene=scene,update_sequence=#frames,samples=#receptor_visits}
@@ -103,8 +144,12 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
    native_model_render_state_backend=ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND(),
    native_song_position_clocks=true,native_pre_theme_preferences=catalog_preferences~=nil,
    native_option_clock_deltas=true,
+   native_arrow_update_clocks=type(ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE)=='function',
+   native_player_actor_positions=true,
+   native_player_current_options=true,
    native_fast_note_rendering=type(fast_note_rendering)=='boolean'},
   capture_limits={max_events=cfg.max_events},runtime_actors=actors,update_frames=frames,
+  player_actor_position_samples=player_positions,
   model_geometry_meshes=meshes,model_geometry_samples=models,model_geometry_frames=model_frames,
   drawable_samples=strips,drawable_frames=strip_frames,
   receptor_visits=receptor_visits,receptor_frames=receptor_frames,dropped_receptor_visits=dropped_receptors,
