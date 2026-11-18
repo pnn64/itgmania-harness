@@ -2,11 +2,32 @@
 #include "LuaManager.h"
 #include "Actor.h"
 #include "XmlFile.h"
-#ifdef _WIN32
 #include <cstdlib>
+#ifdef _WIN32
 #include "archutils/Win32/GraphicsWindow.h"
 static int trace_headless_window_visible(lua_State* L) {
   lua_pushboolean(L, GraphicsWindow::GetHwnd() && IsWindowVisible(GraphicsWindow::GetHwnd()));
+  return 1;
+}
+#elif defined(ITGMANIA_HARNESS_X11_HEADLESS_GRAPHICS)
+#include "archutils/Unix/X11Helper.h"
+static int trace_headless_window_visible(lua_State* L) {
+  if (!X11Helper::Dpy || X11Helper::Win == None) {
+    if (std::getenv("ITGMANIA_HARNESS_HEADLESS_GRAPHICS") != nullptr) {
+      return luaL_error(L, "native X11 graphics capture has no context window");
+    }
+    // Plain headless semantic captures use RageDisplay_Null and create no
+    // X11 context window. Absence is observable without an attributes query.
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  XWindowAttributes attributes{};
+  if (!XGetWindowAttributes(X11Helper::Dpy, X11Helper::Win, &attributes)) {
+    return luaL_error(L, "cannot observe the native X11 window map state");
+  }
+  // IsUnviewable is still mapped, even if an ancestor hides it. The offscreen
+  // adapter promises never to map the context window, so reject either state.
+  lua_pushboolean(L, attributes.map_state != IsUnmapped);
   return 1;
 }
 #endif
@@ -54,7 +75,7 @@ static int trace_wrap(lua_State* L) {
 }
 
 static void register_trace_adapter(Lua* L) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(ITGMANIA_HARNESS_X11_HEADLESS_GRAPHICS)
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_HEADLESS_GRAPHICS_AVAILABLE");
   lua_pushboolean(L, std::getenv("ITGMANIA_HARNESS_HEADLESS_GRAPHICS") != nullptr);

@@ -54,6 +54,30 @@ recorded separately from this capability. The returned player-state object's
 original `GetPlayerNumber` binding supplies its identity; the caller's argument
 representation does not define a different player.
 
+Linux X11 builds also support `--headless --drawable-samples` and
+`--notefield-samples` with the real GLX renderer. The observed window source
+creates its native GLX context without mapping the context window and skips
+the associated `MapNotify` wait. Fullscreen and borderless requests are rejected
+in this mode. `ITGMANIA_HARNESS_WINDOW_VISIBLE` queries the actual X11 window
+attributes; either mapped state rejects offscreen capture, and an unavailable
+query is an error. The adapter does not replace native draw, Model, or AFT code.
+This mode still needs an X server and working OpenGL; on a server use an isolated
+Xvfb display, for example:
+
+```
+xvfb-run -a -s '-screen 0 1280x720x24 -nolisten tcp' \
+  itgmania-harness-rs song-lua-trace song.ssc \
+  --itgmania-bin /path/to/ITGmania-harness-trace \
+  --headless --drawable-samples --until-gameplay-end --out native.json
+```
+
+The same display wrapper can run the existing ignored
+`native_notefield_capture_includes_models_and_position_caps` control with
+`ITGMANIA_HARNESS_TRACE_BIN` set to that executable. It checks real note models,
+hold strips, receptor visits, material state, native clocks, and hidden-window
+evidence. Dedicated notefield output remains a separate render observation;
+ordinary drawable captures retain semantic event replay.
+
 The recorder also stores `actor_identity_inputs` before existing authored
 `InitCommand` or `OnCommand` callbacks. It calls the native metatable's C
 `Luna<T>::tostring_T` binding to observe the object pointer as hexadecimal text,

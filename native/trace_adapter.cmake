@@ -14,8 +14,14 @@ function(itgmania_harness_observe_source name original)
     message(FATAL_ERROR "interactive trace requires exactly one ${name}")
   endif()
   set(generated "${CMAKE_CURRENT_BINARY_DIR}/itgmania-harness/${name}")
-  file(CONFIGURE OUTPUT "${generated}" CONTENT
-    "#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/interactive_trace.h\"\n${original}" @ONLY)
+  # The X11 window wrapper needs no engine observer declarations. In particular,
+  # the engine's Screen class would conflict with Xlib's Screen typedef.
+  if(name STREQUAL "LowLevelWindow_X11.cpp")
+    set(observer_header "")
+  else()
+    set(observer_header "#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/interactive_trace.h\"\n")
+  endif()
+  file(CONFIGURE OUTPUT "${generated}" CONTENT "${observer_header}${original}" @ONLY)
   set_property(TARGET ITGmania PROPERTY SOURCES "${sources}")
   target_sources(ITGmania PRIVATE "${generated}")
 endfunction()
@@ -210,6 +216,21 @@ function(itgmania_harness_interactive_source name)
     endforeach()
     set(anchor "  CrashDialog cd(sCrashReport, Data);")
     set(replacement "  if (GetEnvironmentVariableA(\"ITGMANIA_HARNESS_HEADLESS\", nullptr, 0)) return;\n${anchor}")
+  elseif(name STREQUAL "LowLevelWindow_X11.cpp")
+    # GLX can retain its real context and render-to-texture implementation on
+    # an unmapped window. Do not map it, or wait for a MapNotify that cannot
+    # arrive. This branch is also usable with an isolated Xvfb display.
+    get_filename_component(local_dir "${path}" DIRECTORY)
+    string(REPLACE "#include \"LowLevelWindow_X11.h\"" "#include \"${local_dir}/LowLevelWindow_X11.h\"" original "${original}")
+    string(PREPEND original "#include <cstdlib>\nstatic bool harness_headless_graphics() { return std::getenv(\"ITGMANIA_HARNESS_HEADLESS_GRAPHICS\") != nullptr; }\n")
+    set(mode_anchor "std::string LowLevelWindow_X11::TryVideoMode(\n    const VideoModeParams& p, bool& bNewDeviceOut) {")
+    string(FIND "${original}" "${mode_anchor}" mode_offset)
+    if(mode_offset LESS 0)
+      message(FATAL_ERROR "headless X11 video-mode anchor changed")
+    endif()
+    string(REPLACE "${mode_anchor}" "${mode_anchor}\n  if (harness_headless_graphics() && (!p.windowed || p.bWindowIsFullscreenBorderless)) {\n    return \"Headless graphics requires a normal windowed GLX context.\";\n  }" original "${original}")
+    set(anchor "    XMapWindow(Dpy, Win);\n\n    XEvent ev;\n    do {\n      XWindowEvent(Dpy, Win, StructureNotifyMask, &ev);\n    } while (ev.type != MapNotify);")
+    set(replacement "    if (!harness_headless_graphics()) {\n      XMapWindow(Dpy, Win);\n\n      XEvent ev;\n      do {\n        XWindowEvent(Dpy, Win, StructureNotifyMask, &ev);\n      } while (ev.type != MapNotify);\n    }")
   elseif(name STREQUAL "GraphicsWindow.cpp")
     # Keep the real WGL renderer and native AFT implementation, but never show
     # or activate its context window during headless graphics observations.
@@ -303,6 +324,17 @@ function(itgmania_harness_trace_adapter)
   if(WIN32)
     itgmania_harness_interactive_source("GraphicsWindow.cpp")
     itgmania_harness_interactive_source("CrashHandlerChild.cpp")
+  else()
+    foreach(source IN LISTS renderer_sources)
+      get_filename_component(name "${source}" NAME)
+      if(name STREQUAL "LowLevelWindow_X11.cpp")
+        itgmania_harness_interactive_source("${name}")
+        # Advertise the capability only when the real X11 window source was
+        # observed above; other Unix window backends remain unsupported.
+        target_compile_definitions(ITGmania PRIVATE ITGMANIA_HARNESS_X11_HEADLESS_GRAPHICS=1)
+        break()
+      endif()
+    endforeach()
   endif()
   # Retain the stock executable for historical captures and independent checks.
   set(ITGMANIA_HARNESS_TRACE_NAME "ITGmania-harness-trace" CACHE STRING "Separate native trace executable name")
