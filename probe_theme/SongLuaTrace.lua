@@ -181,6 +181,17 @@ ITGMANIA_HARNESS_AFTER_ARROW_UPDATE = function(inputs)
     end
 end
 
+ITGMANIA_HARNESS_GAMEPLAY_CLOCK_INPUTS = function(inputs)
+    if finished or scene_count == 0 then return end
+    local frame = update_frames[#update_frames]
+    assert(frame and frame.scene == scene_count and frame.native_update_frame == scene_frame
+        and frame.native_update_sequence == inputs.native_update_sequence,
+        "native gameplay clock has no matching update frame")
+    assert(frame.gameplay_clock_inputs == false, "duplicate native gameplay timer read")
+    inputs.scene, inputs.native_update_frame = scene_count, scene_frame
+    frame.gameplay_clock_inputs = inputs
+end
+
 local function position()
 	local previous = active_context
 	active_context = nil
@@ -1169,6 +1180,10 @@ function trace.sample_update(delta, origin)
 		wall_seconds = raw_process_clock(),
 		option_deltas = ITGMANIA_HARNESS_OPTION_DELTAS and ITGMANIA_HARNESS_OPTION_DELTAS() or nil,
 		native_update_frame = scene_frame,
+        native_update_sequence = ITGMANIA_HARNESS_NATIVE_UPDATE_SEQUENCE and ITGMANIA_HARNESS_NATIVE_UPDATE_SEQUENCE() or nil,
+        -- Lua object keys cannot retain nil. The collector canonicalizes this
+        -- explicit no-call sentinel to JSON null; it never fills missing keys.
+        gameplay_clock_inputs = false,
 		sample_origin = origin or "overlay-probe",
 	}
 end
@@ -1183,6 +1198,7 @@ function trace.sample_stage(phase, stage)
 	stage = stage or STATSMAN:GetCurStageStats()
 	local beat, seconds = position()
 	local gameplay_seconds = stage:GetGameplaySeconds()
+    local steps_seconds = stage:GetStepsSeconds()
 	local players = {}
 	for _, player in ipairs(GAMESTATE:GetEnabledPlayers()) do
 		local stats = stage:GetPlayerStageStats(player)
@@ -1210,9 +1226,14 @@ function trace.sample_stage(phase, stage)
 			misses = stats:GetTapNoteScores("TapNoteScore_Miss"),
 		}
 	end
+    local frame = update_frames[#update_frames]
+    if frame and frame.scene ~= scene_count then frame = nil end
 	stage_samples[#stage_samples + 1] = {
 		scene = scene_count, phase = phase, beat = beat, seconds = seconds,
-		gameplay_seconds = gameplay_seconds, players = players,
+        update_sequence = frame and frame.sequence or 0,
+        native_update_frame = frame and frame.native_update_frame or 0,
+        native_update_sequence = frame and frame.native_update_sequence or 0,
+		gameplay_seconds = gameplay_seconds, steps_seconds = steps_seconds, players = players,
 	}
 end
 
@@ -1347,6 +1368,7 @@ function trace.finish(completion)
 			native_random_seed = true,
             native_host_clock_inputs = type(native_wrap) == "function",
             native_arrow_clock_inputs = type(ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE) == "function",
+            native_gameplay_clock_inputs = ITGMANIA_HARNESS_GAMEPLAY_CLOCK_INPUTS_AVAILABLE == true,
             native_pre_theme_preferences = catalog_preferences ~= nil,
 			native_actor_identities = true,
 			native_actor_creation = ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE == true,

@@ -231,6 +231,7 @@ fn capture_in(
                     "ITGmania probe script reported: {message}"
                 )));
             }
+            normalize_gameplay_clock_inputs(&mut document);
             if options.headless && !headless_graphics
                 && document.pointer("/display/video_renderers").and_then(Value::as_str) != Some("null")
             {
@@ -248,6 +249,9 @@ fn capture_in(
             }
             if document["capabilities"]["native_song_position_clocks"] != true {
                 return Err(Error::new("native raw and visible song-position clocks were not recorded"));
+            }
+            if document["capabilities"]["native_gameplay_clock_inputs"] != true {
+                return Err(Error::new("native gameplay timer inputs were not recorded; rebuild the trace executable"));
             }
             if options.until_gameplay_end {
                 validate_script_errors(&document)?;
@@ -408,6 +412,7 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "native_song_position_clocks":native["capabilities"]["native_song_position_clocks"],
         "native_option_clock_deltas":native["capabilities"]["native_option_clock_deltas"],
         "native_arrow_update_clocks":native["capabilities"]["native_arrow_update_clocks"],
+        "native_gameplay_clock_inputs":native["capabilities"]["native_gameplay_clock_inputs"],
         "native_player_actor_positions":native["capabilities"]["native_player_actor_positions"],
         "native_player_current_options":native["capabilities"]["native_player_current_options"],
         "native_pre_theme_preferences":native["capabilities"]["native_pre_theme_preferences"],
@@ -1215,6 +1220,54 @@ fn validate_option_clock_deltas(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn normalize_gameplay_clock_inputs(document: &mut Value) {
+    if document["capabilities"]["native_gameplay_clock_inputs"] != true { return; }
+    // JsonEncode cannot retain a Lua object key whose value is nil. Convert
+    // only the recorder's explicit no-call sentinel; never fill an absent key.
+    if let Some(frames) = document["update_frames"].as_array_mut() {
+        for frame in frames {
+            if frame.get("gameplay_clock_inputs") == Some(&Value::Bool(false)) {
+                frame["gameplay_clock_inputs"] = Value::Null;
+            }
+        }
+    }
+}
+
+fn validate_gameplay_clock_inputs(document: &Value) -> Result<(), Error> {
+    let capability = &document["capabilities"]["native_gameplay_clock_inputs"];
+    if capability.is_null() { return Ok(()); }
+    let invalid = || Error::new("native gameplay timer inputs or their frame associations are incomplete");
+    let frames = document["update_frames"].as_array().ok_or_else(invalid)?;
+    if capability != true || frames.is_empty() { return Err(invalid()); }
+    if !document["input"]["native_source"]["screen_gameplay_sha256"].as_str()
+        .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    { return Err(Error::new("native gameplay timer source provenance is missing")); }
+    let exact_f32 = |value: &Value| value.as_f64()
+        .is_some_and(|number| number.is_finite() && f64::from(number as f32) == number);
+    let mut recorded_updates = std::collections::BTreeSet::new();
+    for (index, frame) in frames.iter().enumerate() {
+        let scene = frame["scene"].as_u64().filter(|scene| *scene > 0).ok_or_else(invalid)?;
+        let native_frame = frame["native_update_frame"].as_u64().ok_or_else(invalid)?;
+        let native_sequence = frame["native_update_sequence"].as_u64().ok_or_else(invalid)?;
+        if frame["sequence"].as_u64() != Some(index as u64 + 1) { return Err(invalid()); }
+        let clock = frame.get("gameplay_clock_inputs").ok_or_else(invalid)?;
+        // No getter call is a real input state: intro, pause and outro skip it.
+        if clock.is_null() { continue; }
+        if !clock.as_object().is_some_and(|fields| fields.len() == 7)
+            || clock["scene"].as_u64() != Some(scene)
+            || clock["native_update_frame"].as_u64() != Some(native_frame)
+            || clock["native_update_sequence"].as_u64() != Some(native_sequence)
+            || native_sequence == 0 || !recorded_updates.insert(native_sequence)
+            || clock["phase"] != "after-gameplay-actors"
+            || !exact_f32(&clock["delta_seconds"])
+            || clock["delta_seconds"].as_f64().is_none_or(|delta| delta < 0.0)
+            || !exact_f32(&clock["music_rate"])
+            || !clock["steps_time_active"].is_boolean()
+        { return Err(invalid()); }
+    }
+    Ok(())
+}
+
 fn validate_arrow_update_clocks(document: &Value) -> Result<(), Error> {
     let capability = &document["capabilities"]["native_arrow_update_clocks"];
     if capability.is_null() { return Ok(()); }
@@ -1330,6 +1383,7 @@ fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
     validate_fast_note_rendering(document)?;
     validate_song_position_clocks(document)?;
     validate_option_clock_deltas(document)?;
+    validate_gameplay_clock_inputs(document)?;
     validate_arrow_update_clocks(document)?;
     validate_player_actor_positions(document)?;
     validate_player_current_options(document)?;
@@ -2011,6 +2065,134 @@ mod tests {
             let mut bad=native.clone(); *bad.pointer_mut(pointer).unwrap()=value;
             assert!(validate_interactive_inputs(&bad).is_err(),"accepted {pointer}");
         }
+    }
+
+    #[test]
+    #[ignore = "requires the native trace executable (ITGMANIA_HARNESS_TRACE_BIN)"]
+    fn native_gameplay_clock_inputs_reproduce_stage_observations() {
+        let directory = std::env::temp_dir().join(format!("itgmania-gameplay-clock-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let length = 8_000u32 * 6;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + length).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&length.to_le_bytes());
+        wav.resize(44 + length as usize, 128);
+        fs::write(directory.join("silence.wav"), wav).unwrap();
+        fs::write(directory.join("control.sm"), "#TITLE:Gameplay timer inputs;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n#NOTES:dance-single:Gameplay timer inputs:Challenge:1:0,0,0,0,0:\n1000\n0000\n0000\n0000\n,\n0000\n0000\n0000\n0000\n,\n0100\n0000\n0000\n0000\n;\n").unwrap();
+        fs::write(directory.join("default.lua"), r#"
+local pause_started, resumed, changed_rate = nil, false, false
+return Def.ActorFrame {
+    OnCommand=function(self)
+        self:sleep(30)
+        self:SetUpdateFunction(function()
+            local seconds=GAMESTATE:GetSongPosition():GetMusicSeconds()
+            if seconds>=0.5 and not pause_started then
+                pause_started=GetTimeSinceStart()
+                SCREENMAN:GetTopScreen():PauseGame(true)
+            elseif pause_started and not resumed and GetTimeSinceStart()-pause_started>=0.15 then
+                SCREENMAN:GetTopScreen():PauseGame(false)
+                resumed=true
+            end
+            if seconds>=1 and not changed_rate then
+                GAMESTATE:GetSongOptionsObject('ModsLevel_Song'):MusicRate(1.5)
+                GAMESTATE:GetSongOptionsObject('ModsLevel_Current'):MusicRate(1.5)
+                changed_rate=true
+            end
+        end)
+    end,
+}
+"#).unwrap();
+        let trace = capture(&Options {
+            simfile: directory.join("control.sm"),
+            itgmania_bin: std::env::var_os("ITGMANIA_HARNESS_TRACE_BIN").map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target/native-pinned-source/Program/ITGmania-harness-trace.exe")),
+            until_beat: 12.0, game: "dance".into(), style: "single".into(),
+            difficulty: Some("Challenge".into()), chart_index: None,
+            fallback_theme: "Harness Simply Love".into(), timeout: Duration::from_secs(60),
+            keep_run_dir: false, headless: true, until_gameplay_end: true, autoplay: true,
+            max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
+            drawable_samples: false, capture_fps: Some(60), fixed_update_fps: Some(30),
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false,
+            drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+        }).unwrap();
+        let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/gameplay-clock-control-native.json");
+        fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+        fs::write(&evidence, serde_json::to_vec(&trace).unwrap()).unwrap();
+        validate_gameplay_clock_inputs(&trace).unwrap();
+        let frames = trace["update_frames"].as_array().unwrap();
+        let catalog = &trace["input"]["catalog_preferences"];
+        let catalog_offset = catalog["global_offset_seconds"].as_f64().unwrap() as f32;
+        let catalog_rate = catalog["music_rate"].as_f64().unwrap() as f32;
+        let current_offset = trace["input"]["preferences"]["global_offset_seconds"].as_f64().unwrap() as f32;
+        let first_second = 0.0_f32 - catalog_rate * catalog_offset;
+        let last_second = 4.0_f32 - catalog_rate * catalog_offset;
+        let mut before = Vec::new();
+        let (mut gameplay, mut steps, mut alive) = (0.0_f32, 0.0_f32, 0.0_f32);
+        let (mut reads, mut pause_frames, mut null_run) = (0, 0, 0);
+        let (mut resumed_timer, mut changed_rate, mut independent_delta) = (false, false, false);
+        for frame in frames {
+            before.push((gameplay, steps, alive));
+            let clock = &frame["gameplay_clock_inputs"];
+            if clock.is_null() {
+                if reads > 0 { null_run += 1; }
+                continue;
+            }
+            let delta = clock["delta_seconds"].as_f64().unwrap() as f32;
+            let rate = clock["music_rate"].as_f64().unwrap() as f32;
+            let beat = frame["song_beat"].as_f64().unwrap() as f32;
+            // The control's only notes are beats 0 and 8 at 120 BPM. Song keeps
+            // their catalog seconds; its getters apply the current rate/offset.
+            let first_beat = (first_second + rate * current_offset) * 2.0;
+            let last_beat = (last_second + rate * current_offset) * 2.0;
+            let active = beat >= first_beat && beat < last_beat;
+            assert_eq!(clock["steps_time_active"], active);
+            assert!(rate == 1.0 || rate == 1.5, "unexpected control rate {rate}");
+            if null_run >= 5 {
+                pause_frames += null_run;
+                resumed_timer |= delta >= 0.15;
+            }
+            null_run = 0;
+            changed_rate |= rate == 1.5;
+            independent_delta |= f64::from(delta) != frame["delta"].as_f64().unwrap();
+            gameplay += delta;
+            if active { steps += delta; }
+            alive += delta * rate;
+            reads += 1;
+        }
+        assert!(reads > 60 && pause_frames >= 5 && resumed_timer && changed_rate && independent_delta,
+            "control did not exercise independent timer, pause and rate change: {reads}/{pause_frames}");
+        let mut comparisons = 0;
+        for sample in trace["stage_samples"].as_array().unwrap() {
+            if sample["phase"] != "progress" { continue; }
+            let index = sample["update_sequence"].as_u64().unwrap() as usize - 1;
+            let frame = &frames[index];
+            assert_eq!(sample["scene"], frame["scene"]);
+            assert_eq!(sample["native_update_frame"], frame["native_update_frame"]);
+            assert_eq!(sample["native_update_sequence"], frame["native_update_sequence"]);
+            let (expected_gameplay, expected_steps, expected_alive) = before[index];
+            assert_eq!(sample["gameplay_seconds"].as_f64(), Some(f64::from(expected_gameplay)),
+                "gameplay timer phase at update {}", index + 1);
+            assert_eq!(sample["steps_seconds"].as_f64(), Some(f64::from(expected_steps)),
+                "steps timer phase at update {}", index + 1);
+            let player = sample["players"].as_array().unwrap().iter()
+                .find(|player| player["player"] == "PlayerNumber_P1").unwrap();
+            assert_eq!(player["alive_seconds"].as_f64(), Some(f64::from(expected_alive)),
+                "alive timer phase at update {}", index + 1);
+            comparisons += 1;
+        }
+        assert!(comparisons >= 4, "not enough independently observed stage samples");
+        println!("gameplay timer control: {reads} reads, {pause_frames} paused frames, {comparisons} exact f32 stage comparisons; {}; fixture={}", evidence.display(), directory.display());
     }
 
     #[test]
@@ -3304,6 +3486,61 @@ Bones: 0
         let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
         assert!(legacy["capabilities"]["native_option_clock_deltas"].is_null());
         validate_option_clock_deltas(&legacy).unwrap();
+    }
+
+    #[test]
+    fn native_gameplay_clock_inputs_require_explicit_frame_associated_raw_values() {
+        let mut native = serde_json::json!({
+            "capabilities":{"native_gameplay_clock_inputs":true},
+            "input":{"native_source":{"screen_gameplay_sha256":"a".repeat(64)}},
+            "update_frames":[
+                {"sequence":1,"scene":1,"native_update_frame":0,"native_update_sequence":9,
+                 "gameplay_clock_inputs":false},
+                {"sequence":2,"scene":1,"native_update_frame":1,"native_update_sequence":10,
+                 "delta":0.5,"gameplay_clock_inputs":{"scene":1,"native_update_frame":1,
+                    "native_update_sequence":10,"phase":"after-gameplay-actors",
+                    "delta_seconds":0.25_f32,"music_rate":1.5_f32,"steps_time_active":true}},
+                {"sequence":3,"scene":1,"native_update_frame":2,"native_update_sequence":11,
+                 "gameplay_clock_inputs":false}
+            ]
+        });
+        assert!(validate_gameplay_clock_inputs(&native).is_err(), "raw Lua sentinel is not canonical JSON");
+        normalize_gameplay_clock_inputs(&mut native);
+        assert!(native["update_frames"][0]["gameplay_clock_inputs"].is_null());
+        validate_gameplay_clock_inputs(&native).unwrap();
+        let exported = notefield_render_document(native.clone(), serde_json::json!({}));
+        assert_eq!(exported["capabilities"]["native_gameplay_clock_inputs"], true);
+        assert_eq!(exported["update_frames"], native["update_frames"]);
+        validate_gameplay_clock_inputs(&exported).unwrap();
+        for (pointer, value) in [
+            ("/capabilities/native_gameplay_clock_inputs", serde_json::json!(false)),
+            ("/input/native_source/screen_gameplay_sha256", Value::Null),
+            ("/update_frames", serde_json::json!([])),
+            ("/update_frames/1/gameplay_clock_inputs", serde_json::json!(true)),
+            ("/update_frames/1/gameplay_clock_inputs/scene", serde_json::json!(2)),
+            ("/update_frames/1/gameplay_clock_inputs/native_update_frame", serde_json::json!(0)),
+            ("/update_frames/1/gameplay_clock_inputs/native_update_sequence", serde_json::json!(9)),
+            ("/update_frames/1/gameplay_clock_inputs/phase", serde_json::json!("before-gameplay-actors")),
+            ("/update_frames/1/gameplay_clock_inputs/delta_seconds", serde_json::json!(-0.25_f32)),
+            ("/update_frames/1/gameplay_clock_inputs/delta_seconds", serde_json::json!(0.1_f64)),
+            ("/update_frames/1/gameplay_clock_inputs/music_rate", serde_json::json!(0.1_f64)),
+            ("/update_frames/1/gameplay_clock_inputs/steps_time_active", serde_json::json!(1)),
+        ] {
+            let mut invalid = native.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_gameplay_clock_inputs(&invalid).is_err(), "accepted invalid {pointer}");
+        }
+        let mut missing = native.clone();
+        missing["update_frames"][0].as_object_mut().unwrap().remove("gameplay_clock_inputs");
+        normalize_gameplay_clock_inputs(&mut missing);
+        assert!(validate_gameplay_clock_inputs(&missing).is_err(), "missing evidence became a no-call input");
+        let mut repeated = native.clone();
+        repeated["update_frames"][2] = repeated["update_frames"][1].clone();
+        repeated["update_frames"][2]["sequence"] = serde_json::json!(3);
+        assert!(validate_gameplay_clock_inputs(&repeated).is_err(), "reused a native timer occurrence");
+        let legacy = notefield_render_document(serde_json::json!({}), serde_json::json!({}));
+        assert!(legacy["capabilities"]["native_gameplay_clock_inputs"].is_null());
+        validate_gameplay_clock_inputs(&legacy).unwrap();
     }
 
     #[test]

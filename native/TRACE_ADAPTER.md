@@ -23,7 +23,7 @@ target dependency; building only `ITGmania` can otherwise fail at the link step.
 
 Reconfigure after changing the private source revision. The adapter stamps its
 own Git revision, tracked source modification state, and SHA-256 hashes of
-`NoteDisplay.cpp`, `CubicSpline.cpp`, `Actor.cpp`, and the `RandomNumbers` header
+`NoteDisplay.cpp`, `CubicSpline.cpp`, `Actor.cpp`, `ScreenGameplay.cpp`, and the `RandomNumbers` header
 and implementation into the executable. Semantic gameplay
 and notefield traces retain these in `input.native_source`; the collector rejects
 missing provenance. Native archive manifests use this stamp when available.
@@ -184,3 +184,39 @@ used by that frame's geometry. The observer does not read or reset those
 timers. Export preserves all three inputs independently and rejects missing,
 malformed, or non-f32 tuples when the capability is claimed. Retained older
 traces keep their absent capability and must be recaptured for this evidence.
+
+`native_gameplay_clock_inputs` observes the original f32 returned by
+`ScreenGameplay::m_timerGameplaySeconds.GetDeltaTime()` in `STATE_DANCING`,
+after the screen has updated its authored actors and checked failure state.
+The generated source passes that value to the observer immediately after the
+existing read. It does not read or reset the timer again, and does not export
+accumulated statistics as replay inputs. `input.native_source.screen_gameplay_sha256`
+identifies the original source containing that call.
+
+Every `update_frames` row carries `native_update_sequence`, the native monotonic
+ScreenManager update counter, and an explicit `gameplay_clock_inputs` value.
+The value is null when that update made no timer call, including intro, pause,
+and outro updates. Otherwise it contains `delta_seconds`, the phase
+`after-gameplay-actors`, and matching `scene`, `native_update_frame`, and
+`native_update_sequence` associations. `music_rate` and `steps_time_active` are
+diagnostics from the native rate and first-beat-inclusive/last-beat-exclusive
+gate at that point. Replayers must compute their own rate, failure state,
+gate, and f32 accumulations; these diagnostic fields are not replacements for
+owned gameplay state. The overlay's stage observation sees accumulated values
+through the preceding update, because this timer call occurs later.
+
+The native Lua encoder cannot retain an object key with a nil value, so probes
+write false for the explicit no-call state. The collector converts only that
+sentinel to JSON null before validation and export. Missing keys remain invalid
+when the capability is present, and retained older captures do not gain this
+capability by conversion. The validator rejects stale frame associations,
+duplicate native timer occurrences, malformed phases, and non-f32 values.
+Stage samples retain `steps_seconds` alongside gameplay/alive observations and
+identify their latest observed update. These expected observations stay separate
+from the raw timer channel.
+
+Run `cargo test --release native_gameplay_clock_inputs` for schema validation.
+The ignored `native_gameplay_clock_inputs_reproduce_stage_observations` control
+requires `ITGMANIA_HARNESS_TRACE_BIN`. It records a real pause/resume and music
+rate change with an independent fixed actor delta, then checks exact f32
+gameplay, steps, and alive observations against the preceding timer inputs.

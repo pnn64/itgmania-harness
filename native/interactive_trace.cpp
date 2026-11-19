@@ -57,6 +57,10 @@ std::vector<RenderRandomInput> active_render_random_inputs;
 std::map<Actor*, unsigned long long> render_draw_ordinals;
 unsigned long long next_render_random_scope = 0;
 unsigned long long next_actor_draw_sequence = 0, native_update_sequence = 0;
+int current_native_update_sequence(lua_State* L) {
+  lua_pushnumber(L, static_cast<lua_Number>(native_update_sequence));
+  return 1;
+}
 bool render_random_observer_failed = false;
 const msMesh* drawing_model_mesh = nullptr;
 bool updating_screen = false;
@@ -300,6 +304,7 @@ void register_interactive(Lua* L) {
   lua_pushstring(L, HARNESS_ACTOR_SHA256); lua_setfield(L, -2, "actor_sha256");
   lua_pushstring(L, HARNESS_RANDOM_NUMBERS_SHA256); lua_setfield(L, -2, "random_numbers_sha256");
   lua_pushstring(L, HARNESS_RANDOM_NUMBERS_HEADER_SHA256); lua_setfield(L, -2, "random_numbers_header_sha256");
+  lua_pushstring(L, HARNESS_SCREEN_GAMEPLAY_SHA256); lua_setfield(L, -2, "screen_gameplay_sha256");
   lua_setglobal(L, "ITGMANIA_HARNESS_NATIVE_SOURCE");
   lua_pushcfunction(L, arrow_clock_scope);
   lua_setglobal(L, "ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE");
@@ -307,6 +312,10 @@ void register_interactive(Lua* L) {
   lua_setglobal(L, "ITGMANIA_HARNESS_CATALOG_INPUTS");
   lua_pushcfunction(L, option_deltas);
   lua_setglobal(L, "ITGMANIA_HARNESS_OPTION_DELTAS");
+  lua_pushcfunction(L, current_native_update_sequence);
+  lua_setglobal(L, "ITGMANIA_HARNESS_NATIVE_UPDATE_SEQUENCE");
+  lua_pushboolean(L, true);
+  lua_setglobal(L, "ITGMANIA_HARNESS_GAMEPLAY_CLOCK_INPUTS_AVAILABLE");
   lua_pushcfunction(L, pace_capture);
   lua_setglobal(L, "ITGMANIA_HARNESS_PACE_CAPTURE");
   lua_pushcfunction(L, inject_input);
@@ -387,6 +396,22 @@ void itgmania_harness_before_screen_update(float delta) {
   Lua* L = LUA->Get(); const int top = lua_gettop(L);
   lua_getglobal(L, "ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE");
   if (lua_isfunction(L, -1)) { lua_pushnumber(L, delta); observe(L, 1); }
+  lua_settop(L, top); LUA->Release(L);
+}
+void itgmania_harness_gameplay_clock(float delta, float rate, bool steps_time_active) {
+  // Keep the exact f32 returned by the original GetDeltaTime call. Reading that
+  // timer again, or reconstructing it from a frame delta, changes its meaning.
+  Lua* L = LUA->Get(); const int top = lua_gettop(L);
+  lua_getglobal(L, "ITGMANIA_HARNESS_GAMEPLAY_CLOCK_INPUTS");
+  if (lua_isfunction(L, -1)) {
+    lua_createtable(L, 0, 5);
+    field(L, "native_update_sequence", static_cast<double>(native_update_sequence));
+    lua_pushliteral(L, "after-gameplay-actors"); lua_setfield(L, -2, "phase");
+    field(L, "delta_seconds", delta);
+    field(L, "music_rate", rate);
+    lua_pushboolean(L, steps_time_active); lua_setfield(L, -2, "steps_time_active");
+    observe(L, 1);
+  }
   lua_settop(L, top); LUA->Release(L);
 }
 ItgmaniaHarnessUpdateFrame::ItgmaniaHarnessUpdateFrame(float delta) {

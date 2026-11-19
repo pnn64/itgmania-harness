@@ -39,6 +39,9 @@ struct ItgmaniaHarnessUpdateFrame {
   ~ItgmaniaHarnessUpdateFrame();
 };
 void itgmania_harness_option_delta(const void* options, float delta, bool song);
+// Observe the existing ScreenGameplay timer read, after authored actor updates.
+// The rate and note-bound gate are diagnostics; no accumulated stats cross here.
+void itgmania_harness_gameplay_clock(float delta, float rate, bool steps_time_active);
 void itgmania_harness_catalog_inputs(const void* song, float offset, float rate);
 void itgmania_harness_script_error(const std::string& message);
 struct ItgmaniaHarnessScreenLoad {

@@ -14,6 +14,7 @@ local player_positions={}
 local actor_ids,actors=setmetatable({},{__mode='k'}),{}
 local scene,frame,sampled_frame=0,0,-1
 local arrow_frame,arrow_inputs=-1,nil
+local gameplay_scene,gameplay_frame,gameplay_inputs=-1,-1,nil
 local delta,pending,finished=0,nil,false
 local inputs={}
 local input_preferences,catalog_preferences=nil,nil
@@ -58,10 +59,12 @@ local function sample_update()
  -- GameState advances SongOptions and both PlayerOptions before Screen::Update.
  -- These are the actual ModsGroup timer inputs used by this frame's draws.
  frames[#frames+1]={sequence=#frames+1,scene=scene,native_update_frame=frame,
+  native_update_sequence=ITGMANIA_HARNESS_NATIVE_UPDATE_SEQUENCE(),
   delta=delta,beat=beat,seconds=seconds,song_beat=song_beat,
   visible_beat=beat,visible_seconds=visible_seconds,wall_seconds=GetTimeSinceStart(),
   option_deltas=ITGMANIA_HARNESS_OPTION_DELTAS(),
-  arrow_clock_inputs=arrow_frame==frame and arrow_inputs or nil}
+  arrow_clock_inputs=arrow_frame==frame and arrow_inputs or nil,
+  gameplay_clock_inputs=gameplay_scene==scene and gameplay_frame==frame and gameplay_inputs or false}
 end
 -- The overlay normally samples before ScreenGameplay's final ArrowEffects
 -- update; after-draw sampling is also supported. Never attach a prior frame's
@@ -70,6 +73,21 @@ ITGMANIA_HARNESS_AFTER_ARROW_UPDATE=function(inputs)
  if finished or scene==0 then return end
  arrow_frame,arrow_inputs=frame,inputs
  if sampled_frame==frame then frames[#frames].arrow_clock_inputs=inputs end
+end
+ITGMANIA_HARNESS_GAMEPLAY_CLOCK_INPUTS=function(inputs)
+ if finished or scene==0 then return end
+ assert(inputs.native_update_sequence==ITGMANIA_HARNESS_NATIVE_UPDATE_SEQUENCE(),
+  'native gameplay clock has a stale update sequence')
+ assert(gameplay_scene~=scene or gameplay_frame~=frame,'duplicate native gameplay timer read')
+ inputs.scene,inputs.native_update_frame=scene,frame
+ gameplay_scene,gameplay_frame,gameplay_inputs=scene,frame,inputs
+ if sampled_frame==frame then
+  local observed=frames[#frames]
+  assert(observed.scene==scene and observed.native_update_frame==frame
+   and observed.native_update_sequence==inputs.native_update_sequence,
+   'native gameplay clock has no matching update frame')
+  observed.gameplay_clock_inputs=inputs
+ end
 end
 ITGMANIA_HARNESS_MODEL_MESH=function(id,vertices)
  meshes[#meshes+1]={id=id,primitive='triangles',vertices=vertices}
@@ -96,6 +114,7 @@ end
 ITGMANIA_HARNESS_BEFORE_SCREEN_UPDATE=function(dt)
  frame=frame+1;delta=dt
  arrow_frame,arrow_inputs=-1,nil
+ gameplay_scene,gameplay_frame,gameplay_inputs=-1,-1,nil
  if scene>0 and cfg.capture_frame_period_seconds then ITGMANIA_HARNESS_PACE_CAPTURE(cfg.capture_frame_period_seconds) end
 end
 ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
@@ -145,6 +164,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
    native_song_position_clocks=true,native_pre_theme_preferences=catalog_preferences~=nil,
    native_option_clock_deltas=true,
    native_arrow_update_clocks=type(ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE)=='function',
+   native_gameplay_clock_inputs=ITGMANIA_HARNESS_GAMEPLAY_CLOCK_INPUTS_AVAILABLE==true,
    native_player_actor_positions=true,
    native_player_current_options=true,
    native_fast_note_rendering=type(fast_note_rendering)=='boolean'},
