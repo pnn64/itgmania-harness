@@ -1044,25 +1044,7 @@ end
 local function write_result(document)
     flush_events()
     if event_spool then event_spool:Close(); event_spool:destroy() end
-    -- RageFile publishes its temporary output atomically on Close.
-    local file = RageFileUtil:CreateRageFile()
-    assert(file:Open(cfg.result_path, 2), "cannot open trace result")
-    document.events = nil
-    local metadata = JsonEncode(document, true):gsub("%s+$", "")
-    local prefix = metadata:sub(1, -2) .. ',"events":['
-    assert(file:Write(prefix) == #prefix, "cannot write trace metadata")
-    if spooled_events > 0 then
-        local spool = RageFileUtil:CreateRageFile()
-        assert(spool:Open(cfg.result_path .. ".events", 1), "cannot read event spool")
-        while true do
-            local chunk = spool:ReadBytes(1048576)
-            if #chunk == 0 then break end
-            assert(file:Write(chunk) == #chunk, "cannot write trace events")
-        end
-        spool:Close(); spool:destroy()
-    end
-    assert(file:Write("]}") == 2, "cannot finish trace result")
-    file:Close(); file:destroy()
+    write_song_lua_trace_result(document, cfg.result_path, spooled_events)
 end
 
 local trace = {}

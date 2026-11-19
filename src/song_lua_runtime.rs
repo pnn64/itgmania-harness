@@ -13,6 +13,7 @@ const RESULT_PATH: &str = "Save/itgmania-harness/song-lua-trace.json";
 const INIT_LUA: &str = include_str!("../probe_theme/ScreenSongLuaHarness overlay.lua");
 const GAMEPLAY_LUA: &str = include_str!("../probe_theme/ScreenGameplay overlay.lua");
 const SYSTEM_LUA: &str = include_str!("../probe_theme/ScreenSystemLayer overlay.lua");
+const TRACE_JSON_LUA: &str = include_str!("../probe_theme/TraceJson.lua");
 const TRACE_LUA: &str = include_str!("../probe_theme/SongLuaTrace.lua");
 const NOTEFIELD_LUA: &str = include_str!("../probe_theme/NotefieldTrace.lua");
 pub const DEFAULT_MAX_EVENTS: u32 = 250_000;
@@ -526,9 +527,14 @@ fn prepare_install(
         &run_dir.join("Themes/itgmania-harness/Scripts/00 HarnessConfig.lua"),
         config_lua(options).as_bytes(),
     )?;
+    let trace_lua = if options.notefield_samples {
+        NOTEFIELD_LUA.to_owned()
+    } else {
+        format!("{TRACE_JSON_LUA}\n{TRACE_LUA}")
+    };
     write(
         &run_dir.join("Themes/itgmania-harness/Scripts/03 SongLuaTrace.lua"),
-        if options.notefield_samples { NOTEFIELD_LUA.as_bytes() } else { TRACE_LUA.as_bytes() },
+        trace_lua.as_bytes(),
     )?;
     write(
         &run_dir

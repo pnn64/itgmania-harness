@@ -9,6 +9,54 @@ const BIN: &str = env!("CARGO_BIN_EXE_itgmania-harness-rs");
 
 mod support;
 
+#[test]
+fn streams_trace_json_with_native_bytes_and_write_failures() {
+    use sha2::Digest;
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/trace-json-controls")
+        .join(temp_dir("native-json").file_name().unwrap());
+    let corpus = directory.join("corpus");
+    let traces = directory.join("traces");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::write(corpus.join("control.sm"),
+        "#TITLE:Native JSON streaming;\n#BPMS:0=60;\n#FGCHANGES:0=control.lua=1=0=0=0;\n#NOTES:dance-single::Challenge:1:0,0,0,0,0:\n1000\n;\n").unwrap();
+    std::fs::write(corpus.join("control.lua"), format!("{}\n{}",
+        include_str!("../probe_theme/TraceJson.lua"),
+        include_str!("fixtures/trace-json-control.lua"))).unwrap();
+    let output = Command::new(BIN).args([
+        "song-lua-semantic-baseline", corpus.to_str().unwrap(),
+        "--out", traces.to_str().unwrap(), "--until-beat", "1",
+    ]).env("ITGMANIA_SONG_LUA_WRITE_ROOT", &corpus).output().unwrap();
+    std::fs::write(directory.join("stdout.log"), &output.stdout).unwrap();
+    std::fs::write(directory.join("stderr.log"), &output.stderr).unwrap();
+    eprintln!("native JSON control evidence: {}", directory.display());
+    assert!(output.status.success(), "{}", stderr(&output));
+    let trace: Value = serde_json::from_slice(
+        &std::fs::read(traces.join("control.sm.semantic.json")).unwrap()).unwrap();
+    assert_eq!(trace["runtime_errors"], serde_json::json!([]));
+    let expected = std::fs::read(corpus.join("expected.json")).unwrap();
+    let streamed = std::fs::read(corpus.join("streamed.json")).unwrap();
+    assert_eq!(expected, streamed, "native JSON serialization changed");
+    let parsed: Value = serde_json::from_slice(&streamed).unwrap();
+    assert_eq!(parsed["drawable_samples"].as_array().unwrap().len(), 513);
+    assert_eq!(parsed["events"].as_array().unwrap().len(), 3000);
+    assert_eq!(parsed["events"][2999]["sequence"], 3000);
+    assert_eq!(parsed["empty"], serde_json::json!([]));
+    let control: Value = serde_json::from_slice(
+        &std::fs::read(corpus.join("control-receipt.json")).unwrap()).unwrap();
+    assert_eq!(control["passed"], true);
+    assert_eq!(control["failure_cases"].as_object().unwrap().len(), 6);
+    let digest = |bytes: &[u8]| sha2::Sha256::digest(bytes).iter()
+        .map(|byte| format!("{byte:02x}")).collect::<String>();
+    std::fs::write(directory.join("receipt.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "passed": true, "native_source": env!("ITGMANIA_GIT_REVISION"),
+        "control": control, "expected_sha256": digest(&expected),
+        "streamed_sha256": digest(&streamed),
+        "helper_sha256": digest(include_bytes!("../probe_theme/TraceJson.lua")),
+        "control_source_sha256": digest(include_bytes!("fixtures/trace-json-control.lua")),
+    })).unwrap()).unwrap();
+}
+
 fn itgmania_root() -> PathBuf {
     PathBuf::from(env!("ITGMANIA_BUILD_ROOT"))
 }
