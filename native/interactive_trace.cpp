@@ -64,6 +64,7 @@ int current_native_update_sequence(lua_State* L) {
 bool render_random_observer_failed = false;
 const msMesh* drawing_model_mesh = nullptr;
 bool updating_screen = false;
+bool drawing_screen = false;
 ItgmaniaHarnessInputScope* input_scope = nullptr;
 const ItgmaniaHarnessNoteScope* drawing_note = nullptr;
 std::map<const Actor*, float> receptor_alphas;
@@ -305,6 +306,7 @@ void register_interactive(Lua* L) {
   lua_pushstring(L, HARNESS_RANDOM_NUMBERS_SHA256); lua_setfield(L, -2, "random_numbers_sha256");
   lua_pushstring(L, HARNESS_RANDOM_NUMBERS_HEADER_SHA256); lua_setfield(L, -2, "random_numbers_header_sha256");
   lua_pushstring(L, HARNESS_SCREEN_GAMEPLAY_SHA256); lua_setfield(L, -2, "screen_gameplay_sha256");
+  lua_pushstring(L, HARNESS_RENDER_TARGET_SHA256); lua_setfield(L, -2, "render_target_sha256");
   lua_setglobal(L, "ITGMANIA_HARNESS_NATIVE_SOURCE");
   lua_pushcfunction(L, arrow_clock_scope);
   lua_setglobal(L, "ITGMANIA_HARNESS_ARROW_CLOCK_SCOPE");
@@ -331,6 +333,8 @@ void register_interactive(Lua* L) {
   lua_pushcfunction(L,model_render_backend); lua_setglobal(L,"ITGMANIA_HARNESS_MODEL_RENDER_STATE_BACKEND");
   lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RECEPTOR_GEOMETRY_PROTOCOL_V1");
   lua_pushinteger(L,1); lua_setglobal(L,"ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL");
+  lua_pushinteger(L, 1);
+  lua_setglobal(L, "ITGMANIA_HARNESS_RENDER_TARGET_PASS_PROTOCOL");
 }
 REGISTER_WITH_LUA_FUNCTION(register_interactive)
 }
@@ -420,6 +424,13 @@ ItgmaniaHarnessUpdateFrame::ItgmaniaHarnessUpdateFrame(float delta) {
   itgmania_harness_before_screen_update(delta); updating_screen = true;
 }
 ItgmaniaHarnessUpdateFrame::~ItgmaniaHarnessUpdateFrame() { updating_screen = false; }
+ItgmaniaHarnessDrawFrame::ItgmaniaHarnessDrawFrame() : previous(drawing_screen) {
+  drawing_screen = true;
+}
+ItgmaniaHarnessDrawFrame::~ItgmaniaHarnessDrawFrame() {
+  drawing_screen = previous;
+  itgmania_harness_after_screen_draw();
+}
 
 void itgmania_harness_after_screen_draw() {
   Lua* L = LUA->Get(); const int top = lua_gettop(L);
@@ -506,6 +517,34 @@ float itgmania_harness_vibration_random(Actor* source, int axis, float value) {
 void itgmania_harness_render_state(Actor*, bool write, int test, bool wrap,
     bool filter, int blend, float bias, int cull) {
   state = {write, wrap, filter, test, blend, cull, bias};
+}
+
+void itgmania_harness_render_target(const RageTexture& target, uintptr_t parent,
+    bool begin, bool preserve) {
+  if (!LUA) return;
+  Lua* L = LUA->Get();
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "ITGMANIA_HARNESS_RENDER_TARGET_PASS");
+  if (lua_isfunction(L, -1)) {
+    lua_createtable(L, 0, 10);
+    lua_pushstring(L, begin ? "begin" : "end");
+    lua_setfield(L, -2, "kind");
+    lua_pushstring(L, target.GetID().filename.c_str());
+    lua_setfield(L, -2, "name");
+    lua_pushstring(L, drawing_screen ? "screen_draw" : updating_screen ? "during_update" : "outside_screen");
+    lua_setfield(L, -2, "draw_phase");
+    field(L, "target", static_cast<double>(target.GetTexHandle()));
+    field(L, "parent_target", static_cast<double>(parent));
+    field(L, "active_target", static_cast<double>(DISPLAY->GetRenderTarget()));
+    field(L, "native_update_sequence", static_cast<double>(native_update_sequence));
+    field(L, "after_native_draw_sequence", static_cast<double>(next_geometry_draw_sequence));
+    if (begin) boolean(L, "preserve", preserve);
+    if (actor_draw_scope)
+      field(L, "actor_draw_sequence", static_cast<double>(actor_draw_scope->draw_sequence));
+    observe(L, 1);
+  }
+  lua_settop(L, top);
+  LUA->Release(L);
 }
 
 void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVertex* vertices,

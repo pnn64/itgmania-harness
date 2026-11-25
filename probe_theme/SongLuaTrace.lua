@@ -67,6 +67,20 @@ local next_sequence = 0
 local dropped_events = 0
 local finished = false
 local scene_count = 0
+local render_target_passes, dropped_render_target_passes = {}, 0
+if cfg.render_target_passes then
+	assert(ITGMANIA_HARNESS_RENDER_TARGET_PASS_PROTOCOL == 1, "native render target pass observer required")
+	ITGMANIA_HARNESS_RENDER_TARGET_PASS = function(event)
+		if finished or scene_count == 0 then return end
+		if #render_target_passes >= cfg.max_events then
+			dropped_render_target_passes = dropped_render_target_passes + 1
+			return
+		end
+		event.sequence = #render_target_passes + 1
+		event.scene = scene_count
+		render_target_passes[event.sequence] = event
+	end
+end
 local original_methods = {}
 local method_hooks = setmetatable({}, {__mode = "k"})
 local tween_owner_observed = setmetatable({}, {__mode = "k"})
@@ -1318,6 +1332,8 @@ function trace.finish(completion)
 		drawable_samples = drawable_samples,
 		drawable_frames = drawable_frames,
 		dropped_drawable_samples = dropped_drawable_samples,
+		render_target_passes = cfg.render_target_passes and render_target_passes or nil,
+		dropped_render_target_passes = cfg.render_target_passes and dropped_render_target_passes or nil,
 			render_random_inputs = render_random_inputs,
 			dropped_render_random_inputs = dropped_render_random_inputs,
 		interactive_observer_error = ITGMANIA_HARNESS_INTERACTIVE_ERROR,
@@ -1345,6 +1361,7 @@ function trace.finish(completion)
 			native_input_events = (#(cfg.input_script or {}) > 0 or cfg.drawable_samples) and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
 			native_input_step_clocks = ITGMANIA_HARNESS_INPUT_CLOCKS_AVAILABLE == true,
 			native_drawable_vertices = cfg.drawable_samples and ITGMANIA_HARNESS_INTERACTIVE_AVAILABLE == true,
+			native_render_target_pass_protocol = cfg.render_target_passes and ITGMANIA_HARNESS_RENDER_TARGET_PASS_PROTOCOL or nil,
 				native_render_random_inputs = cfg.drawable_samples and ITGMANIA_HARNESS_RENDER_RANDOM_PROTOCOL == 1,
             native_notefield_geometry = false,
 			native_random_seed = true,

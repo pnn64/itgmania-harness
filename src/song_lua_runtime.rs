@@ -16,6 +16,7 @@ const SYSTEM_LUA: &str = include_str!("../probe_theme/ScreenSystemLayer overlay.
 const TRACE_JSON_LUA: &str = include_str!("../probe_theme/TraceJson.lua");
 const TRACE_LUA: &str = include_str!("../probe_theme/SongLuaTrace.lua");
 const NOTEFIELD_LUA: &str = include_str!("../probe_theme/NotefieldTrace.lua");
+const RENDER_TARGET_PASS_PROTOCOL: &[u8] = b"ITGMANIA_HARNESS_RENDER_TARGET_PASS_PROTOCOL";
 pub const DEFAULT_MAX_EVENTS: u32 = 250_000;
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -52,6 +53,7 @@ pub struct Options {
     pub stop_lua_gc: bool,
     pub notefield_samples: bool,
     pub scene_draws: bool,
+    pub render_target_passes: bool,
     pub drawable_from_beat: f64,
     pub player_options: Option<String>,
     pub fast_note_rendering: Option<bool>,
@@ -98,6 +100,9 @@ fn validate_options(options: &Options) -> Result<(), Error> {
     }
     if options.scene_draws && !options.notefield_samples {
         return Err(Error::new("scene draws require the notefield geometry capture profile"));
+    }
+    if options.render_target_passes && (!options.drawable_samples || options.notefield_samples) {
+        return Err(Error::new("render target passes require the semantic --drawable-samples profile"));
     }
     if options.notefield_samples && (!options.headless || !options.inputs.is_empty()) {
         return Err(Error::new("notefield geometry requires headless capture without scripted inputs"));
@@ -157,6 +162,12 @@ fn capture_in(
     if headless_graphics {
         let binary = fs::read(&staged_binary).map_err(|error| Error::new(error.to_string()))?;
         require_headless_graphics_adapter(&binary)?;
+    }
+    if options.render_target_passes {
+        let binary = fs::read(&staged_binary).map_err(|error| Error::new(error.to_string()))?;
+        if !binary.windows(RENDER_TARGET_PASS_PROTOCOL.len()).any(|window| window == RENDER_TARGET_PASS_PROTOCOL) {
+            return Err(Error::new("render target pass capture requires the native observer; rebuild the trace executable"));
+        }
     }
     if options.notefield_samples {
         let bytes = fs::read(&staged_binary).map_err(|error| Error::new(error.to_string()))?;
@@ -253,6 +264,9 @@ fn capture_in(
             }
             if document["capabilities"]["native_gameplay_clock_inputs"] != true {
                 return Err(Error::new("native gameplay timer inputs were not recorded; rebuild the trace executable"));
+            }
+            if options.render_target_passes && document["capabilities"]["native_render_target_pass_protocol"] != 1 {
+                return Err(Error::new("native render target pass observations were not recorded"));
             }
             if options.until_gameplay_end {
                 validate_script_errors(&document)?;
@@ -1385,6 +1399,81 @@ fn validate_player_current_options(document: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_render_target_passes(document: &Value) -> Result<(), Error> {
+    let protocol = &document["capabilities"]["native_render_target_pass_protocol"];
+    if protocol.is_null() && document["render_target_passes"].is_null()
+        && document["dropped_render_target_passes"].is_null()
+    {
+        return Ok(());
+    }
+    let invalid = |detail: &str| Error::new(format!("invalid native render target pass capture: {detail}"));
+    if protocol != 1 || document["dropped_render_target_passes"] != 0
+        || document["capabilities"]["native_drawable_vertices"] != true
+        || !document["input"]["native_source"]["render_target_sha256"].as_str()
+            .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(invalid("protocol, dropped events, draw coverage or source provenance"));
+    }
+    let events = document["render_target_passes"].as_array().ok_or_else(|| invalid("missing pass events"))?;
+    let draws = document["drawable_samples"].as_array().ok_or_else(|| invalid("missing submissions"))?;
+    let mut open = Vec::new();
+    let mut boundary = 0;
+    let mut previous_draw = 0;
+    let mut previous_update = 0;
+    let mut previous_scene = 0;
+    for (index, event) in events.iter().enumerate() {
+        let cursor = event["after_native_draw_sequence"].as_u64().ok_or_else(|| invalid("missing submission cursor"))?;
+        let target = event["target"].as_u64().filter(|target| *target != 0).ok_or_else(|| invalid("missing target handle"))?;
+        let parent = event["parent_target"].as_u64().ok_or_else(|| invalid("missing parent handle"))?;
+        let name = event["name"].as_str().filter(|name| !name.is_empty()).ok_or_else(|| invalid("missing target name"))?;
+        let scene = event["scene"].as_u64().filter(|scene| *scene != 0).ok_or_else(|| invalid("missing scene"))?;
+        let update = event["native_update_sequence"].as_u64().ok_or_else(|| invalid("missing native update"))?;
+        if cursor < previous_draw || update < previous_update || scene < previous_scene
+            || event["sequence"] != index + 1
+            || !matches!(event["draw_phase"].as_str(), Some("during_update" | "screen_draw" | "outside_screen"))
+            || !(event["actor_draw_sequence"].is_null() || event["actor_draw_sequence"].as_u64().is_some_and(|id| id > 0))
+        {
+            return Err(invalid("unordered or invalid pass boundary"));
+        }
+        let active = open.last().map_or(0, |&(target, _, _)| target);
+        boundary = validate_pass_draws(draws, boundary, cursor, active)?;
+        match event["kind"].as_str() {
+            Some("begin") if parent == active && event["active_target"] == target
+                && event["preserve"].is_boolean() => open.push((target, name, scene)),
+            Some("end") if open.pop() == Some((target, name, scene))
+                && parent == open.last().map_or(0, |&(target, _, _)| target)
+                && event["active_target"] == parent && event["preserve"].is_null() => (),
+            _ => return Err(invalid("unbalanced pass or incorrect active target")),
+        }
+        previous_draw = cursor;
+        previous_update = update;
+        previous_scene = scene;
+    }
+    if !open.is_empty() {
+        return Err(invalid("unfinished pass"));
+    }
+    validate_pass_draws(draws, boundary, u64::MAX, 0)?;
+    Ok(())
+}
+
+fn validate_pass_draws(draws: &[Value], mut start: usize, through: u64, active: u64) -> Result<usize, Error> {
+    while let Some(draw) = draws.get(start) {
+        let state = &draw["state"];
+        let sequence = state["native_draw_sequence"].as_u64().filter(|sequence| *sequence > 0)
+            .ok_or_else(|| Error::new("native render target submission has no sequence"))?;
+        if sequence > through {
+            break;
+        }
+        if state["render_target"] != active
+            || start > 0 && draws[start - 1]["state"]["native_draw_sequence"].as_u64() >= Some(sequence)
+        {
+            return Err(Error::new("native submission is out of order or outside its render target pass"));
+        }
+        start += 1;
+    }
+    Ok(start)
+}
+
 fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
     validate_fast_note_rendering(document)?;
     validate_song_position_clocks(document)?;
@@ -1394,6 +1483,7 @@ fn validate_interactive_inputs(document: &Value) -> Result<(), Error> {
     validate_player_actor_positions(document)?;
     validate_player_current_options(document)?;
     validate_render_random_inputs(document)?;
+    validate_render_target_passes(document)?;
     if document["input"]["notefield_samples"] == true {
         validate_notefield_geometry(document)?;
     }
@@ -1747,6 +1837,7 @@ fn config_lua(options: &Options) -> String {
          \tdrawable_samples = {},\n\
          \tnotefield_samples = {},\n\
          \tscene_draws = {},\n\
+         \trender_target_passes = {},\n\
          \tdrawable_from_beat = {},\n\
          \tplayer_options = {},\n\
          \tfast_note_rendering = {},\n\
@@ -1770,6 +1861,7 @@ fn config_lua(options: &Options) -> String {
         options.drawable_samples,
         options.notefield_samples,
         options.scene_draws,
+        options.render_target_passes,
         options.drawable_from_beat,
         options.player_options.as_deref().map(lua_quote).unwrap_or_else(|| "nil".into()),
         options.fast_note_rendering.map(|value| value.to_string()).unwrap_or_else(|| "nil".into()),
@@ -2129,7 +2221,7 @@ return Def.ActorFrame {
             keep_run_dir: false, headless: true, until_gameplay_end: true, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: Some(30),
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false,
             drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         }).unwrap();
         let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/gameplay-clock-control-native.json");
@@ -2257,7 +2349,7 @@ return Def.ActorFrame {
             keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: true, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         }).unwrap();
         fs::write(directory.join("native.json"), serde_json::to_vec(&trace).unwrap()).unwrap();
         validate_render_random_inputs(&trace).unwrap();
@@ -2325,7 +2417,7 @@ return Def.ActorFrame {
                 scene: 1, seconds, player: 1, button: "Left".into(), key: "left".into(), down,
             }).collect(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         };
         for with_callback in [false, true] {
             let callback = if with_callback { r#"
@@ -2425,7 +2517,7 @@ end }
             keep_run_dir: false, headless: true, until_gameplay_end: false, autoplay: true,
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
-            stop_lua_gc: false, notefield_samples: false, scene_draws: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
         };
         for extension in ["sm", "ssc"] {
             let mut source = "#VERSION:0.83;#TITLE:Chart selector;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n".to_owned();
@@ -2622,6 +2714,7 @@ Bones: 0
             stop_lua_gc: false,
             notefield_samples: true,
             scene_draws: true,
+            render_target_passes: false,
             drawable_from_beat: 1.0,
             player_options: Some("m730, 60% mini, cel".into()),
             fast_note_rendering: Some(false),
@@ -3006,6 +3099,7 @@ Bones: 0
             stop_lua_gc: false,
             notefield_samples: false,
             scene_draws: false,
+            render_target_passes: false,
             drawable_from_beat: 0.0,
             player_options: None,
             fast_note_rendering: None,
@@ -3773,6 +3867,7 @@ Bones: 0
             stop_lua_gc: false,
             notefield_samples: false,
             scene_draws: false,
+            render_target_passes: false,
             drawable_from_beat: 0.0,
             player_options: None,
             fast_note_rendering: Some(true),
@@ -3826,3 +3921,48 @@ Bones: 0
         fs::remove_dir_all(fixture).unwrap();
     }
 }
+    #[test]
+    fn render_target_passes_order_nested_empty_and_repeated_draws() {
+        let pass = |sequence, kind, cursor, target, parent, active, name, preserve| {
+            serde_json::json!({
+                "sequence": sequence, "kind": kind, "after_native_draw_sequence": cursor,
+                "target": target, "parent_target": parent, "active_target": active,
+                "name": name, "preserve": preserve, "scene": 1, "native_update_sequence": 2,
+                "draw_phase": "during_update"
+            })
+        };
+        let sample = |sequence, target| serde_json::json!({
+            "state":{"native_draw_sequence":sequence,"render_target":target}
+        });
+        let mut trace = serde_json::json!({
+            "capabilities":{"native_render_target_pass_protocol":1,"native_drawable_vertices":true},
+            "input":{"native_source":{"render_target_sha256":"a".repeat(64)}},
+            "dropped_render_target_passes":0,
+            "render_target_passes":[
+                pass(1,"begin",10,1,0,1,"screen",Some(false)),
+                pass(2,"begin",11,2,1,2,"blur",Some(true)),
+                pass(3,"end",11,2,1,1,"blur",None),
+                pass(4,"end",13,1,0,0,"screen",None),
+                pass(5,"begin",13,2,0,2,"blur",Some(false)),
+                pass(6,"end",14,2,0,0,"blur",None)
+            ],
+            "drawable_samples":[sample(10,0),sample(11,1),sample(13,1),sample(14,2),sample(16,0)]
+        });
+        validate_render_target_passes(&trace).unwrap();
+        for (path, bad) in [
+            ("/render_target_passes/1/after_native_draw_sequence", Value::from(9)),
+            ("/render_target_passes/2/name", Value::from("screen")),
+            ("/render_target_passes/2/active_target", Value::from(0)),
+            ("/render_target_passes/4/preserve", Value::Null),
+            ("/drawable_samples/2/state/render_target", Value::from(0)),
+            ("/drawable_samples/2/state/native_draw_sequence", Value::from(11)),
+            ("/input/native_source/render_target_sha256", Value::Null),
+            ("/dropped_render_target_passes", Value::from(1)),
+        ] {
+            let mut invalid = trace.clone();
+            *invalid.pointer_mut(path).unwrap() = bad;
+            assert!(validate_render_target_passes(&invalid).is_err(), "accepted {path}");
+        }
+        trace["render_target_passes"].as_array_mut().unwrap().pop();
+        assert!(validate_render_target_passes(&trace).is_err());
+    }

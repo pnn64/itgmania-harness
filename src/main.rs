@@ -178,6 +178,7 @@ fn parse_song_lua_trace_args(
     let mut stop_lua_gc = false;
     let mut notefield_samples = false;
     let mut scene_draws = false;
+    let mut render_target_passes = false;
     let mut drawable_from_beat = None;
     let mut player_options = None;
     let mut fast_note_rendering = None;
@@ -287,6 +288,7 @@ fn parse_song_lua_trace_args(
             Some("--drawable-samples") if !drawable_samples => drawable_samples = true,
             Some("--notefield-samples") if !notefield_samples => notefield_samples = true,
             Some("--scene-draws") if !scene_draws => scene_draws = true,
+            Some("--render-target-passes") if !render_target_passes => render_target_passes = true,
             Some("--player-options") => set_once(&mut player_options,
                 next_utf8(&mut args, "--player-options")?, "--player-options")?,
             Some("--fast-note-rendering") => {
@@ -366,6 +368,7 @@ fn parse_song_lua_trace_args(
             stop_lua_gc,
             notefield_samples,
             scene_draws,
+            render_target_passes,
             drawable_from_beat: drawable_from_beat.unwrap_or(0.0),
             player_options,
             fast_note_rendering,
@@ -1392,7 +1395,7 @@ fn print_help() {
              [--until-gameplay-end] [--max-events COUNT]\n\
              [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000] [--stop-lua-gc]\n\
              [--notefield-samples [--scene-draws]] [--drawable-from-beat BEAT] [--player-options STRING]\n\
-             [--fast-note-rendering 0|1]\n\
+             [--fast-note-rendering 0|1] [--render-target-passes]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\

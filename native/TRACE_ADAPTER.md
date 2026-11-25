@@ -152,6 +152,14 @@ this capability by conversion. Recapture with the original song, chart, theme,
 player options, timing and drawable settings, retaining the old trace and its
 archive separately until the new capture has passed replay.
 
+Render-target pass protocol 1 observes `RageTextureRenderTarget` after the
+native target and matrices are switched or restored. It records automatic
+ActorFrameTexture passes and manual RageTextureRenderTarget calls in the
+semantic drawable profile. `after_native_draw_sequence` is the latest native
+submission at that boundary. Equal cursors retain event order, including empty
+or nested passes. The collector checks the target stack and the active target
+for every retained drawable and rejects dropped events.
+
 Notefield captures from 0.1.109 require OpenGL Model render-state protocol 1.
 The generated `RageDisplay_OGL.cpp` reads the active context immediately before
 `RageCompiledGeometry::Draw`, after the native Model has selected its material

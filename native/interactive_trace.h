@@ -59,7 +59,9 @@ struct ItgmaniaHarnessArrowCacheScope {
 };
 void itgmania_harness_after_screen_draw();
 struct ItgmaniaHarnessDrawFrame {
-  ~ItgmaniaHarnessDrawFrame() { itgmania_harness_after_screen_draw(); }
+  bool previous;
+  ItgmaniaHarnessDrawFrame();
+  ~ItgmaniaHarnessDrawFrame();
 };
 void itgmania_harness_observe_input(lua_State* L, Screen* screen);
 struct ItgmaniaHarnessInputClock {
@@ -100,6 +102,8 @@ struct ItgmaniaHarnessPreDrawScope {
 float itgmania_harness_vibration_random(Actor* source, int axis, float value);
 void itgmania_harness_render_state(Actor* actor, bool write, int test, bool wrap,
     bool filter, int blend, float bias, int cull);
+void itgmania_harness_render_target(const RageTexture& target, uintptr_t parent,
+    bool begin, bool preserve);
 void itgmania_harness_draw_vertices(const char* primitive, const RageSpriteVertex* vertices,
     int count, const RageMatrix& world, const RageMatrix& view, const RageMatrix& projection,
     const RageMatrix& centering, const RageMatrix& texture);

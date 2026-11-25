@@ -1368,6 +1368,12 @@ without this protocol do not establish receptor parity. Receptor opacity does
 not by itself establish final visibility: later actors can cover it, so draw
 order and occlusion still require comparison.
 
+For native render-target boundaries, add `--render-target-passes` to the
+semantic `--drawable-samples` profile. This records the target's name, handle,
+parent, clear/preserve request, and the native phase and submission cursor for
+every begin and end, including passes with no captured geometry. It requires a
+rebuilt trace executable.
+
 Add `--scene-draws` to `--notefield-samples` to retain all scene sprite and
 Model submissions in the same geometry capture. The default remains limited
 to notes and receptors. `state.native_draw_sequence` orders actual geometry
