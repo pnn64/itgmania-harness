@@ -57,6 +57,7 @@ pub struct Options {
     pub drawable_from_beat: f64,
     pub player_options: Option<String>,
     pub fast_note_rendering: Option<bool>,
+    pub quirks_mode: Option<bool>,
 }
 
 pub fn capture(options: &Options) -> Result<Value, Error> {
@@ -190,6 +191,9 @@ fn capture_in(
     command.env("HOME", run_dir);
     if options.headless { command.env("ITGMANIA_HARNESS_HEADLESS", "1"); }
     if headless_graphics { command.env("ITGMANIA_HARNESS_HEADLESS_GRAPHICS", "1"); }
+    if options.quirks_mode.is_some() {
+        command.env("ITGMANIA_HARNESS_FOREGROUND_LIFECYCLE", "1");
+    }
     let mut child = command.args([format!("--game={}", options.game), format!("--theme={THEME_NAME}")])
         .current_dir(staged_binary.parent().unwrap_or(run_dir))
         .stdin(Stdio::null())
@@ -258,6 +262,21 @@ fn capture_in(
                 || document["input"]["fast_note_rendering_requested"].as_bool() != options.fast_note_rendering
             {
                 return Err(Error::new("native FastNoteRendering preference request was not recorded"));
+            }
+            if let Some(requested) = options.quirks_mode {
+                if document["input"]["quirks_mode_requested"].as_bool() != Some(requested)
+                    || document["input"]["quirks_mode"].as_bool() != Some(requested)
+                {
+                    return Err(Error::new("native QuirksMode preference did not match the request"));
+                }
+                if !document["foreground_events"].is_array()
+                    || document["dropped_foreground_events"].as_u64() != Some(0)
+                {
+                    return Err(Error::new("native foreground lifecycle evidence is missing or incomplete; rebuild the trace executable"));
+                }
+            }
+            if document["input"]["quirks_mode"] == true {
+                retain_legacy_actor_diagnostics(&mut document);
             }
             if document["capabilities"]["native_song_position_clocks"] != true {
                 return Err(Error::new("native raw and visible song-position clocks were not recorded"));
@@ -354,6 +373,23 @@ fn capture_in(
     result
 }
 
+// The native fallback alias logs through ReportScriptError and then applies
+// visibility. Keep that exact diagnostic without treating it as a Lua abort.
+fn retain_legacy_actor_diagnostics(document: &mut Value) {
+    let Some(errors) = document.get_mut("script_errors").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let diagnostics = errors
+        .extract_if(.., |error| {
+            error["message"].as_str().is_some_and(|message| {
+                message.starts_with("hidden is deprecated, use visible instead. (used on ")
+                    && message.ends_with(')')
+            })
+        })
+        .collect();
+    document["legacy_actor_diagnostics"] = Value::Array(diagnostics);
+}
+
 fn validate_script_errors(document: &Value) -> Result<(), Error> {
     let errors = document.get("script_errors").and_then(Value::as_array)
         .ok_or_else(|| Error::new("native script-error observer is missing; rebuild the trace executable"))?;
@@ -412,6 +448,9 @@ fn notefield_render_document(mut native: Value, provenance: Value) -> Value {
         "dropped_model_geometry_samples",
         "script_errors",
         "dropped_script_errors",
+        "legacy_actor_diagnostics",
+        "foreground_events",
+        "dropped_foreground_events",
     ] {
         if let Some(value) = native.as_object_mut().unwrap().remove(key) {
             render.insert(key.into(), value);
@@ -527,6 +566,9 @@ fn prepare_install(
     }
     if let Some(enabled) = options.fast_note_rendering {
         native_preferences.push_str(&format!("FastNoteRendering={}\n", u8::from(enabled)));
+    }
+    if let Some(enabled) = options.quirks_mode {
+        native_preferences.push_str(&format!("QuirksMode={}\n", u8::from(enabled)));
     }
     write(&run_dir.join("Save/Preferences.ini"), native_preferences.as_bytes())?;
     write(
@@ -1841,6 +1883,7 @@ fn config_lua(options: &Options) -> String {
          \tdrawable_from_beat = {},\n\
          \tplayer_options = {},\n\
          \tfast_note_rendering = {},\n\
+         \tquirks_mode = {},\n\
          \tcapture_frame_period_seconds = {},\n\
         }}\n",
         lua_quote(env!("CARGO_PKG_VERSION")),
@@ -1865,6 +1908,7 @@ fn config_lua(options: &Options) -> String {
         options.drawable_from_beat,
         options.player_options.as_deref().map(lua_quote).unwrap_or_else(|| "nil".into()),
         options.fast_note_rendering.map(|value| value.to_string()).unwrap_or_else(|| "nil".into()),
+        options.quirks_mode.map(|value| value.to_string()).unwrap_or_else(|| "nil".into()),
         options.capture_fps.map(|fps| format!("{:.17}", 1.0 / f64::from(fps))).unwrap_or_else(|| "nil".into())
     )
 }
@@ -2023,6 +2067,25 @@ impl fmt::Display for Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_actor_deprecation_keeps_the_visibility_diagnostic_without_masking_aborts() {
+        let warning = serde_json::json!({
+            "message": "hidden is deprecated, use visible instead. (used on Overlay)",
+            "screen": "ScreenGameplay",
+        });
+        let failure = serde_json::json!({
+            "message": "Lua runtime error: playfield/default.xml:1: attempt to index a nil value",
+            "screen": "ScreenGameplay",
+        });
+        let mut document = serde_json::json!({
+            "script_errors": [warning.clone(), failure.clone()], "dropped_script_errors": 0,
+        });
+        super::retain_legacy_actor_diagnostics(&mut document);
+        assert_eq!(document["legacy_actor_diagnostics"], serde_json::json!([warning]));
+        assert_eq!(document["script_errors"], serde_json::json!([failure]));
+        assert!(super::validate_script_errors(&document).is_err());
+    }
+
     #[test]
     fn whole_song_acceptance_requires_native_script_error_observation() {
         assert!(super::validate_script_errors(&serde_json::json!({"script_errors":[],"dropped_script_errors":0})).is_ok());
@@ -2223,6 +2286,7 @@ return Def.ActorFrame {
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: Some(30),
             stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false,
             drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            quirks_mode: None,
         }).unwrap();
         let evidence = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/gameplay-clock-control-native.json");
         fs::create_dir_all(evidence.parent().unwrap()).unwrap();
@@ -2350,6 +2414,7 @@ return Def.ActorFrame {
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: true, capture_fps: Some(60), fixed_update_fps: None,
             stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            quirks_mode: None,
         }).unwrap();
         fs::write(directory.join("native.json"), serde_json::to_vec(&trace).unwrap()).unwrap();
         validate_render_random_inputs(&trace).unwrap();
@@ -2418,6 +2483,7 @@ return Def.ActorFrame {
             }).collect(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
             stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            quirks_mode: None,
         };
         for with_callback in [false, true] {
             let callback = if with_callback { r#"
@@ -2518,6 +2584,7 @@ end }
             max_events: DEFAULT_MAX_EVENTS, random_seed: 1, inputs: Vec::new(),
             drawable_samples: false, capture_fps: Some(60), fixed_update_fps: None,
             stop_lua_gc: false, notefield_samples: false, scene_draws: false, render_target_passes: false, drawable_from_beat: 0.0, player_options: None, fast_note_rendering: None,
+            quirks_mode: None,
         };
         for extension in ["sm", "ssc"] {
             let mut source = "#VERSION:0.83;#TITLE:Chart selector;#MUSIC:silence.wav;#BPMS:0=120;#FGCHANGES:0=default.lua=1=0=0=1;\n".to_owned();
@@ -2718,6 +2785,7 @@ Bones: 0
             drawable_from_beat: 1.0,
             player_options: Some("m730, 60% mini, cel".into()),
             fast_note_rendering: Some(false),
+            quirks_mode: None,
         };
         let document = capture(&options).unwrap();
         fs::write(
@@ -3103,6 +3171,7 @@ Bones: 0
             drawable_from_beat: 0.0,
             player_options: None,
             fast_note_rendering: None,
+            quirks_mode: None,
         };
         let lua = config_lua(&options);
         assert!(lua.contains("schema_version = 1"));
@@ -3871,6 +3940,7 @@ Bones: 0
             drawable_from_beat: 0.0,
             player_options: None,
             fast_note_rendering: Some(true),
+            quirks_mode: None,
         };
         let run_dir = fixture.join("run");
         create_dir(&run_dir).unwrap();

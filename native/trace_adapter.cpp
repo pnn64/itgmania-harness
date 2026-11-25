@@ -1,8 +1,11 @@
 #include "global.h"
 #include "LuaManager.h"
 #include "Actor.h"
+#include "GameState.h"
 #include "XmlFile.h"
+#include "foreground_trace.h"
 #include <cstdlib>
+#include <vector>
 #ifdef _WIN32
 #include "archutils/Win32/GraphicsWindow.h"
 static int trace_headless_window_visible(lua_State* L) {
@@ -74,6 +77,52 @@ static int trace_wrap(lua_State* L) {
   return 1;
 }
 
+namespace {
+struct ForegroundEvent {
+  const char* phase;
+  const void* instance;
+  std::string name, path;
+  float start, stop, beat, seconds;
+};
+std::vector<ForegroundEvent> foreground_events;
+unsigned int dropped_foreground_events = 0;
+
+int read_foreground_events(lua_State* L) {
+  lua_createtable(L, static_cast<int>(foreground_events.size()), 0);
+  for (size_t index = 0; index < foreground_events.size(); ++index) {
+    const auto& event = foreground_events[index];
+    lua_createtable(L, 0, 8);
+    lua_pushstring(L, event.phase); lua_setfield(L, -2, "phase");
+    lua_pushfstring(L, "%p", event.instance); lua_setfield(L, -2, "instance");
+    lua_pushstring(L, event.name.c_str()); lua_setfield(L, -2, "name");
+    lua_pushnumber(L, event.start); lua_setfield(L, -2, "start_beat");
+    if (!event.path.empty()) {
+      lua_pushstring(L, event.path.c_str()); lua_setfield(L, -2, "loader_path");
+    } else {
+      lua_pushnumber(L, event.stop); lua_setfield(L, -2, "stop_beat");
+      lua_pushnumber(L, event.beat); lua_setfield(L, -2, "song_beat");
+      lua_pushnumber(L, event.seconds); lua_setfield(L, -2, "music_seconds");
+    }
+    lua_rawseti(L, -2, static_cast<int>(index + 1));
+  }
+  lua_pushnumber(L, dropped_foreground_events);
+  return 2;
+}
+}  // namespace
+
+void itgmania_harness_foreground_event(const char* phase, const Actor* actor,
+    float start_beat, float stop_beat, const std::string& path) {
+  static const bool enabled = std::getenv("ITGMANIA_HARNESS_FOREGROUND_LIFECYCLE") != nullptr;
+  if (!enabled) return;
+  if (foreground_events.size() == 8192) {
+    ++dropped_foreground_events;
+    return;
+  }
+  const auto& position = GAMESTATE->m_Position;
+  foreground_events.push_back({phase, actor, actor->GetName(), path, start_beat,
+      stop_beat, position.m_fSongBeat, position.m_fMusicSeconds});
+}
+
 static void register_trace_adapter(Lua* L) {
 #if defined(_WIN32) || defined(ITGMANIA_HARNESS_X11_HEADLESS_GRAPHICS)
   lua_pushboolean(L, true);
@@ -87,5 +136,7 @@ static void register_trace_adapter(Lua* L) {
   lua_setglobal(L, "ITGMANIA_HARNESS_WRAP");
   lua_pushboolean(L, true);
   lua_setglobal(L, "ITGMANIA_HARNESS_ACTOR_CREATION_AVAILABLE");
+  lua_pushcfunction(L, read_foreground_events);
+  lua_setglobal(L, "ITGMANIA_HARNESS_FOREGROUND_EVENTS");
 }
 REGISTER_WITH_LUA_FUNCTION(register_trace_adapter)

@@ -33,6 +33,8 @@ pub struct Change {
     pub transition: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lua_entry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_actor_entry: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -49,6 +51,10 @@ pub fn load(path: &Path) -> Result<Document, Error> {
     for change in &mut document.changes {
         change.lua_entry = resolve_lua_entry(song_dir, &change.file1)
             .map(|entry| entry.to_string_lossy().into_owned());
+        if change.lua_entry.is_none() {
+            change.legacy_actor_entry = resolve_legacy_actor_entry(song_dir, &change.file1)
+                .map(|entry| entry.to_string_lossy().into_owned());
+        }
     }
     Ok(document)
 }
@@ -67,6 +73,18 @@ fn resolve_lua_entry(song_dir: &Path, file: &str) -> Option<PathBuf> {
     }
     resolve_path_case_insensitive(&path.join("default.lua"))
         .filter(|entry| entry.is_file())
+}
+
+fn resolve_legacy_actor_entry(song_dir: &Path, file: &str) -> Option<PathBuf> {
+    if file.is_empty() || file.starts_with('-') {
+        return None;
+    }
+    let path = song_dir.join(file.replace('\\', "/"));
+    let direct = path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("xml") || extension.eq_ignore_ascii_case("sprite")
+    });
+    let path = if direct { path } else { path.join("default.xml") };
+    resolve_path_case_insensitive(&path).filter(|entry| entry.is_file())
 }
 
 // Native RageFile's FilenameDB resolves each component without regard to
@@ -142,6 +160,7 @@ fn decode(bytes: &[u8]) -> Result<Document, Error> {
             color2: input.string()?,
             transition: input.string()?,
             lua_entry: None,
+            legacy_actor_entry: None,
         });
     }
     if !input.is_empty() {

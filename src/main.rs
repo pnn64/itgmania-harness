@@ -182,6 +182,7 @@ fn parse_song_lua_trace_args(
     let mut drawable_from_beat = None;
     let mut player_options = None;
     let mut fast_note_rendering = None;
+    let mut quirks_mode = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--itgmania-bin") => set_once(
@@ -300,6 +301,15 @@ fn parse_song_lua_trace_args(
                 };
                 set_once(&mut fast_note_rendering, enabled, "--fast-note-rendering")?;
             }
+            Some("--quirks-mode") => {
+                let raw = next_utf8(&mut args, "--quirks-mode")?;
+                let enabled = match raw.as_str() {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err(CliError::Usage("--quirks-mode requires 0 or 1".into())),
+                };
+                set_once(&mut quirks_mode, enabled, "--quirks-mode")?;
+            }
             Some("--drawable-from-beat") => {
                 let raw = next_utf8(&mut args, "--drawable-from-beat")?;
                 let beat = raw.parse::<f64>().map_err(|_| CliError::Usage("drawable start beat must be a non-negative number".into()))?;
@@ -372,6 +382,7 @@ fn parse_song_lua_trace_args(
             drawable_from_beat: drawable_from_beat.unwrap_or(0.0),
             player_options,
             fast_note_rendering,
+            quirks_mode,
         },
         out,
     })
@@ -1395,7 +1406,7 @@ fn print_help() {
              [--until-gameplay-end] [--max-events COUNT]\n\
              [--input-script FILE.json] [--drawable-samples] [--capture-fps 1..1000] [--fixed-update-fps 1..1000] [--stop-lua-gc]\n\
              [--notefield-samples [--scene-draws]] [--drawable-from-beat BEAT] [--player-options STRING]\n\
-             [--fast-note-rendering 0|1] [--render-target-passes]\n\
+             [--fast-note-rendering 0|1] [--quirks-mode 0|1] [--render-target-passes]\n\
            itgmania-harness-rs song-lua-analyze TRACE [--out FILE]\n\
            itgmania-harness-rs baseline MANIFEST --out DIR\n\
            itgmania-harness-rs verify MANIFEST --against DIR\n\

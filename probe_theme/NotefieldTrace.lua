@@ -19,6 +19,7 @@ local delta,pending,finished=0,nil,false
 local inputs={}
 local input_preferences,catalog_preferences=nil,nil
 local fast_note_rendering=nil
+local quirks_mode=nil
 local dropped_models,dropped_strips=0,0
 local dropped_receptors=0
 local current_option_methods={perspective_tilt='Tilt',skew='Skew',mini='Mini',brake='Brake',drunk='Drunk',tipsy='Tipsy'}
@@ -143,6 +144,10 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
  local beat,seconds,song_beat,visible_seconds=position()
  local file=RageFileUtil:CreateRageFile()
  local script_errors,dropped_script_errors=ITGMANIA_HARNESS_SCRIPT_ERRORS()
+ local foreground_events,dropped_foreground_events
+ if cfg.quirks_mode~=nil and type(ITGMANIA_HARNESS_FOREGROUND_EVENTS)=='function' then
+  foreground_events,dropped_foreground_events=ITGMANIA_HARNESS_FOREGROUND_EVENTS()
+ end
  assert(file:Open(cfg.result_path,2),'cannot open note geometry trace')
  file:Write(JsonEncode({schema_version=1,oracle='itgmania_notefield_render_trace',
   harness_version=cfg.harness_version,itgmania_version=ProductVersion(),
@@ -152,6 +157,8 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
    preferences=input_preferences,catalog_preferences=catalog_preferences,
    fast_note_rendering_requested=cfg.fast_note_rendering,fast_note_rendering=fast_note_rendering,
    fast_note_rendering_at_end=PREFSMAN:GetPreference('FastNoteRendering'),
+   quirks_mode_requested=cfg.quirks_mode,quirks_mode=quirks_mode,
+   quirks_mode_at_end=PREFSMAN:GetPreference('QuirksMode'),
    native_source=ITGMANIA_HARNESS_NATIVE_SOURCE,
    lua_gc_mode=cfg.stop_lua_gc and 'stopped' or 'automatic',
    drawable_from_beat=cfg.drawable_from_beat,observer_frame_period_seconds=cfg.capture_frame_period_seconds,
@@ -176,6 +183,7 @@ ITGMANIA_HARNESS_AFTER_SCREEN_DRAW=function()
   dropped_model_geometry_samples=dropped_models,dropped_drawable_samples=dropped_strips,
   interactive_observer_error=ITGMANIA_HARNESS_INTERACTIVE_ERROR,
   script_errors=script_errors,dropped_script_errors=dropped_script_errors,
+  foreground_events=foreground_events,dropped_foreground_events=dropped_foreground_events,
   completion=pending,end_position={beat=beat,seconds=seconds,song_beat=song_beat,
    visible_beat=beat,visible_seconds=visible_seconds},random_seed=cfg.random_seed}))
  file:Close();file:destroy()
@@ -188,6 +196,7 @@ ITGMANIA_HARNESS_TRACE={capture_catalog_inputs=function()
  end,
  capture_inputs=function()
   fast_note_rendering=PREFSMAN:GetPreference('FastNoteRendering')
+  quirks_mode=PREFSMAN:GetPreference('QuirksMode')
   input_preferences={global_offset_seconds=PREFSMAN:GetPreference('GlobalOffsetSeconds'),
    default_sync_offset=tostring(PREFSMAN:GetPreference('DefaultSyncOffset')),
    visual_delay_seconds=PREFSMAN:GetPreference('VisualDelaySeconds'),

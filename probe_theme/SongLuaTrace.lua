@@ -7,6 +7,7 @@ if cfg.stop_lua_gc then collectgarbage("stop") end
 local input_preferences = nil
 local gameplay_preferences = nil
 local fast_note_rendering = nil
+local quirks_mode = nil
 local starting_chart, chart_catalog = nil, nil
 
 local definitions = {}
@@ -1099,6 +1100,7 @@ end
 
 function trace.capture_inputs(game_mode_initialized)
     fast_note_rendering = PREFSMAN:GetPreference("FastNoteRendering")
+    quirks_mode = PREFSMAN:GetPreference("QuirksMode")
 	-- Preserve the launch selection before authored code changes charts or reloads.
 	-- Native indices include every loaded Steps type, not just playable dance charts.
 	chart_catalog = {}
@@ -1290,7 +1292,13 @@ function trace.finish(completion)
 	for _, name in ipairs({"W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo"}) do
 		weights[name] = THEME:GetMetric("ScoreKeeperNormal", "PercentScoreWeight" .. name)
 	end
+	local foreground_events, dropped_foreground_events
+	if cfg.quirks_mode ~= nil and type(ITGMANIA_HARNESS_FOREGROUND_EVENTS) == "function" then
+		foreground_events, dropped_foreground_events = ITGMANIA_HARNESS_FOREGROUND_EVENTS()
+	end
 	write_result({
+		foreground_events = foreground_events,
+		dropped_foreground_events = dropped_foreground_events,
 		schema_version = cfg.schema_version,
 		oracle = "itgmania_song_lua_semantic_trace",
 		harness_version = cfg.harness_version,
@@ -1340,6 +1348,8 @@ function trace.finish(completion)
         input = {native_source = ITGMANIA_HARNESS_NATIVE_SOURCE,
             fast_note_rendering_requested = cfg.fast_note_rendering, fast_note_rendering = fast_note_rendering,
             fast_note_rendering_at_end = PREFSMAN:GetPreference("FastNoteRendering"),
+            quirks_mode_requested = cfg.quirks_mode, quirks_mode = quirks_mode,
+            quirks_mode_at_end = PREFSMAN:GetPreference("QuirksMode"),
             lua_gc_mode = cfg.stop_lua_gc and "stopped" or "automatic", autoplay = cfg.autoplay, injected_inputs = #(cfg.input_script or {}) > 0,
 			headless_graphics = ITGMANIA_HARNESS_HEADLESS_GRAPHICS == true,
 			window_visible = type(ITGMANIA_HARNESS_WINDOW_VISIBLE) == 'function' and ITGMANIA_HARNESS_WINDOW_VISIBLE() or false,

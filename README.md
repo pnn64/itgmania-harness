@@ -1321,6 +1321,12 @@ Player judgment progress and full scene reconstruction remain unsupported.
 
 ### Interactive executable traces
 
+Use `--quirks-mode 0|1` to set native `QuirksMode` before engine startup.
+The trace records the requested value and the effective preference at gameplay
+entry and at capture end. Quirks captures retain the fallback theme's `hidden`
+deprecation diagnostics in `legacy_actor_diagnostics`; callback failures and
+dropped diagnostics still invalidate the capture.
+
 Harness 0.1.97 records the external trace executable's own source revision in
 semantic gameplay captures as well as notefield captures. Archive manifests use
 that validated stamp instead of the embedded oracle revision in a template.

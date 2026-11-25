@@ -61,12 +61,13 @@ pub fn generate(songs_root: &Path, output_dir: &Path) -> Result<Report, Error> {
             .transpose()?
             .unwrap_or_default();
         for change in &mut document.changes {
-            change.lua_entry = change
-                .lua_entry
-                .as_deref()
-                .map(Path::new)
-                .map(|path| relative_path(&songs_root, path))
-                .transpose()?;
+            for entry in [&mut change.lua_entry, &mut change.legacy_actor_entry] {
+                *entry = entry
+                    .as_deref()
+                    .map(Path::new)
+                    .map(|path| relative_path(&songs_root, path))
+                    .transpose()?;
+            }
         }
         let count = document
             .changes

@@ -284,6 +284,21 @@ fn generate_one(
         message: error.to_string(),
     })?;
     let title = discovery.title.clone();
+    if let Some(entry) = discovery
+        .changes
+        .iter()
+        .find_map(|change| change.legacy_actor_entry.as_deref())
+    {
+        return Err(Failure {
+            title,
+            lua_entries: discovery
+                .changes
+                .iter()
+                .filter(|change| change.lua_entry.is_some())
+                .count(),
+            message: format!("legacy actor '{entry}' requires song-lua-trace --quirks-mode 1"),
+        });
+    }
     let entries = discovery
         .changes
         .iter()
